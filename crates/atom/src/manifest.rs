@@ -3,6 +3,7 @@
 //! Provides the core types for working with an Atom's manifest format.
 mod depends;
 
+use std::collections::HashMap;
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
@@ -10,6 +11,7 @@ use thiserror::Error;
 use toml_edit::{DocumentMut, de};
 
 use crate::Atom;
+use crate::id::Id;
 
 /// Errors which occur during manifest (de)serialization.
 #[derive(Error, Debug)]
@@ -27,11 +29,27 @@ pub enum AtomError {
 
 type AtomResult<T> = Result<T, AtomError>;
 
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+pub struct Dependencies {
+    /// The \[atoms] key, specifying other atom dependencies
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub atoms: Option<HashMap<Id, depends::Atoms>>,
+    /// The \[pins] key, specifying eval dependencies not in the atom format
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pins: Option<HashMap<String, depends::Srcs>>,
+    /// The \[srcs] key, specifying buildtime sources
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub srcs: Option<HashMap<String, depends::Srcs>>,
+}
+
 /// The type representing the required fields of an Atom's manifest.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub struct Manifest {
     /// The required \[atom] key of the TOML manifest.
     pub atom: Atom,
+    /// The \[deps] key, specifying dependencies
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deps: Option<Dependencies>,
 }
 
 impl Manifest {

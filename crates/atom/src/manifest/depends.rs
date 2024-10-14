@@ -5,42 +5,39 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
-enum AtomSrc {
+enum Src {
     Url(Url),
     Path(PathBuf),
 }
 
 /// atom dependencies
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
-pub struct Dependencies {
+pub struct Atoms {
     version: Version,
-    src: AtomSrc,
+    src: Src,
 }
 
-/// legacy pins
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
-pub struct Pins {
-    url: Url,
-}
-
-/// sources fetched at build time
+/// legacy pins and buildtime srcs. We use a single type to
+/// represent both as they share the same form.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub struct Srcs {
-    url: Url,
+    src: Src,
+    #[cfg(feature = "git")]
+    r#ref: gix::refs::PartialName,
 }
 
 #[allow(dead_code)]
-impl AtomSrc {
+impl Src {
     pub(crate) fn url(self) -> Option<Url> {
         match self {
-            AtomSrc::Url(url) => Some(url),
+            Src::Url(url) => Some(url),
             _ => None,
         }
     }
 
     pub(crate) fn path(self) -> Option<PathBuf> {
         match self {
-            AtomSrc::Path(path) => Some(path),
+            Src::Path(path) => Some(path),
             _ => None,
         }
     }
