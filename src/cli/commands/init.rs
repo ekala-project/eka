@@ -24,15 +24,13 @@ mod git {
     }
 }
 
-pub(super) fn run(store: Detected, args: Args) -> Result<(), anyhow::Error> {
+pub(super) fn run(store: Detected, args: Args) -> anyhow::Result<()> {
     match store {
         #[cfg(feature = "git")]
         Detected::Git(repo) => {
             use atom::store::Init;
             let repo = repo.to_thread_local();
-            let remote = repo
-                .find_remote(args.git.remote.as_str())
-                .map_err(Box::new)?;
+            let remote = repo.find_remote(args.git.remote.as_str())?;
             remote.ekala_init()?
         },
         _ => {},
