@@ -70,10 +70,11 @@ Eka is still fairly early in development, however, the foundation piece, the git
 - [ ] integrate eka with atom modules
   - [x] implement the [atom](https://github.com/ekala-project/atom) module system
   - [ ] define a clean interface between the Nix module system for atom's and eka
-    - [ ] implement the (pure nix) PoC manifest (with revisions) in Eka directly
+    - [ ] work out an EEP to define the Atom manifest API (WIP)
 - [ ] implement atom dependencies
-  - [ ] implement "shallow" dependency resolution algorithm
-  - [ ] implement "deep" dependency resolution using an SAT solver (resolvo crate)
+  - [ ] `resolve` subcommand to generate a lock file
+  - [ ] implement "shallow" dependency resolution algorithm (locking direct deps only)
+  - [ ] implement "deep" dependency resolution using an SAT solver (e.g. resolvo crate)
 - [ ] implement eka plugins
   - [ ] define cross-language plugin interface
   - [ ] allow plugins to extend the atom manifest in a principled (type-safe) manner
@@ -84,7 +85,6 @@ Eka is still fairly early in development, however, the foundation piece, the git
     - [ ] user friendly initilization flow
     - [ ] init other atom stores (dependent on store implementation)
   - [ ] `list` subcommand
-  - [ ] `resolve` subcommand to generate a lock file
   - [ ] add more here as they are decided
 
 [eos]: https://github.com/ekala-project/eos-gateway
