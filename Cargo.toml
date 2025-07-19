@@ -35,23 +35,17 @@ tracing          = "^0.1"
 tracing-appender = "^0.2"
 tracing-error    = "^0.2"
 
-clap = { version = "^4", features = ["derive"] }
-insta = { version = "^1", features = ["yaml"] }
-prodash = { version = "^29", features = [
-  "render-line",
-  "render-line-crossterm",
-  "render-line-autoconfigure",
-] }
-semver = { version = "^1", features = ["serde"] }
-serde = { version = "^1", features = ["derive"] }
-tokio = { version = "^1", features = ["full"] }
-toml_edit = { version = "^0.22", features = ["serde"] }
+clap               = { version = "^4", features = ["derive"] }
+insta              = { version = "^1", features = ["yaml"] }
+semver             = { version = "^1", features = ["serde"] }
+serde              = { version = "^1", features = ["derive"] }
+tokio              = { version = "^1", features = ["full"] }
+toml_edit          = { version = "^0.22", features = ["serde"] }
 tracing-subscriber = { version = "^0.3", features = ["env-filter", "json"] }
-url = { version = "^2", features = ["serde"] }
+url                = { version = "^2", features = ["serde"] }
 
-gix = { version = "^0.66", default-features = false, features = [
+gix = { version = "^0.73", default-features = false, features = [
   "blocking-http-transport-reqwest-rust-tls",
-  "progress-tree",
   "max-performance-safe",
   # FIXME: investigating fix for inappropriate tracing behavior upstream:
   # https://github.com/Byron/gitoxide/issues/1615
@@ -64,7 +58,3 @@ gix = { version = "^0.66", default-features = false, features = [
 default = ["stores"]
 git     = ["gix", "atom/git"]
 stores  = ["git"]
-
-[patch.crates-io]
-gix     = { git = "https://github.com/nrdxp/gitoxide", tag = "gix-v0.66.0-eka" }
-gix-url = { git = "https://github.com/nrdxp/gitoxide", tag = "gix-v0.66.0-eka" }

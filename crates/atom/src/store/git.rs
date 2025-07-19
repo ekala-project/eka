@@ -162,7 +162,8 @@ impl<'a> CalculateRoot<Root> for Commit<'a> {
     type Error = Error;
 
     fn calculate_root(&self) -> Result<Root, Self::Error> {
-        use gix::traverse::commit::simple::{CommitTimeOrder, Sorting};
+        use gix::revision::walk::Sorting;
+        use gix::traverse::commit::simple::CommitTimeOrder;
         // FIXME: we rely on a custom crate patch to search the commit graph
         // with a bias for older commits. The default gix behavior is the opposite
         // starting with bias for newer commits.
@@ -204,7 +205,7 @@ impl NormalizeStorePath for Repository {
         use path_clean::PathClean;
         let path = path.as_ref();
 
-        let rel_repo_root = self.work_dir().ok_or(Error::NoWorkDir)?;
+        let rel_repo_root = self.workdir().ok_or(Error::NoWorkDir)?;
         let repo_root = fs::canonicalize(rel_repo_root)?;
         let current = self.current_dir();
         let rel = current.join(path).clean();
@@ -338,25 +339,6 @@ impl<'repo> Init<Root, ObjectId> for gix::Remote<'repo> {
     }
 }
 
-type ProgressRange = std::ops::RangeInclusive<prodash::progress::key::Level>;
-const STANDARD_RANGE: ProgressRange = 2..=2;
-
-fn setup_line_renderer(
-    progress: &std::sync::Arc<prodash::tree::Root>,
-) -> prodash::render::line::JoinHandle {
-    prodash::render::line(
-        std::io::stderr(),
-        std::sync::Arc::downgrade(progress),
-        prodash::render::line::Options {
-            level_filter: Some(STANDARD_RANGE),
-            initial_delay: Some(std::time::Duration::from_millis(500)),
-            throughput: true,
-            ..prodash::render::line::Options::default()
-        }
-        .auto_configure(prodash::render::line::StreamKind::Stderr),
-    )
-}
-
 impl<'repo> super::QueryStore<ObjectId> for gix::Remote<'repo> {
     type Error = Error;
 
@@ -371,15 +353,9 @@ impl<'repo> super::QueryStore<ObjectId> for gix::Remote<'repo> {
         use std::collections::HashSet;
         use std::sync::atomic::AtomicBool;
 
-        use gix::progress::tree::Root;
         use gix::remote::Direction;
         use gix::remote::fetch::Tags;
         use gix::remote::ref_map::Options;
-
-        let tree = Root::new();
-        let sync_progress = tree.add_child("sync");
-        let init_progress = tree.add_child("init");
-        let handle = setup_line_renderer(&tree);
 
         let mut remote = self.clone().with_fetch_tags(Tags::None);
 
@@ -395,14 +371,12 @@ impl<'repo> super::QueryStore<ObjectId> for gix::Remote<'repo> {
 
         let client = remote.connect(Direction::Fetch).map_err(Box::new)?;
         let sync = client
-            .prepare_fetch(sync_progress, Options::default())
+            .prepare_fetch(gix::progress::Discard, Options::default())
             .map_err(Box::new)?;
 
         let outcome = sync
-            .receive(init_progress, &AtomicBool::new(false))
+            .receive(gix::progress::Discard, &AtomicBool::new(false))
             .map_err(Box::new)?;
-
-        handle.shutdown_and_wait();
 
         let refs = outcome.ref_map.remote_refs;
 

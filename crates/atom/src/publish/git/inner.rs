@@ -41,7 +41,7 @@ impl<'a> GitContext<'a> {
 
         let oid = objs::compute_hash(self.repo.object_hash(), obj.kind(), buf.as_ref());
 
-        Ok(oid)
+        Ok(oid?)
     }
 
     /// Helper function to write an object to the repository
@@ -56,9 +56,8 @@ impl<'a> GitContext<'a> {
     /// This function will return an error if the call to
     /// [`gix::object::tree::Tree::lookup_entry`] fails.
     pub fn tree_search(&self, path: &Path) -> GitResult<Option<Entry<'a>>> {
-        let mut buf = self.buf.borrow_mut();
         let search = path.components().map(|c| c.as_os_str().as_bytes());
-        Ok(self.tree.clone().lookup_entry(search, &mut buf)?)
+        Ok(self.tree.clone().lookup_entry(search)?)
     }
 
     pub(super) fn find_and_verify_atom(
@@ -187,7 +186,6 @@ impl<'a> AtomContext<'a> {
             time: gix::date::Time {
                 seconds: 0,
                 offset: 0,
-                sign: gix::date::time::Sign::Plus,
             },
         };
         let commit = AtomCommit {

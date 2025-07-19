@@ -38,6 +38,9 @@ pub mod git {
         /// A transparent wrapper for a [`object::find::existing::Error`]
         #[error(transparent)]
         NoObject(#[from] object::find::existing::Error),
+        /// A transparent wrapper for a [`gix::hasher::Error`]
+        #[error(transparent)]
+        Hash(#[from] gix::hash::hasher::Error),
         /// A transparent wrapper for a [`object::write::Error`]
         #[error(transparent)]
         WriteFailed(#[from] object::write::Error),

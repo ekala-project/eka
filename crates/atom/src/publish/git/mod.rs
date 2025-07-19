@@ -50,8 +50,6 @@ pub struct GitContext<'a> {
     root: Root,
     /// A [`JoinSet`] of push tasks to avoid blocking on them.
     push_tasks: RefCell<JoinSet<Result<Vec<u8>, Error>>>,
-    /// Path buf for efficient tree searches
-    buf: RefCell<Vec<u8>>,
 }
 
 struct AtomContext<'a> {
@@ -359,7 +357,6 @@ impl<'a> GitContext<'a> {
             commit,
             remote_str,
             push_tasks,
-            buf: RefCell::new(Vec::with_capacity(64)),
         })
     }
 
