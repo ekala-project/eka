@@ -141,7 +141,7 @@ use crate::publish::MaybeSkipped;
 
 impl<'a> AtomContext<'a> {
     fn refs(&self, kind: RefKind) -> AtomRef {
-        AtomRef::new(self.atom.id.to_string(), kind, &self.atom.spec.version)
+        AtomRef::new(self.atom.id.id().to_string(), kind, &self.atom.spec.version)
     }
 
     fn ref_exists(&self, tree: &AtomTree, atom_ref: &AtomRef) -> bool {
