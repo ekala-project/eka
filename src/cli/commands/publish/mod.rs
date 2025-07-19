@@ -51,7 +51,6 @@ pub(super) async fn run(store: Detected, args: PublishArgs) -> Result<Stats, Pub
                             path = %content.path().display(),
                             "Atom successfully published"
                         );
-                        tracing::debug!("published under: {}", content.ref_prefix());
                     },
                     Ok(Skipped(id)) => {
                         stats.skipped += 1;

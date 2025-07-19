@@ -57,7 +57,6 @@ pub struct GitContext<'a> {
 struct AtomContext<'a> {
     paths: AtomPaths<PathBuf>,
     atom: FoundAtom<'a>,
-    ref_prefix: String,
     git: &'a GitContext<'a>,
 }
 
@@ -94,7 +93,7 @@ enum RefKind {
 use semver::Version;
 
 struct AtomRef<'a> {
-    prefix: &'a str,
+    id: String,
     kind: RefKind,
     version: &'a Version,
 }
@@ -120,7 +119,6 @@ pub struct GitContent {
     content: gix::refs::Reference,
     origin: gix::refs::Reference,
     path: PathBuf,
-    ref_prefix: String,
 }
 
 use super::{Builder, ValidAtoms};
@@ -246,12 +244,6 @@ impl GitContent {
     pub fn path(&self) -> &PathBuf {
         &self.path
     }
-
-    /// Return a reference to the atom ref prefix.
-    #[must_use]
-    pub fn ref_prefix(&self) -> &String {
-        &self.ref_prefix
-    }
 }
 
 use std::collections::HashMap;
@@ -338,13 +330,7 @@ impl<'a> Publish<Root> for GitContext<'a> {
 impl<'a> AtomContext<'a> {
     fn set(path: &'a Path, git: &'a GitContext) -> GitResult<Self> {
         let (atom, paths) = git.find_and_verify_atom(path)?;
-        let ref_prefix = format!("{}/{}", super::ATOM_REF_TOP_LEVEL, atom.id.id());
-        Ok(Self {
-            paths,
-            atom,
-            ref_prefix,
-            git,
-        })
+        Ok(Self { paths, atom, git })
     }
 }
 

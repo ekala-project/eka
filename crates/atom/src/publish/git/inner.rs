@@ -13,7 +13,10 @@ use gix::{ObjectId, Reference};
 use super::{AtomContext, AtomRef, GitContext, GitResult, RefKind};
 use crate::core::AtomPaths;
 use crate::publish::error::git::Error;
-use crate::publish::{ATOM, ATOM_FORMAT_VERSION, ATOM_MANIFEST, ATOM_ORIGIN, EMPTY_SIG};
+use crate::publish::{
+    ATOM_FORMAT_VERSION, ATOM_MANIFEST, ATOM_META_REF, ATOM_ORIGIN, ATOM_REF, ATOMIC_ROOT,
+    EMPTY_SIG,
+};
 use crate::store::git;
 use crate::{Atom, AtomId, Manifest};
 impl<'a> GitContext<'a> {
@@ -103,12 +106,8 @@ impl<'a> GitContext<'a> {
 use semver::Version;
 
 impl<'a> AtomRef<'a> {
-    fn new(kind: RefKind, prefix: &'a str, version: &'a Version) -> Self {
-        AtomRef {
-            prefix,
-            kind,
-            version,
-        }
+    fn new(id: String, kind: RefKind, version: &'a Version) -> Self {
+        AtomRef { id, kind, version }
     }
 }
 
@@ -117,9 +116,23 @@ use std::fmt;
 impl<'a> fmt::Display for AtomRef<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.kind {
-            RefKind::Content => write!(f, "{}/{}/{}", self.prefix, self.version, ATOM),
-            RefKind::Origin => write!(f, "{}/{}/{}", self.prefix, self.version, ATOM_ORIGIN),
-            RefKind::Spec => write!(f, "{}/{}/{}", self.prefix, self.version, ATOM_MANIFEST),
+            RefKind::Content => {
+                write!(
+                    f,
+                    "{}/{}/{}/{}",
+                    ATOMIC_ROOT, ATOM_REF, self.id, self.version
+                )
+            },
+            RefKind::Origin => write!(
+                f,
+                "{}/{}/{}/{}/{}",
+                ATOMIC_ROOT, ATOM_META_REF, self.id, self.version, ATOM_ORIGIN
+            ),
+            RefKind::Spec => write!(
+                f,
+                "{}/{}/{}/{}/{}",
+                ATOMIC_ROOT, ATOM_META_REF, self.id, self.version, ATOM_MANIFEST
+            ),
         }
     }
 }
@@ -129,7 +142,7 @@ use crate::publish::MaybeSkipped;
 
 impl<'a> AtomContext<'a> {
     fn refs(&self, kind: RefKind) -> AtomRef {
-        AtomRef::new(kind, &self.ref_prefix, &self.atom.spec.version)
+        AtomRef::new(self.atom.id.to_string(), kind, &self.atom.spec.version)
     }
 
     fn ref_exists(&self, tree: &AtomTree, atom_ref: &AtomRef) -> bool {
@@ -286,7 +299,6 @@ impl<'a> AtomReferences<'a> {
             content: self.content.detach(),
             origin: self.origin.detach(),
             path: atom.paths.spec().to_path_buf(),
-            ref_prefix: atom.ref_prefix.clone(),
         }
     }
 }

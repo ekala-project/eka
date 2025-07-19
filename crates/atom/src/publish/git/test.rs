@@ -120,14 +120,12 @@ async fn publish_atom() -> Result<(), anyhow::Error> {
     let origin_tree = repo.find_commit(origin_id.detach())?.tree()?;
     let spec_id = content.spec.attach(&repo).into_fully_peeled_id()?;
     let spec_tree = repo.find_tree(spec_id)?;
-    let prefix = format!("{}/{}", crate::publish::ATOM_REF_TOP_LEVEL, id);
     let path = file_path
         .path()
         .strip_prefix(repo.work_dir().context("")?)?;
 
     assert_eq!(origin_id, src);
     assert_eq!(path, content.path);
-    assert_eq!(content.ref_prefix, prefix);
 
     // our repo has no other contents but the atom so all 3 trees should be equal
     // this is not always the case, but its a good simplifying assumption
