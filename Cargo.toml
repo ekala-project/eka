@@ -44,6 +44,7 @@ toml_edit          = { version = "^0.22", features = ["serde"] }
 tracing-subscriber = { version = "^0.3", features = ["env-filter", "json"] }
 url                = { version = "^2", features = ["serde"] }
 
+
 gix = { version = "^0.73", default-features = false, features = [
   "blocking-http-transport-reqwest-rust-tls",
   "max-performance-safe",
@@ -52,6 +53,11 @@ gix = { version = "^0.73", default-features = false, features = [
   # "tracing",
   "blob-diff",
   "revision",
+] }
+prodash = { version = "30.0.1", features = [
+  "render-line",
+  "render-line-crossterm",
+  "render-line-autoconfigure",
 ] }
 
 [features]
