@@ -27,13 +27,13 @@ impl MockAtom for gix::Repository {
         description: &str,
     ) -> Result<(NamedTempFile, ObjectId), anyhow::Error> {
         use gix::objs::Tree;
-        use gix::objs::tree::{Entry, EntryMode};
+        use gix::objs::tree::Entry;
         use semver::Version;
         use toml_edit::ser;
 
         use crate::{Atom, Manifest};
 
-        let work_dir = self.work_dir().context("No workdir")?;
+        let work_dir = self.workdir().context("No workdir")?;
         let mut atom_file = Builder::new()
             .suffix(crate::ATOM_EXT.as_str())
             .tempfile_in(work_dir)?;
@@ -54,7 +54,8 @@ impl MockAtom for gix::Repository {
         let filename = path.strip_prefix(work_dir)?.display().to_string().into();
         let oid = self.write_blob(buf.as_bytes())?.detach();
         let entry = Entry {
-            mode: EntryMode(mode as u16),
+            mode: TryFrom::try_from(mode)
+                .map_err(|m| anyhow::anyhow!("invalid entry mode: {}", m))?,
             filename,
             oid,
         };
@@ -120,9 +121,7 @@ async fn publish_atom() -> Result<(), anyhow::Error> {
     let origin_tree = repo.find_commit(origin_id.detach())?.tree()?;
     let spec_id = content.spec.attach(&repo).into_fully_peeled_id()?;
     let spec_tree = repo.find_tree(spec_id)?;
-    let path = file_path
-        .path()
-        .strip_prefix(repo.work_dir().context("")?)?;
+    let path = file_path.path().strip_prefix(repo.workdir().context("")?)?;
 
     assert_eq!(origin_id, src);
     assert_eq!(path, content.path);

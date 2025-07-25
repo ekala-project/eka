@@ -203,8 +203,9 @@ impl<'a> AtomContext<'a> {
                         .content()
                         .parent()
                         .unwrap_or(Path::new("/"))
-                        .to_string_lossy()
-                        .to_string()
+                        .to_str()
+                        .and_then(|s| if s.is_empty() { None } else { Some(s) })
+                        .unwrap_or("/")
                         .into(),
                 ),
                 ("format".into(), ATOM_FORMAT_VERSION.into()),
