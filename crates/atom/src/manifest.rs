@@ -1,7 +1,6 @@
 //! # Atom Manifest
 //!
 //! Provides the core types for working with an Atom's manifest format.
-mod depends;
 
 use std::str::FromStr;
 
@@ -10,6 +9,7 @@ use thiserror::Error;
 use toml_edit::{DocumentMut, de};
 
 use crate::Atom;
+use crate::lock::Dependencies;
 
 /// Errors which occur during manifest (de)serialization.
 #[derive(Error, Debug)]
@@ -28,10 +28,13 @@ pub enum AtomError {
 type AtomResult<T> = Result<T, AtomError>;
 
 /// The type representing the required fields of an Atom's manifest.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct Manifest {
     /// The required \[atom] key of the TOML manifest.
     pub atom: Atom,
+    /// The dependencies of the Atom.
+    pub deps: Option<Dependencies>,
 }
 
 impl Manifest {

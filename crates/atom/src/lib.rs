@@ -30,6 +30,7 @@
 
 mod core;
 mod id;
+mod lock;
 mod manifest;
 
 pub mod publish;

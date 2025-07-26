@@ -11,6 +11,7 @@ use super::id::Id;
 ///
 /// This struct contains the basic metadata of an Atom but lacks the context-specific
 /// [`crate::AtomId`], which must be constructed separately.
+#[serde(deny_unknown_fields)]
 pub struct Atom {
     /// The verified, human-readable Unicode identifier for the Atom.
     pub id: Id,
