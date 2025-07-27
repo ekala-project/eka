@@ -80,3 +80,75 @@ where
     let bytes = s.as_bytes().as_bstr();
     Url::from_bytes(bytes).map_err(D::Error::custom)
 }
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Lock {
+    version: String,
+    eval: Option<Vec<LockedDeps>>,
+    build: Option<Vec<LockedSrc>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct LockedSrc {
+    name: String,
+    #[serde(deserialize_with = "parse_url")]
+    url: Url,
+    checksum: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+#[serde(tag = "type")]
+pub enum LockedDeps {
+    #[serde(rename = "atom")]
+    Atom(LockedAtom),
+    #[serde(rename = "pin")]
+    Pin(LockedPinHttp),
+    #[serde(rename = "pin+tar")]
+    Tar(LockedPinHttp),
+    #[serde(rename = "pin+git")]
+    Git(LockedPinGit),
+    #[serde(rename = "pin+from")]
+    From(LockedPinFrom),
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct LockedAtom {
+    id: Id,
+    version: Version,
+    path: Option<PathBuf>,
+    #[cfg(feature = "git")]
+    rev: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct LockedPinHttp {
+    name: String,
+    #[serde(deserialize_with = "parse_url")]
+    url: Url,
+    checksum: String,
+    entry: Option<PathBuf>,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct LockedPinFrom {
+    name: String,
+    from: Id,
+    get: Option<String>,
+    entry: Option<PathBuf>,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct LockedPinGit {
+    name: String,
+    #[serde(deserialize_with = "parse_url")]
+    url: Url,
+    #[cfg(feature = "git")]
+    rev: String,
+    entry: Option<PathBuf>,
+}
