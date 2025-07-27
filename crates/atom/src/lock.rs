@@ -119,7 +119,6 @@ pub struct LockedAtom {
     id: Id,
     version: Version,
     path: Option<PathBuf>,
-    #[cfg(feature = "git")]
     rev: String,
 }
 
@@ -148,7 +147,6 @@ pub struct LockedPinGit {
     name: String,
     #[serde(deserialize_with = "parse_url")]
     url: Url,
-    #[cfg(feature = "git")]
     rev: String,
     entry: Option<PathBuf>,
 }
