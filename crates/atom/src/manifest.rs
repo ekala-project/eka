@@ -2,6 +2,7 @@
 //!
 //! Provides the core types for working with an Atom's manifest format.
 
+use std::path::PathBuf;
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
@@ -23,6 +24,9 @@ pub enum AtomError {
     /// The manifest is not valid TOML.
     #[error(transparent)]
     InvalidToml(#[from] toml_edit::TomlError),
+    /// The manifest could not be read.
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
 }
 
 type AtomResult<T> = Result<T, AtomError>;
@@ -62,5 +66,14 @@ impl FromStr for Manifest {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         de::from_str(s)
+    }
+}
+
+impl TryFrom<PathBuf> for Manifest {
+    type Error = AtomError;
+
+    fn try_from(path: PathBuf) -> Result<Self, Self::Error> {
+        let content = std::fs::read_to_string(path)?;
+        Ok(Manifest::from_str(&content)?)
     }
 }
