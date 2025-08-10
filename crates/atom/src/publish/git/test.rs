@@ -34,9 +34,13 @@ impl MockAtom for gix::Repository {
         use crate::{Atom, Manifest};
 
         let work_dir = self.workdir().context("No workdir")?;
+        let atom_dir = Builder::new().tempdir_in(work_dir)?;
         let mut atom_file = Builder::new()
-            .suffix(crate::ATOM_EXT.as_str())
-            .tempfile_in(work_dir)?;
+            .prefix("atom")
+            .rand_bytes(0)
+            .suffix(".toml")
+            .tempfile_in(&atom_dir)?;
+
         let manifest = Manifest {
             atom: Atom {
                 id: id.try_into()?,
@@ -52,7 +56,7 @@ impl MockAtom for gix::Repository {
         let path = atom_file.as_ref().to_path_buf();
 
         let mode = atom_file.as_file().metadata()?.mode();
-        let filename = path.strip_prefix(work_dir)?.display().to_string().into();
+        let filename = path.strip_prefix(&atom_dir)?.display().to_string().into();
         let oid = self.write_blob(buf.as_bytes())?.detach();
         let entry = Entry {
             mode: TryFrom::try_from(mode)
@@ -65,7 +69,28 @@ impl MockAtom for gix::Repository {
             entries: vec![entry],
         };
 
-        let tree_id = self.write_object(tree)?;
+        let oid = self.write_object(tree)?.detach();
+
+        let filename = atom_dir
+            .as_ref()
+            .to_path_buf()
+            .strip_prefix(work_dir)?
+            .display()
+            .to_string()
+            .into();
+
+        let entry = Entry {
+            mode: TryFrom::try_from(0o40000)
+                .map_err(|m| anyhow::anyhow!("invalid entry mode: {}", m))?,
+            filename,
+            oid,
+        };
+
+        let tree = Tree {
+            entries: vec![entry],
+        };
+
+        let oid = self.write_object(tree)?.detach();
 
         let head = self.head_id()?;
         let head_ref = self.head_ref()?.context("detached HEAD")?;
@@ -74,7 +99,7 @@ impl MockAtom for gix::Repository {
             .commit(
                 head_ref.name().as_bstr(),
                 format!("init: {}", id),
-                tree_id,
+                oid,
                 vec![head],
             )?
             .detach();
@@ -119,18 +144,23 @@ async fn publish_atom() -> Result<(), anyhow::Error> {
         .find_commit(content_ref.into_fully_peeled_id()?)?
         .tree()?
         .detach();
-    let origin_tree = repo.find_commit(origin_id.detach())?.tree()?;
-    let spec_id = content.spec.attach(&repo).into_fully_peeled_id()?;
-    let spec_tree = repo.find_tree(spec_id)?;
+    let dir = file_path.as_ref().to_path_buf();
+    let dir = dir
+        .parent()
+        .and_then(|f| f.file_name())
+        .ok_or(anyhow::anyhow!("no parent directory"))?;
+    let origin_tree = repo
+        .find_commit(origin_id.detach())?
+        .tree()?
+        .lookup_entry_by_path(dir)?
+        .ok_or(anyhow::anyhow!("no tree in orgin"))?
+        .object()?;
     let path = file_path.path().strip_prefix(repo.workdir().context("")?)?;
 
     assert_eq!(origin_id, src);
     assert_eq!(path, content.path);
 
-    // our repo has no other contents but the atom so all 3 trees should be equal
-    // this is not always the case, but its a good simplifying assumption
-    assert_eq!(content_tree.data, origin_tree.detach().data);
-    assert_eq!(content_tree.data, spec_tree.detach().data);
+    assert_eq!(content_tree.data, origin_tree.data);
 
     Ok(())
 }

@@ -76,6 +76,9 @@ pub mod git {
         /// The path given does not point to an Atom.
         #[error("The given path does not point to an Atom")]
         NotAnAtom(PathBuf),
+        /// An atom exist's at the repo root.
+        #[error("Atoms cannot exist at the repo root")]
+        NoRootAtom,
         /// Failed to sync a least one Atom to the remote.
         #[error("Failed to sync some Atoms to the remote")]
         SomePushFailed,

@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::path::Path;
 
 use semver::Version;
@@ -31,45 +30,29 @@ where
 {
     spec: P,
     content: P,
-    lock: P,
 }
 
-const LOCK: &str = "lock";
 use std::path::PathBuf;
 impl AtomPaths<PathBuf> {
     pub(crate) fn new<P: AsRef<Path>>(path: P) -> Self {
-        let name = path.as_ref().with_extension("");
-        let name = name
+        let path = path.as_ref();
+        let name = path
             .file_name()
-            .unwrap_or(path.as_ref().as_os_str())
+            .unwrap_or(path.as_os_str())
             .to_string_lossy();
 
-        let atom_name: Cow<str>;
-        let content_name: Cow<str>;
-
-        if name.ends_with('@') {
-            atom_name = name;
-            let mut name = atom_name.to_string();
-            name.pop();
-            content_name = name.into();
+        if name == crate::ATOM_MANIFEST.as_str() {
+            AtomPaths {
+                spec: path.into(),
+                content: path.parent().unwrap_or(Path::new("")).into(),
+            }
         } else {
-            atom_name = format!("{name}@").into();
-            content_name = name;
-        };
-
-        let content = path.as_ref().with_file_name(content_name.as_ref());
-        AtomPaths {
-            spec: path
-                .as_ref()
-                .with_file_name(atom_name.as_ref())
-                .with_extension(crate::TOML),
-            content: content.clone(),
-            lock: content.with_extension(LOCK),
+            let spec = path.join(crate::ATOM_MANIFEST.as_str());
+            AtomPaths {
+                spec: spec.clone(),
+                content: path.into(),
+            }
         }
-    }
-
-    pub fn lock(&self) -> &Path {
-        self.lock.as_ref()
     }
 
     pub fn spec(&self) -> &Path {

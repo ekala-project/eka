@@ -10,7 +10,6 @@ blake3            = "^1.5"
 bstr              = "^1"
 nom               = "^7"
 path-clean        = "^1"
-smallvec          = "^1"
 unic-ucd-category = "^0.9"
 
 prodash.workspace   = true

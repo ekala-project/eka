@@ -54,18 +54,18 @@ pub struct GitContext<'a> {
 
 struct AtomContext<'a> {
     paths: AtomPaths<PathBuf>,
-    atom: FoundAtom<'a>,
+    atom: FoundAtom,
     git: &'a GitContext<'a>,
 }
 
-struct FoundAtom<'a> {
+struct FoundAtom {
     spec: Atom,
     id: GitAtomId,
-    entries: AtomEntries<'a>,
+    tree_id: ObjectId,
+    spec_id: ObjectId,
 }
 
 use gix::diff::object::Commit as AtomCommit;
-use gix::object::tree::Entry;
 
 /// Struct to hold the result of writing atom commits
 #[derive(Debug, Clone)]
@@ -75,12 +75,6 @@ pub struct CommittedAtom {
     /// The object id of the Atom commit.
     id: ObjectId,
 }
-
-use smallvec::SmallVec;
-type AtomEntries<'a> = SmallVec<[Entry<'a>; 3]>;
-
-/// Struct to representing the tree of an atom given by the Git object ID of its contents
-struct AtomTreeId(ObjectId);
 
 enum RefKind {
     Spec,
@@ -179,9 +173,9 @@ impl<'a> StateValidator<Root> for GitPublisher<'a> {
         let mut atoms: HashMap<Id, PathBuf> = HashMap::with_capacity(cap);
 
         for entry in record.records {
-            if entry.mode.is_blob() && entry.filepath.ends_with(crate::ATOM_EXT.as_ref()) {
+            let path = PathBuf::from(entry.filepath.to_string());
+            if entry.mode.is_blob() && path.file_name() == Some(crate::ATOM_MANIFEST.as_ref()) {
                 if let Ok(obj) = publisher.repo.find_object(entry.oid) {
-                    let path = PathBuf::from(entry.filepath.to_string());
                     match publisher.verify_manifest(&obj, &path) {
                         Ok(atom) => {
                             if let Some(duplicate) = atoms.get(&atom.id) {
@@ -308,13 +302,16 @@ impl<'a> Publish<Root> for GitContext<'a> {
 
         let atom = AtomContext::set(path.as_ref(), self)?;
 
-        let tree_id = match atom.write_atom_tree(&atom.atom.entries)? {
-            Ok(t) => t,
-            Skipped(id) => return Ok(Skipped(id)),
-        };
+        if self
+            .repo
+            .find_reference(&atom.refs(RefKind::Content).to_string())
+            .is_ok()
+        {
+            return Ok(Skipped(atom.atom.spec.id.clone()));
+        }
 
         let refs = atom
-            .write_atom_commit(tree_id)?
+            .write_atom_commit(atom.atom.tree_id)?
             .write_refs(&atom)?
             .push(&atom);
 
