@@ -26,6 +26,8 @@ gix = { workspace = true, default-features = false, features = [
   "serde",
 ], optional = true }
 gix-url = { version = "^0.27", features = ["serde"] }
+hex = { version = "^0.4", features = ["serde"] }
+nix-compat = { git = "https://github.com/nrdxp/snix", features = ["serde"] }
 
 [features]
 default = []

@@ -10,7 +10,6 @@ use thiserror::Error;
 use toml_edit::{DocumentMut, de};
 
 use crate::Atom;
-use crate::lock::Dependencies;
 
 /// Errors which occur during manifest (de)serialization.
 #[derive(Error, Debug)]
@@ -38,7 +37,7 @@ pub struct Manifest {
     /// The required \[atom] key of the TOML manifest.
     pub atom: Atom,
     /// The dependencies of the Atom.
-    pub deps: Option<Dependencies>,
+    pub deps: Option<Vec<String>>, // Dummy for now; update to new deps schema later
 }
 
 impl Manifest {

@@ -18,6 +18,7 @@ serde.workspace              = true
 serde_json.workspace         = true
 thiserror.workspace          = true
 tokio.workspace              = true
+toml_edit.workspace          = true
 tracing.workspace            = true
 tracing-appender.workspace   = true
 tracing-error.workspace      = true
@@ -40,7 +41,7 @@ insta              = { version = "^1", features = ["yaml"] }
 semver             = { version = "^1", features = ["serde"] }
 serde              = { version = "^1", features = ["derive"] }
 tokio              = { version = "^1", features = ["full"] }
-toml_edit          = { version = "^0.22", features = ["serde"] }
+toml_edit          = { version = "^0.22", features = ["serde", "parse"] }
 tracing-subscriber = { version = "^0.3", features = ["env-filter", "json"] }
 url                = { version = "^2", features = ["serde"] }
 

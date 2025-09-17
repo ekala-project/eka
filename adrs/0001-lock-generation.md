@@ -1,15 +1,19 @@
 # Architectural Decision Record (ADR): Lock Generation in Eka CLI
 
 ## Status
+
 Proposed
 
 ## Context
+
 Eka requires a lockfile mechanism to capture resolved dependencies for reproducible builds, similar to Cargo.lock or flake.lock. This enables pinning exact versions/revisions of atoms and sources, supporting shallow/deep resolution. The lock schema must be language-agnostic for cross-ecosystem use (e.g., Nix integration), efficient for generation, and verifiable. Current Atom crate handles manifests; extend for locks. Challenges: Efficient remote querying without full clones, handling cross-atom 'from' references, type safety in Rust while keeping portable.
 
 ## Decision
+
 1. **Schema Definition**: Use TOML as the primary format (aligns with Atom manifests). Define a formal schema using JSON Schema (via schemars crate) for validation. Generate Rust structs from schema using build.rs script with serde and toml_edit. This ensures agnosticism (TOML readable in any lang) while providing Rust type safety.
 
    Example Formal Schema (TOML structure):
+
    ```
    version = 1  # Lockfile version
 
@@ -32,12 +36,14 @@ Eka requires a lockfile mechanism to capture resolved dependencies for reproduci
    ```
 
    Validation rules:
+
    - Exactly one of id/url per dep.
    - type determines required fields (e.g., atom needs id/rev; pin needs url/checksum).
    - Paths relative to declaring atom; no cycles in 'from' refs.
    - Version 1 supports shallow resolution; future versions for deep.
 
 2. **API Design**:
+
    - In `crates/atom/src/lock.rs`: Define `Lockfile` struct with `Vec<Dep>`, `Vec<Src>`, derive Serialize/Deserialize.
      - `pub fn generate_lock(manifest: &Manifest, store: &Store, mode: ResolutionMode) -> Result<Lockfile>`
      - Modes: Shallow (direct deps only), Deep (recursive with SAT via resolvo).
@@ -46,6 +52,7 @@ Eka requires a lockfile mechanism to capture resolved dependencies for reproduci
    - CLI Integration: In `src/cli/commands/resolve/mod.rs`, parse args (e.g., --shallow, --output), call API, write atom.lock.
 
 3. **Remote Querying Strategy**:
+
    - Use `gix` crate for efficient operations: `gix::remote::ls_remote(url, refs_patterns)` to fetch refs without cloning.
    - Cache: Local dir `~/.eka/cache/refs/` with JSON files per repo (TTL 1h, invalidate on version change).
    - For atoms: Query `refs/atoms/{id}/*` patterns to list versions/revisions.
@@ -53,6 +60,7 @@ Eka requires a lockfile mechanism to capture resolved dependencies for reproduci
    - Efficiency: Parallel fetches via Tokio for multi-dep resolution; limit to necessary refs (e.g., semver ranges).
 
 4. **Resolution Flow**:
+
    - Parse manifest for direct deps (URIs/ids).
    - For each: Resolve URI to store ref, fetch available versions via querying.
    - Select matching version (latest/default or specified).
@@ -66,6 +74,7 @@ Eka requires a lockfile mechanism to capture resolved dependencies for reproduci
    - Testing: Use provided handwritten examples as golden tests via insta.
 
 ## Consequences
+
 - **Pros**: Portable schema enables multi-lang tools; gix ensures performance; modular API fits Eka's design.
 - **Cons**: JSON Schema adds build dep; caching needs eviction policy. Initial impl shallow-only.
 - **Risks**: Auth for private repos (handle via git config); deep resolution complexity deferred.
@@ -75,6 +84,7 @@ Eka requires a lockfile mechanism to capture resolved dependencies for reproduci
   - Full clone always: Inefficient startup.
 
 ## References
+
 - Lock examples provided.
 - gix docs: https://docs.rs/gix/latest/gix/
 - JSON Schema in Rust: schemars crate.
@@ -95,3 +105,4 @@ flowchart TD
     J --> K[Validate & Serialize to TOML]
     K --> L[Write atom.lock]
     style D fill:#f9f
+```

@@ -1,7 +1,9 @@
-mod git;
 use std::path::PathBuf;
 
+use anyhow::Result;
 use clap::Parser;
+
+mod git;
 
 use crate::cli::store::Detected;
 
@@ -12,6 +14,12 @@ pub struct Args {
     path: Vec<PathBuf>,
     #[command(flatten)]
     store: StoreArgs,
+    /// Output file for the lock (default: atom.lock)
+    #[arg(short, long, default_value = "atom.lock")]
+    output: PathBuf,
+    /// Resolution mode: shallow or deep (default: shallow)
+    #[arg(short, long, default_value = "shallow")]
+    mode: String,
 }
 
 #[derive(Parser, Debug)]
@@ -21,10 +29,6 @@ struct StoreArgs {
     git: git::GitArgs,
 }
 
-pub(super) fn run(store: Detected, args: Args) {
-    match store {
-        #[cfg(feature = "git")]
-        Detected::Git(repo) => {},
-        _ => {},
-    }
+pub(super) fn run(_store: Detected, _args: Args) -> Result<()> {
+    Ok(())
 }
