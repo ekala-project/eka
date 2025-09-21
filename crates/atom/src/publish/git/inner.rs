@@ -141,7 +141,7 @@ impl<'a> fmt::Display for AtomRef<'a> {
 }
 
 impl<'a> AtomContext<'a> {
-    pub(super) fn refs(&self, kind: RefKind) -> AtomRef {
+    pub(super) fn refs(&self, kind: RefKind) -> AtomRef<'_> {
         AtomRef::new(self.atom.id.id().to_string(), kind, &self.atom.spec.version)
     }
 
@@ -208,7 +208,7 @@ use super::{CommittedAtom, FoundAtom};
 
 impl<'a> CommittedAtom {
     /// Method to write references for the committed atom
-    pub(super) fn write_refs(&'a self, atom: &'a AtomContext) -> GitResult<AtomReferences> {
+    pub(super) fn write_refs(&'a self, atom: &'a AtomContext) -> GitResult<AtomReferences<'a>> {
         let Self { id, .. } = self;
 
         // filter out the content tree

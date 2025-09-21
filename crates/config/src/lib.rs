@@ -33,7 +33,7 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn aliases(&self) -> &Aliases {
+    pub fn aliases(&self) -> &Aliases<'_> {
         &self.aliases
     }
 }
@@ -54,8 +54,8 @@ impl Default for Config {
 }
 
 impl Config {
-    pub fn from<T: Provider>(provider: T) -> Result<Config, figment::Error> {
-        Figment::from(provider).extract()
+    pub fn from<T: Provider>(provider: T) -> Result<Config, Box<figment::Error>> {
+        Figment::from(provider).extract().map_err(Box::new)
     }
 
     pub fn figment() -> Figment {

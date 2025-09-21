@@ -81,7 +81,7 @@ use nom::combinator::{all_consuming, map, not, opt, peek, rest, verify};
 use nom::sequence::{separated_pair, tuple};
 use nom::{IResult, ParseTo};
 
-fn parse(input: &str) -> Ref {
+fn parse(input: &str) -> Ref<'_> {
     let (rest, url) = match url(input) {
         Ok(s) => s,
         Err(_) => (input, None),
@@ -167,7 +167,7 @@ fn first_path(input: &str) -> IResult<&str, (&str, &str)> {
 
 type UrlPrefix<'a> = (Option<&'a str>, Option<&'a str>, Option<&'a str>);
 
-fn parse_url(url: &str) -> IResult<&str, UrlPrefix> {
+fn parse_url(url: &str) -> IResult<&str, UrlPrefix<'_>> {
     let (rest, (scheme, user_pass)) = tuple((scheme, split_at))(url)?;
 
     let (user, pass) = match user_pass {

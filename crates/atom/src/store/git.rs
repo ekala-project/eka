@@ -116,10 +116,7 @@ pub fn run_git_command(args: &[&str]) -> io::Result<Vec<u8>> {
     if output.status.success() {
         Ok(output.stdout)
     } else {
-        Err(io::Error::new(
-            io::ErrorKind::Other,
-            String::from_utf8_lossy(&output.stderr),
-        ))
+        Err(io::Error::other(String::from_utf8_lossy(&output.stderr)))
     }
 }
 
@@ -287,9 +284,11 @@ impl<'repo> Init<Root, ObjectId> for gix::Remote<'repo> {
                     .ok_or(Error::NoRef(V1_ROOT.to_owned(), self.symbol().to_owned()))
                     .and_then(|id| Ok(repo.find_commit(id).map_err(Box::new)?))
                     .and_then(|c| {
-                        (c.parent_ids().count() != 0)
-                            .then(|| c.calculate_root().map(|r| *r))
-                            .unwrap_or(Ok(c.id))
+                        if c.parent_ids().count() != 0 {
+                            c.calculate_root().map(|r| *r)
+                        } else {
+                            Ok(c.id)
+                        }
                     })
             };
 
