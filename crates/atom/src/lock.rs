@@ -44,6 +44,7 @@ pub struct AtomDep {
     pub rev: GitSha,
     /// The location of the atom, whether local or remote.
     #[serde(flatten)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub location: Option<AtomLocation>,
 }
 
@@ -58,6 +59,7 @@ pub struct PinDep {
     /// The hash for integrity verification (e.g., sha256).
     pub hash: WrappedNixHash,
     /// The relative path within the source (for Nix imports).
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<PathBuf>,
 }
 
@@ -72,6 +74,7 @@ pub struct PinGitDep {
     /// The resolved revision (commit hash).
     pub rev: GitSha,
     /// The relative path within the repo.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<PathBuf>,
 }
 
@@ -86,6 +89,7 @@ pub struct PinTarDep {
     /// The hash of the tarball.
     pub hash: WrappedNixHash,
     /// The relative path within the extracted archive.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<PathBuf>,
 }
 
@@ -98,8 +102,10 @@ pub struct FromDep {
     /// The atom ID from which to source.
     pub from: Id,
     /// The name of the dependency to acquire from the 'from' atom (defaults to `name`).
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub get: Option<String>,
     /// The relative path for the sourced item (for Nix imports).
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<PathBuf>,
 }
 
@@ -152,8 +158,10 @@ pub struct Lockfile {
     /// The version of the lockfile schema.
     pub version: u8,
     /// The list of locked dependencies (absent or empty if none).
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub deps: Option<Vec<Dep>>,
     /// The list of locked build-time sources (absent or empty if none).
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub srcs: Option<Vec<Src>>,
 }
 

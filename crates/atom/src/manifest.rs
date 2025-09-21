@@ -2,6 +2,7 @@
 //!
 //! Provides the core types for working with an Atom's manifest format.
 
+mod deps;
 use std::path::PathBuf;
 use std::str::FromStr;
 
@@ -37,7 +38,8 @@ pub struct Manifest {
     /// The required \[atom] key of the TOML manifest.
     pub atom: Atom,
     /// The dependencies of the Atom.
-    pub deps: Option<Vec<String>>, // Dummy for now; update to new deps schema later
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deps: Option<deps::Dependency>,
 }
 
 impl Manifest {
