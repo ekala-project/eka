@@ -15,6 +15,13 @@ rev = "bca8295431846ed43bdbe9d95a8b8958785245e6"
 
 [[deps]]
 type = "atom"
+id = "home"
+version = "0.1.8"
+rev = "795ae541b7fd67dd3c6e1a9dddf903312696aa17"
+url = "https://git.example.com/my-repo.git"
+
+[[deps]]
+type = "atom"
 id = "users"
 version = "0.1.4"
 rev = "a460f02d145b870bb4f8762fd7a163afee68512e"
@@ -26,6 +33,19 @@ name = "eval-config"
 path = "nixos/lib/eval-config.nix"
 from = "nix"
 get = "nixpkgs"
+
+[[deps]]
+name = "hm-module"
+url = "https://github.com/nix-community/home-manager.git"
+rev = "d0300c8808e41da81d6edfc202f3d3833c157daf"
+path = "nixos"
+type = "pin+git"
+
+[[deps]]
+name = "foks"
+url = "https://raw.githubusercontent.com/NixOS/nixpkgs/393d5e815a19acad8a28fc4b27085e42c483b4f6/pkgs/by-name/fo/foks/package.nix"
+type = "pin"
+hash = "sha256:1spc2lsx16xy612lg8rsyd34j9fy6kmspxcvcfmawkxmyvi32g9v"
 
 [[deps]]
 type = "pin+tar"
@@ -43,7 +63,6 @@ hash = "sha256-hClMprWwiEQe7mUUToXZAR5wbhoVFi+UuqLL2K/eIPw="
 
     let lock: Result<Lockfile, _> = from_str(lock_str);
 
-    // Verify conditional validation
     let invalid_lock_str = r#"
 version = 1
 

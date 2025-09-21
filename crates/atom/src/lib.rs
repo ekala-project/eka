@@ -41,7 +41,7 @@ use std::sync::LazyLock;
 
 pub use id::{AtomId, CalculateRoot};
 pub use lock::{
-    AtomDep, Dep, FromDep, LockError, Lockfile, PinDep, PinGitDep, PinTarDep, ResolutionMode, Src,
+    AtomDep, Dep, FromDep, Lockfile, PinDep, PinGitDep, PinTarDep, ResolutionMode, Src,
 };
 pub use manifest::Manifest;
 const TOML: &str = "toml";
