@@ -7,6 +7,7 @@
 mod tests;
 
 use std::borrow::Borrow;
+use std::ffi::OsStr;
 use std::fmt;
 use std::ops::Deref;
 use std::str::FromStr;
@@ -19,6 +20,7 @@ const ID_MAX: usize = 128;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(try_from = "String")]
+/// A vetted String suitable for an atom's `id` field
 pub struct Id(String);
 
 #[derive(Error, Debug, PartialEq, Eq)]
@@ -31,6 +33,8 @@ pub enum Error {
     InvalidStart(char),
     #[error("The Atom id contains invalid characters: '{0}'")]
     InvalidCharacters(String),
+    #[error("An Atom id must be valid unicode")]
+    InvalidUnicode,
 }
 
 pub trait ComputeHash<'id, T>: Borrow<[u8]> {
@@ -213,6 +217,15 @@ impl TryFrom<String> for Id {
     fn try_from(s: String) -> Result<Self, Self::Error> {
         Id::validate(&s)?;
         Ok(Id(s))
+    }
+}
+
+impl TryFrom<&OsStr> for Id {
+    type Error = Error;
+
+    fn try_from(s: &OsStr) -> Result<Self, Self::Error> {
+        let s = s.to_str().ok_or(Error::InvalidUnicode)?;
+        Id::from_str(s)
     }
 }
 

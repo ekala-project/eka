@@ -39,7 +39,7 @@ pub mod uri;
 pub use core::Atom;
 use std::sync::LazyLock;
 
-pub use id::{AtomId, CalculateRoot};
+pub use id::{AtomId, CalculateRoot, Id};
 pub use lock::{Lockfile, ResolutionMode};
 pub use manifest::Manifest;
 const TOML: &str = "toml";

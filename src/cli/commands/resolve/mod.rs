@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::Parser;
 
+#[cfg(feature = "git")]
 mod git;
 
 use crate::cli::store::Detected;
