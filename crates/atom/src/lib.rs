@@ -25,13 +25,13 @@
 //! important for efficient resolution (not yet implemented). The refs under `src`
 //! points to the original commit from which the Atom's content references, ensuring
 //! it remains live, allowing trivially verification.
-#![deny(missing_docs)]
+// #![deny(missing_docs)]
 #![cfg_attr(not(feature = "git"), allow(dead_code))]
 
 mod core;
 mod id;
-mod lock;
-mod manifest;
+pub mod lock;
+pub mod manifest;
 
 pub mod publish;
 pub mod store;

@@ -2,7 +2,7 @@
 //!
 //! Provides the core types for working with an Atom's manifest format.
 
-mod deps;
+pub mod deps;
 use std::path::PathBuf;
 use std::str::FromStr;
 

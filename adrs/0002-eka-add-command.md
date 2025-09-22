@@ -86,11 +86,13 @@ pub struct Args {
 ### 3. Remote Checking Strategy
 
 **For Atom Dependencies**:
+
 - Use `gix` functionality to query `refs/atoms/{id}/*` patterns
 - Support version requirements by checking multiple refs
 - Cache results locally with TTL (1 hour?)
 
 **For Pin Dependencies**:
+
 - **Git pins**: Use similar git ref checking as atoms
 - **HTTP pins**: Use HEAD request to check resource existence
   - Send `HEAD /path HTTP/1.1` with minimal headers
@@ -99,6 +101,7 @@ pub struct Args {
   - Timeout after 10 seconds
 
 **Implementation Details**:
+
 ```rust
 // HTTP HEAD request for pin checking
 let client = reqwest::Client::builder()
@@ -130,6 +133,7 @@ pub enum AddError {
 ```
 
 **User Feedback Strategy**:
+
 - Progress indicators for network operations
 - Clear success messages: `"Added {dependency} to atom.toml"`
 - Descriptive error messages with actionable suggestions
@@ -139,6 +143,7 @@ pub enum AddError {
 ### 5. Manifest Update Strategy
 
 **TOML Structure Updates**:
+
 ```toml
 [deps.atoms]
 "atom-id" = { version = "^1.0", url = "https://..." }
@@ -148,6 +153,7 @@ pub enum AddError {
 ```
 
 **Update Process**:
+
 1. Parse existing `atom.toml` efficiently using `toml_edit` facilities
 2. Ensure existence remotely, and add new dependency to appropriate section
 3. Handle conflicts (duplicate names/IDs)
@@ -155,6 +161,7 @@ pub enum AddError {
 5. Write atomically to prevent corruption
 
 **Conflict Resolution**:
+
 - For atoms: Error on duplicate IDs with suggestion to update version
 - For pins: Error on duplicate names with suggestion to use `--name` flag to give a unique name
 
@@ -178,16 +185,19 @@ pub async fn validate_dependency_for_lock(
 ### 7. Testing Strategy
 
 **Unit Tests**:
+
 - Test remote checking functions with mock servers
 - Test manifest update logic with various scenarios
 - Test error conditions and edge cases
 
 **Integration Tests**:
+
 - End-to-end test with real git repositories
 - Test HTTP pin checking with test servers
 - Test manifest file I/O operations
 
 **Test Utilities**:
+
 ```rust
 // Mock remote server for testing
 async fn mock_git_server() -> MockServer {
@@ -202,6 +212,7 @@ where F: FnOnce(&Path) -> Result<()>
 ## Consequences
 
 **Pros**:
+
 - Clean separation of concerns between CLI and library code
 - Reusable remote checking functionality for future commands
 - Robust error handling with actionable feedback
@@ -209,14 +220,17 @@ where F: FnOnce(&Path) -> Result<()>
 - Efficient remote operations minimize network overhead
 
 **Cons**:
+
 - Caching adds complexity but improves performance
 - Initial lock file integration is stubbed (acceptable for current phase)
 
 **Risks**:
+
 - Network timeouts may frustrate users (mitigated with progress indicators)
 - Large ref lists may slow git operations (mitigated with targeted queries)
 
 **Alternatives Considered**:
+
 - Single crate implementation: Rejected due to lack of reusability
 - Always download content: Rejected due to inefficiency
 - No remote checking: Rejected due to poor user experience

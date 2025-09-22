@@ -17,6 +17,7 @@
 mod tests;
 
 use std::collections::HashMap;
+use std::fmt::Display;
 use std::ops::Deref;
 use std::str::FromStr;
 
@@ -50,6 +51,32 @@ struct Ref<'a> {
     #[cfg_attr(test, serde(borrow))]
     url: UrlRef<'a>,
     atom: AtomRef<'a>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Default)]
+#[cfg_attr(test, derive(Serialize, Deserialize))]
+/// a url potentially containing an alias
+pub struct AliasedUrl(Url);
+
+impl Display for AliasedUrl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let AliasedUrl(url) = self;
+        url.fmt(f)
+    }
+}
+
+impl FromStr for AliasedUrl {
+    type Err = UriError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let r = UrlRef::from(s);
+        let u = r.to_url();
+        if let Some(url) = u {
+            Ok(AliasedUrl(url))
+        } else {
+            Err(UriError::NoUrl)
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
@@ -470,7 +497,7 @@ impl<'a> TryFrom<&'a str> for Uri {
     }
 }
 
-impl std::fmt::Display for Uri {
+impl Display for Uri {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let url = self
             .url

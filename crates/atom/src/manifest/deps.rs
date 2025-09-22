@@ -1,3 +1,6 @@
+//! # Atom Dependency Handling
+//!
+//! Provides the core types for working with an Atom manifest's dependencies.
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -27,10 +30,10 @@ pub struct Dependency {
 #[serde(deny_unknown_fields)]
 pub struct AtomReq {
     /// The semantic version request specification of the atom.
-    pub version: VersionReq,
+    version: VersionReq,
     /// The location of the atom, whether local or remote.
     #[serde(flatten)]
-    pub locale: AtomLocation,
+    locale: AtomLocation,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -77,4 +80,10 @@ pub struct PinReq {
 pub struct SrcReq {
     /// The URL of the source.
     pub url: Url,
+}
+
+impl AtomReq {
+    pub fn new(version: VersionReq, locale: AtomLocation) -> Self {
+        Self { version, locale }
+    }
 }

@@ -40,7 +40,7 @@ pub(super) enum Commands {
     /// This command will take an atom uri or pin spec and update the
     /// manifest with given result.
     #[command(verbatim_doc_comment)]
-    Add(resolve::Args),
+    Add(add::Args),
     /// Create a new atom at the specified path.
     ///
     /// This command takes a path anywhere on the file-system and creates
@@ -58,7 +58,7 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
         Commands::Init(args) => init::run(store.await?, args)?,
         Commands::Resolve(args) => resolve::run(store.await?, args)?,
         Commands::New(args) => new::run(args)?,
-        _ => (),
+        Commands::Add(args) => add::run(args)?,
     }
     Ok(())
 }
