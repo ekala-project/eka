@@ -1,4 +1,50 @@
 //! # Atom Store Interface
+//!
+//! This module defines the core traits and interfaces for implementing storage
+//! backends for atoms. The store abstraction allows atoms to be stored and
+//! retrieved from different types of storage systems.
+//!
+//! ## Architecture
+//!
+//! The store system is designed around two main traits:
+//!
+//! - [`Init`] - Handles store initialization and root calculation
+//! - [`NormalizeStorePath`] - Normalizes paths relative to store roots
+//!
+//! ## Storage Backends
+//!
+//! Currently supported backends:
+//! - **Git** - Stores atoms as Git objects in repositories (when `git` feature is enabled)
+//!
+//! Future backends may include:
+//! - **HTTP/HTTPS** - Remote storage over HTTP APIs
+//! - **Local filesystem** - Direct filesystem storage
+//! - **S3-compatible** - Cloud storage backends
+//!
+//! ## Key Concepts
+//!
+//! **Store Root**: A unique identifier that represents the base commit or
+//! state of the store. This is used as part of atom identity calculation.
+//!
+//! **Path Normalization**: Converting user-provided paths to canonical paths
+//! relative to the store root, handling both relative and absolute paths correctly.
+//!
+//! ## Usage
+//!
+//! ```rust,no_run
+//! use atom::store::git::Root;
+//! use atom::store::{Init, NormalizeStorePath};
+//! use gix::Remote;
+//!
+//! // Initialize a Git store
+//! let remote = Remote::new("origin");
+//! remote.ekala_init()?;
+//! let root = remote.ekala_root()?;
+//!
+//! // Normalize a path
+//! let normalized = remote.normalize("path/to/atom")?;
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
 #[cfg(feature = "git")]
 pub mod git;
 use std::path::{Path, PathBuf};

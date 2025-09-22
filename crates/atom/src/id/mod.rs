@@ -3,6 +3,55 @@
 //! This module contains the foundational types and logic for working with Atom
 //! identifiers. Atom IDs are a crucial component for unambiguously keeping track
 //! of Atoms from various sources without risk of collision or ambiguity.
+//!
+//! ## Key Concepts
+//!
+//! **Atom IDs** are human-readable Unicode identifiers that uniquely identify
+//! atoms within a given context. They are validated to ensure they contain
+//! only safe characters and are not too long.
+//!
+//! **AtomId** combines an atom's human-readable ID with a context-specific
+//! "root" value to create a globally unique identifier. The root varies by
+//! storage backend (e.g., Git commit hash, filesystem path).
+//!
+//! **AtomHash** represents the BLAKE3 hash of an AtomId, providing a
+//! cryptographically secure, collision-resistant identifier.
+//!
+//! ## ID Validation Rules
+//!
+//! Atom IDs are validated on construction to ensure they serve as descriptive, human-readable
+//! identifiers while providing a vast address space suitable for use as one component in a two-part
+//! cryptographic hash. This allows for meaningful Unicode characters across languages (beyond just
+//! ASCII/English) without permitting nonsensical or overly permissive content. Validation leverages
+//! Unicode general categories for letters and numbers.
+//!
+//! Atom IDs must:
+//! - Be valid UTF-8 encoded Unicode strings
+//! - Not exceed 128 bytes in length (measured in UTF-8 bytes)
+//! - Not be empty
+//! - Start with a Unicode letter (general categories: UppercaseLetter [Lu], LowercaseLetter [Ll],
+//!   TitlecaseLetter [Lt], ModifierLetter [Lm], or OtherLetter [Lo]; not a number, underscore, or
+//!   hyphen)
+//! - Contain only Unicode letters (as defined above), Unicode numbers (DecimalNumber [Nd] or
+//!   LetterNumber [Nl]), hyphens (`-`), and underscores (`_`)//!
+//!
+//! ## Usage Example
+//!
+//! ```rust,no_run
+//! use atom::id::{AtomId, Id};
+//! use atom::store::git::Root;
+//!
+//! // Create a validated atom ID
+//! let id = Id::try_from("my-atom").unwrap();
+//!
+//! // Create an AtomId with a Git root
+//! let root = Root::from([0u8; 20]); // Example root
+//! let atom_id = AtomId::compute(&root, id).unwrap();
+//!
+//! // Get the hash for storage/retrieval
+//! let hash = atom_id.compute_hash();
+//! println!("Atom hash: {}", hash);
+//! ```
 #[cfg(test)]
 mod tests;
 
@@ -37,7 +86,22 @@ pub enum Error {
     InvalidUnicode,
 }
 
+/// Trait for computing BLAKE3 hashes of AtomIds.
+///
+/// This trait is implemented for AtomId to provide a way to compute
+/// cryptographically secure hashes that can be used as unique identifiers
+/// for atoms in storage backends.
 pub trait ComputeHash<'id, T>: Borrow<[u8]> {
+    /// Computes the BLAKE3 hash of this AtomId.
+    ///
+    /// The hash is computed using a key derived from the atom's root value,
+    /// ensuring that atoms with the same ID but different roots produce
+    /// different hashes.
+    ///
+    /// # Returns
+    ///
+    /// An `AtomHash` containing the 32-byte BLAKE3 hash and a reference
+    /// to the original AtomId.
     fn compute_hash(&'id self) -> AtomHash<'id, T>;
 }
 
@@ -67,8 +131,16 @@ pub struct AtomId<R> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// Represents the BLAKE3 hash of an AtomId.
+///
+/// This struct contains a 32-byte BLAKE3 hash that serves as a
+/// cryptographically secure, globally unique identifier for an atom.
+/// The hash is computed from the combination of the atom's human-readable
+/// ID and its context-specific root value.
 pub struct AtomHash<'id, T> {
+    /// The 32-byte BLAKE3 hash value
     hash: [u8; 32],
+    /// Reference to the AtomId that was hashed
     id: &'id AtomId<T>,
 }
 

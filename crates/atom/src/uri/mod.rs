@@ -1,18 +1,74 @@
 //! # Atom URI Format
 //!
-//! An Atom URI of the form:
+//! This module provides comprehensive parsing and handling of Atom URIs, which are
+//! used to reference atoms from various sources including Git repositories, local
+//! paths, and external URLs.
+//!
+//! ## URI Format
+//!
+//! Atom URIs follow this general format:
 //! ```text
 //! [scheme://][alias:][url-fragment::]atom-id[@version]
 //! ```
 //!
-//! An `alias` is a user configurable URL shortener that must at least contain an FQDN or host,
-//! and as much of the url path as desirable. Aliases can be specified in the eka configuration
-//! file for the CLI program. See the Atom configuration crate for further detail.
+//! ### Components
 //!
-//! ## Examples
-//! * `gh:owner/repo::my-atom` where `hub` is `github.com`
-//! * `work:repo::my-atom` where `work` is `github.com/my-work-org`
-//! * `repo::my-atom@^1` where `repo` is `example.com/some/repo`
+//! - **scheme** - Optional protocol (e.g., `https://`, `ssh://`, `file://`)
+//! - **alias** - Optional user-configurable URL shortener (e.g., `gh` for GitHub)
+//! - **url-fragment** - Optional path within the repository
+//! - **atom-id** - Required atom identifier (Unicode string)
+//! - **version** - Optional version requirement (e.g., `@1.0.0`, `@^1.0`)
+//!
+//! ## Key Types
+//!
+//! - [`Uri`] - The main parsed URI structure
+//! - [`AliasedUrl`] - URL with optional alias resolution
+//! - [`UriError`] - Errors that can occur during URI parsing
+//!
+//! ## Alias System
+//!
+//! Aliases provide a convenient way to shorten common URLs. They are configured
+//! in the Eka configuration file and can reference full URLs or other aliases.
+//!
+//! ### Alias Examples
+//! - `gh:owner/repo::my-atom` → `https://github.com/owner/repo::my-atom`
+//! - `work:repo::my-atom` → `https://github.com/my-work-org/repo::my-atom`
+//! - `local::my-atom` → `file:///path/to/repo::my-atom`
+//!
+//! ## URI Examples
+//!
+//! ```rust,no_run
+//! use atom::uri::Uri;
+//!
+//! // Simple atom reference
+//! let uri: Uri = "my-atom".parse().unwrap();
+//! assert_eq!(uri.id().to_string(), "my-atom");
+//!
+//! // Atom with version
+//! let uri: Uri = "my-atom@^1.0.0".parse().unwrap();
+//! assert_eq!(uri.id().to_string(), "my-atom");
+//!
+//! // GitHub reference with alias
+//! let uri: Uri = "gh:user/repo::my-atom".parse().unwrap();
+//! assert_eq!(uri.url().unwrap().host_str().unwrap(), "github.com");
+//!
+//! // Direct URL reference
+//! let uri: Uri = "https://github.com/user/repo::my-atom".parse().unwrap();
+//! assert_eq!(uri.url().unwrap().host_str().unwrap(), "github.com");
+//!
+//! // Local file reference
+//! let uri: Uri = "file:///path/to/repo::my-atom".parse().unwrap();
+//! assert_eq!(uri.url().unwrap().scheme(), "file");
+//! ```
+//!
+//! ## Error Handling
+//!
+//! The URI parser provides detailed error messages for common issues:
+//! - Invalid atom IDs (wrong characters, too long, etc.)
+//! - Unknown aliases
+//! - Malformed URLs
+//! - Invalid version specifications
+//! - Missing required components
 #[cfg(test)]
 mod tests;
 

@@ -1,8 +1,73 @@
 //! # Atom Publishing
 //!
-//! This module provides the types and logic necessary to efficienctly publish Atoms
-//! to a store implementation. Currently, only a Git store is implemented, but future
-//! work will likely include more alternate backends, e.g. an S3 bucket.
+//! This module provides the types and logic necessary to efficiently publish atoms
+//! to store implementations. The publishing system is designed to be safe, atomic,
+//! and provide detailed feedback about the publishing process.
+//!
+//! ## Architecture
+//!
+//! The publishing system is built around two main traits:
+//!
+//! - [`Builder`] - Constructs and validates publishers before publishing
+//! - [`Publish`] - Handles the actual publishing of atoms to stores
+//!
+//! ## Publishing Process
+//!
+//! 1. **Validation** - All atoms in the workspace are validated for consistency
+//! 2. **Deduplication** - Duplicate atoms are detected and skipped
+//! 3. **Publishing** - Valid atoms are published to the target store
+//! 4. **Reporting** - Detailed statistics and results are provided
+//!
+//! ## Key Types
+//!
+//! - [`Record`] - Contains the result of publishing a single atom
+//! - [`Stats`] - Aggregated statistics for a publishing operation
+//! - [`PublishOutcome`] - Result type for individual atom publishing attempts
+//! - [`Content`] - Backend-specific content information
+//!
+//! ## Current Backends
+//!
+//! - **Git** - Publishes atoms as Git objects in repositories (when `git` feature is enabled)
+//!
+//! ## Future Backends
+//!
+//! The architecture is designed to support additional backends:
+//! - **HTTP/HTTPS** - REST APIs for atom storage
+//! - **S3-compatible** - Cloud storage backends
+//! - **IPFS** - Distributed storage networks
+//!
+//! ## Safety Features
+//!
+//! - **Atomic operations** - Failed publishes don't leave partial state
+//! - **Duplicate detection** - Prevents accidental overwrites
+//! - **Comprehensive validation** - Ensures atom consistency before publishing
+//! - **Detailed error reporting** - Clear feedback on what succeeded or failed
+//!
+//! ## Example Usage
+//!
+//! ```rust,no_run
+//! use atom::publish::{Builder, Publish, Stats};
+//! use atom::store::git::{GitPublisher, Root};
+//!
+//! // Create a publisher for a Git repository
+//! let publisher = GitPublisher::new(&repo, "origin", "main")?;
+//!
+//! // Build and validate the publisher
+//! let (valid_atoms, publisher) = publisher.build()?;
+//!
+//! // Publish all atoms
+//! let results = publisher.publish(vec![path_to_atom1, path_to_atom2]);
+//!
+//! // Check results
+//! let stats = Stats::default();
+//! for result in results {
+//!     match result {
+//!         Ok(outcome) => println!("Published: {:?}", outcome),
+//!         Err(e) => println!("Failed: {:?}", e),
+//!     }
+//! }
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
 pub mod error;
 #[cfg(feature = "git")]
 pub mod git;

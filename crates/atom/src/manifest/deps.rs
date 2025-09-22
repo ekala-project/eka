@@ -1,6 +1,52 @@
 //! # Atom Dependency Handling
 //!
-//! Provides the core types for working with an Atom manifest's dependencies.
+//! This module provides the core types for working with an Atom manifest's dependencies.
+//! It defines the structure for specifying different types of dependencies in an atom's
+//! manifest file, including atom references, direct pins, and build-time sources.
+//!
+//! ## Dependency Types
+//!
+//! The manifest supports three main categories of dependencies:
+//!
+//! - **Atom dependencies** - References to other atoms by ID and version
+//! - **Pin dependencies** - Direct references to external sources (URLs, Git repos, tarballs)
+//! - **Source dependencies** - Build-time dependencies like source code or config files
+//!
+//! ## Key Types
+//!
+//! - [`Dependency`] - The main dependency structure containing all dependency types
+//! - [`AtomReq`] - Requirements for atom dependencies
+//! - [`PinReq`] - Requirements for pinned dependencies
+//! - [`SrcReq`] - Requirements for build-time sources
+//! - [`PinType`] - Enum distinguishing between direct and indirect pins
+//!
+//! ## Example Usage
+//!
+//! ```toml
+//! [deps.atoms]
+//! # Reference to another atom
+//! other-atom = { version = "^1.0.0", path = "../other-atom" }
+//!
+//! [deps.pins]
+//! # pin to external evaluation time source code
+//! external-lib = { url = "https://example.com/lib.tar.gz" }
+//!
+//! # Git pin
+//! git-dep = { url = "https://github.com/user/repo.git", ref = "main" }
+//!
+//! # Indirect pin (from another atom)
+//! shared-lib = { from = "other-atom", get = "lib" }
+//!
+//! [deps.srcs]
+//! # Build-time source
+//! src-code = { url = "https://registry.example.com/code.tar.gz" }
+//! ```
+//!
+//! ## Validation
+//!
+//! All dependency types use `#[serde(deny_unknown_fields)]` to ensure strict
+//! validation and prevent typos in manifest files. Optional fields are properly
+//! handled with `skip_serializing_if` to keep the TOML output clean.
 use std::collections::HashMap;
 use std::path::PathBuf;
 

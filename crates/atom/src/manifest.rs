@@ -1,6 +1,63 @@
 //! # Atom Manifest
 //!
-//! Provides the core types for working with an Atom's manifest format.
+//! This module provides the core types for working with an Atom's manifest format.
+//! The manifest is a TOML file that describes an atom's metadata and dependencies.
+//!
+//! ## Manifest Structure
+//!
+//! Every atom must have a manifest file named `atom.toml` that contains at minimum
+//! an `[atom]` section with the atom's ID, version, and optional description.
+//! Additional sections can specify dependencies and other configuration.
+//!
+//! ## Key Types
+//!
+//! - [`Manifest`] - The complete manifest structure
+//! - [`Atom`] - The core atom metadata (id, version, description)
+//! - [`AtomError`] - Errors that can occur during manifest processing
+//!
+//! ## Example Manifest
+//!
+//! ```toml
+//! [atom]
+//! id = "my-atom"
+//! version = "1.0.0"
+//! description = "A sample atom for demonstration"
+//!
+//! [deps.atoms]
+//! other-atom = { version = "^1.0.0", path = "../other-atom" }
+//!
+//! [deps.pins]
+//! external-lib = { url = "https://example.com/lib.tar.gz", hash = "sha256:abc123..." }
+//! ```
+//!
+//! ## Validation
+//!
+//! Manifests are strictly validated to ensure they contain all required fields
+//! and have valid data. The `#[serde(deny_unknown_fields)]` attribute ensures
+//! that only known fields are accepted, preventing typos and invalid configurations.
+//!
+//! ## Usage
+//!
+//! ```rust,no_run
+//! use atom::id::Id;
+//! use atom::manifest::{Atom, Manifest};
+//! use semver::Version;
+//!
+//! // Create a manifest programmatically
+//! let manifest = Manifest::new(
+//!     Id::try_from("my-atom").unwrap(),
+//!     Version::new(1, 0, 0),
+//!     Some("My first atom".to_string()),
+//! );
+//!
+//! // Parse a manifest from a string
+//! let manifest_str = r#"
+//! [atom]
+//! id = "parsed-atom"
+//! version = "2.0.0"
+//! "#;
+//! let parsed: Manifest = manifest_str.parse().unwrap();
+//! ```
 
 pub mod deps;
 use std::path::PathBuf;

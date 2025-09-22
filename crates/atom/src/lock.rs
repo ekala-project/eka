@@ -4,8 +4,55 @@
 //! Lockfiles capture the exact versions and revisions of dependencies for reproducible
 //! builds, similar to Cargo.lock or flake.lock but designed for the Atom ecosystem.
 //!
+//! ## Overview
+//!
 //! The lockfile format uses TOML with tagged enums for type safety while maintaining
-//! portability across different tools and languages.
+//! portability across different tools and languages. Each dependency is represented
+//! as a tagged union that can represent different types of dependencies:
+//!
+//! - **Atom dependencies** - References to other atoms by ID and version
+//! - **Direct pins** - Direct references to external URLs with integrity verification
+//! - **Git pins** - References to specific Git repositories and commits
+//! - **Tarball pins** - References to tarball/zip archives
+//! - **Cross-atom references** - Dependencies sourced from other atoms
+//!
+//! ## Key Types
+//!
+//! - [`Lockfile`] - The root structure containing all resolved dependencies
+//! - [`Dep`] - Enum representing different types of dependencies
+//! - [`Src`] - Enum representing build-time sources
+//! - [`ResolutionMode`] - Controls whether to resolve direct or transitive dependencies
+//!
+//! ## Example Lockfile
+//!
+//! ```toml
+//! version = 1
+//!
+//! [[deps]]
+//! type = "atom"
+//! id = "my-atom"
+//! version = "1.0.0"
+//! rev = "abc123..."
+//!
+//! [[deps]]
+//! type = "pin"
+//! name = "external-lib"
+//! url = "https://example.com/lib.tar.gz"
+//! hash = "sha256:def456..."
+//!
+//! [[srcs]]
+//! type = "build"
+//! name = "registry"
+//! url = "https://registry.example.com"
+//! hash = "sha256:ghi789..."
+//! ```
+//!
+//! ## Security Features
+//!
+//! - **Cryptographic verification** using BLAKE3 hashes for atom content
+//! - **Nix-compatible hashing** for tarballs and archives
+//! - **Strict field validation** with `#[serde(deny_unknown_fields)]`
+//! - **Type-safe dependency resolution** preventing invalid configurations
 
 use std::path::PathBuf;
 
