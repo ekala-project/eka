@@ -25,7 +25,7 @@
 //! important for efficient resolution (not yet implemented). The refs under `src`
 //! points to the original commit from which the Atom's content references, ensuring
 //! it remains live, allowing trivially verification.
-// #![deny(missing_docs)]
+#![deny(missing_docs)]
 #![cfg_attr(not(feature = "git"), allow(dead_code))]
 
 mod core;
@@ -42,6 +42,17 @@ use std::sync::LazyLock;
 pub use id::{AtomId, CalculateRoot, Id};
 pub use lock::{Lockfile, ResolutionMode};
 pub use manifest::Manifest;
+
+/// The file extension used for Atom manifest files.
 const TOML: &str = "toml";
+
+/// The base32 alphabet used for encoding Atom hashes.
+///
+/// This uses the RFC4648 hex alphabet without padding, which provides a good balance
+/// between readability and compactness for Atom identifiers.
 const BASE32: base32::Alphabet = base32::Alphabet::Rfc4648HexLower { padding: false };
+
+/// The filename used for Atom manifest files.
+///
+/// This is constructed by combining the base name "atom" with the TOML extension.
 static ATOM_MANIFEST: LazyLock<String> = LazyLock::new(|| format!("atom.{}", crate::TOML));
