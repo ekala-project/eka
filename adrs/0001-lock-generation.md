@@ -138,7 +138,7 @@ Eka requires a lockfile mechanism to capture resolved dependencies for reproduci
 flowchart TD
     A[Parse Manifest] --> B[Extract Direct Deps URIs/IDs]
     B --> C[For Each Dep: Resolve URI]
-    C --> D{Fetch Refs via gix ls-remote<br/>(Cache Check First)}
+    C --> D[Fetch Refs via gix]
     D -->|Hit| E[Select Version/Rev]
     D -->|Miss| F[Query Remote & Cache]
     F --> E
@@ -149,5 +149,6 @@ flowchart TD
     I --> J[Build Lockfile]
     J --> K[Validate & Serialize to TOML]
     K --> L[Write atom.lock]
+
     style D fill:#f9f
 ```
