@@ -277,7 +277,7 @@ impl<'repo> Init<Root, ObjectId> for gix::Remote<'repo> {
         use crate::id::Origin;
 
         let repo = self.repo();
-        self.get_refs(["HEAD", V1_ROOT]).map(|i| {
+        self.get_refs(["HEAD", V1_ROOT], true).map(|i| {
             let mut i = i.into_iter();
             let root_for = |i: &mut dyn Iterator<Item = ObjectId>| {
                 i.next()
@@ -304,7 +304,7 @@ impl<'repo> Init<Root, ObjectId> for gix::Remote<'repo> {
 
     /// Sync with the given remote and get the most up to date HEAD according to it.
     fn sync(&self) -> Result<ObjectId, Error> {
-        self.get_ref("HEAD")
+        self.get_ref("HEAD", true)
     }
 
     /// Initialize the repository by calculating the root, according to the latest HEAD.
@@ -367,6 +367,7 @@ impl<'repo> super::QueryStore<ObjectId> for gix::Remote<'repo> {
     fn get_refs<Spec>(
         &self,
         references: impl IntoIterator<Item = Spec>,
+        fetch: bool,
     ) -> Result<impl IntoIterator<Item = gix::ObjectId>, Self::Error>
     where
         Spec: AsRef<BStr>,
@@ -397,17 +398,20 @@ impl<'repo> super::QueryStore<ObjectId> for gix::Remote<'repo> {
             .collect();
 
         let client = remote.connect(Direction::Fetch).map_err(Box::new)?;
-        let sync = client
+        let query = client
             .prepare_fetch(sync_progress, Options::default())
             .map_err(Box::new)?;
 
-        let outcome = sync
-            .receive(init_progress, &AtomicBool::new(false))
-            .map_err(Box::new)?;
+        let refs = if fetch {
+            let outcome = query
+                .receive(init_progress, &AtomicBool::new(false))
+                .map_err(Box::new)?;
 
+            outcome.ref_map.remote_refs
+        } else {
+            query.ref_map().remote_refs.clone()
+        };
         handle.shutdown_and_wait();
-
-        let refs = outcome.ref_map.remote_refs;
 
         refs.iter()
             .filter_map(|r| {
@@ -423,12 +427,12 @@ impl<'repo> super::QueryStore<ObjectId> for gix::Remote<'repo> {
             .collect::<Result<HashSet<_>, _>>()
     }
 
-    fn get_ref<Spec>(&self, target: Spec) -> Result<ObjectId, Self::Error>
+    fn get_ref<Spec>(&self, target: Spec, fetch: bool) -> Result<ObjectId, Self::Error>
     where
         Spec: AsRef<BStr>,
     {
         let name = target.as_ref().to_string();
-        self.get_refs(Some(target)).and_then(|r| {
+        self.get_refs(Some(target), fetch).and_then(|r| {
             r.into_iter()
                 .next()
                 .ok_or(Error::NoRef(name, self.symbol().to_owned()))

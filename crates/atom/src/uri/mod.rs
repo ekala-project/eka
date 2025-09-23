@@ -499,13 +499,13 @@ impl<'a> UrlRef<'a> {
 
 impl<'a> AtomRef<'a> {
     fn render(&self) -> Result<(AtomTag, Option<VersionReq>), UriError> {
-        let id = AtomTag::try_from(self.tag.ok_or(UriError::NoAtom)?)?;
+        let tag = AtomTag::try_from(self.tag.ok_or(UriError::NoAtom)?)?;
         let version = if let Some(v) = self.version {
             VersionReq::parse(v)?.into()
         } else {
             None
         };
-        Ok((id, version))
+        Ok((tag, version))
     }
 }
 

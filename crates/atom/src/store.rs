@@ -91,10 +91,11 @@ pub(crate) trait QueryStore<Id> {
     fn get_refs<Spec>(
         &self,
         targets: impl IntoIterator<Item = Spec>,
+        fetch: bool,
     ) -> Result<impl IntoIterator<Item = Id>, Self::Error>
     where
         Spec: AsRef<BStr>;
-    fn get_ref<Spec>(&self, target: Spec) -> Result<Id, Self::Error>
+    fn get_ref<Spec>(&self, target: Spec, fetch: bool) -> Result<Id, Self::Error>
     where
         Spec: AsRef<BStr>;
 }

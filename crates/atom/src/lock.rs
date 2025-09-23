@@ -30,7 +30,7 @@
 //!
 //! [[deps]]
 //! type = "atom"
-//! id = "my-atom"
+//! tag = "my-atom"
 //! version = "1.0.0"
 //! rev = "abc123..."
 //!

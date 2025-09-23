@@ -19,7 +19,7 @@
 //!
 //! ```toml
 //! [atom]
-//! id = "my-atom"
+//! tag = "my-atom"
 //! version = "1.0.0"
 //! description = "A sample atom for demonstration"
 //!

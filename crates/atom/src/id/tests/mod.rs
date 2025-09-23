@@ -24,8 +24,8 @@ fn invalid_chars() {
 }
 
 #[test]
-fn valid_unicode_ids() {
-    let valid_ids = [
+fn valid_unicode_tags() {
+    let valid_tags = [
         "αβγ",              // Greek lowercase
         "ΑΒΓ",              // Greek uppercase
         "кириллица",        // Cyrillic
@@ -47,14 +47,18 @@ fn valid_unicode_ids() {
         "Café_au_lait-123", // Mix of Latin, underscore, hyphen, and numbers
     ];
 
-    for id in valid_ids {
-        assert!(AtomTag::try_from(id).is_ok(), "Expected '{}' to be valid", id);
+    for tag in valid_tags {
+        assert!(
+            AtomTag::try_from(tag).is_ok(),
+            "Expected '{}' to be valid",
+            tag
+        );
     }
 }
 
 #[test]
-fn invalid_unicode_ids() {
-    let invalid_ids = [
+fn invalid_unicode_tags() {
+    let invalid_tags = [
         "123αβγ",             // Starts with number
         "_ΑΒΓ",               // Starts with underscore
         "-кириллица",         // Starts with hyphen
@@ -75,11 +79,11 @@ fn invalid_unicode_ids() {
         "Café_au_lait-123☕", // Contains coffee symbol
     ];
 
-    for id in invalid_ids {
+    for tag in invalid_tags {
         assert!(
-            AtomTag::try_from(id).is_err(),
+            AtomTag::try_from(tag).is_err(),
             "Expected '{}' to be invalid",
-            id
+            tag
         );
     }
 }
