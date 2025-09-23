@@ -1,3 +1,9 @@
 [build]
   command = "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && source $HOME/.cargo/env && rm -rf .cargo && cargo doc -p atom --no-deps"
-  publish = "target/doc/atom"
+  publish = "target/doc"
+
+[[redirects]]
+  from = "/"
+  to = "/atom/"
+  status = 301
+  force = true
