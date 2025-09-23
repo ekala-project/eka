@@ -9,20 +9,20 @@ version = 1
 
 [[deps]]
 type = "atom"
-id = "nix"
+tag = "nix"
 version = "0.1.2"
 rev = "bca8295431846ed43bdbe9d95a8b8958785245e6"
 
 [[deps]]
 type = "atom"
-id = "home"
+tag = "home"
 version = "0.1.8"
 rev = "795ae541b7fd67dd3c6e1a9dddf903312696aa17"
 url = "https://git.example.com/my-repo.git"
 
 [[deps]]
 type = "atom"
-id = "users"
+tag = "users"
 version = "0.1.4"
 rev = "a460f02d145b870bb4f8762fd7a163afee68512e"
 path = "hm/usr"

@@ -86,7 +86,7 @@ impl<'a> GitContext<'a> {
 
         self.verify_manifest(&entry.object()?, paths.spec())
             .and_then(|spec| {
-                let id = AtomId::compute(&self.commit, spec.id.clone())?;
+                let id = AtomId::construct(&self.commit, spec.tag.clone())?;
                 if self.root != *id.root() {
                     return Err(Error::InconsistentRoot {
                         remote: self.root,
@@ -96,7 +96,7 @@ impl<'a> GitContext<'a> {
                 Ok((
                     FoundAtom {
                         spec,
-                        id,
+                        tag: id,
                         tree_id,
                         spec_id,
                     },
@@ -109,8 +109,8 @@ impl<'a> GitContext<'a> {
 use semver::Version;
 
 impl<'a> AtomRef<'a> {
-    fn new(id: String, kind: RefKind, version: &'a Version) -> Self {
-        AtomRef { id, kind, version }
+    fn new(tag: String, kind: RefKind, version: &'a Version) -> Self {
+        AtomRef { tag, kind, version }
     }
 }
 
@@ -123,18 +123,18 @@ impl<'a> fmt::Display for AtomRef<'a> {
                 write!(
                     f,
                     "{}/{}/{}/{}",
-                    ATOMIC_ROOT, ATOM_REF, self.id, self.version
+                    ATOMIC_ROOT, ATOM_REF, self.tag, self.version
                 )
             },
             RefKind::Origin => write!(
                 f,
                 "{}/{}/{}/{}/{}",
-                ATOMIC_ROOT, ATOM_META_REF, self.id, self.version, ATOM_ORIGIN
+                ATOMIC_ROOT, ATOM_META_REF, self.tag, self.version, ATOM_ORIGIN
             ),
             RefKind::Spec => write!(
                 f,
                 "{}/{}/{}/{}/{}",
-                ATOMIC_ROOT, ATOM_META_REF, self.id, self.version, ATOM_MANIFEST
+                ATOMIC_ROOT, ATOM_META_REF, self.tag, self.version, ATOM_MANIFEST
             ),
         }
     }
@@ -142,7 +142,11 @@ impl<'a> fmt::Display for AtomRef<'a> {
 
 impl<'a> AtomContext<'a> {
     pub(super) fn refs(&self, kind: RefKind) -> AtomRef<'_> {
-        AtomRef::new(self.atom.id.id().to_string(), kind, &self.atom.spec.version)
+        AtomRef::new(
+            self.atom.tag.tag().to_string(),
+            kind,
+            &self.atom.spec.version,
+        )
     }
 
     /// Method to write atom commits
@@ -161,7 +165,7 @@ impl<'a> AtomContext<'a> {
             author: sig.clone(),
             committer: sig,
             encoding: None,
-            message: format!("{}: {}", self.atom.spec.id, self.atom.spec.version).into(),
+            message: format!("{}: {}", self.atom.spec.tag, self.atom.spec.version).into(),
             extra_headers: [
                 (ATOM_ORIGIN.into(), self.git.commit.id.to_string().into()),
                 (
@@ -200,7 +204,7 @@ fn write_ref<'a>(
         PreviousValue::MustNotExist,
         format!(
             "publish: {}: {}-{}",
-            atom.spec.id, atom.spec.version, atom_ref
+            atom.spec.tag, atom.spec.version, atom_ref
         ),
     )?)
 }

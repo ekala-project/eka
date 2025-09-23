@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use atom::{Id, Manifest};
+use atom::{AtomTag, Manifest};
 use clap::Parser;
 use semver::Version;
 
@@ -16,9 +16,9 @@ pub struct Args {
     /// The version to initialize the atom at.
     #[arg(short = 'V', long, default_value = "0.1.0")]
     version: Version,
-    /// The atom's `id` (defaults the the last part of path)
+    /// The atom's `tag` (defaults the the last part of path)
     #[arg(short, long)]
-    id: Option<Id>,
+    tag: Option<AtomTag>,
 }
 
 pub(super) fn run(args: Args) -> Result<()> {
@@ -26,12 +26,12 @@ pub(super) fn run(args: Args) -> Result<()> {
     use std::fs;
     use std::io::Write;
 
-    let id: Id = if let Some(id) = args.id {
-        id
+    let tag: AtomTag = if let Some(tag) = args.tag {
+        tag
     } else {
         args.path.file_name().unwrap_or(OsStr::new("")).try_into()?
     };
-    let atom = Manifest::new(id, args.version, args.description);
+    let atom = Manifest::new(tag, args.version, args.description);
     let atom_str = toml_edit::ser::to_string_pretty(&atom)?;
     let atom_toml = args.path.join("atom.toml");
 

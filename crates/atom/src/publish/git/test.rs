@@ -22,7 +22,7 @@ trait MockAtom {
 impl MockAtom for gix::Repository {
     fn mock(
         &self,
-        id: &str,
+        tag: &str,
         version: &str,
         description: &str,
     ) -> Result<(NamedTempFile, ObjectId), anyhow::Error> {
@@ -43,7 +43,7 @@ impl MockAtom for gix::Repository {
 
         let manifest = Manifest {
             atom: Atom {
-                id: id.try_into()?,
+                tag: tag.try_into()?,
                 version: Version::from_str(version)?,
                 description: (!description.is_empty()).then_some(description.into()),
             },
@@ -98,7 +98,7 @@ impl MockAtom for gix::Repository {
         let atom_oid = self
             .commit(
                 head_ref.name().as_bstr(),
-                format!("init: {}", id),
+                format!("init: {}", tag),
                 oid,
                 vec![head],
             )?
@@ -110,7 +110,7 @@ impl MockAtom for gix::Repository {
 
 #[tokio::test]
 async fn publish_atom() -> Result<(), anyhow::Error> {
-    use crate::id::Id;
+    use crate::id::AtomTag;
     use crate::publish::git::{Builder, GitPublisher};
     use crate::store::{Init, QueryStore};
     let (repo, _remote) = git::test::init_repo_and_remote()?;
@@ -124,7 +124,9 @@ async fn publish_atom() -> Result<(), anyhow::Error> {
 
     let (paths, publisher) = GitPublisher::new(&repo, "origin", "HEAD")?.build()?;
 
-    let path = paths.get(&Id::try_from(id)?).context("path is messed up")?;
+    let path = paths
+        .get(&AtomTag::try_from(id)?)
+        .context("path is messed up")?;
     let result = publisher.publish_atom(path)?;
     let mut errors = Vec::with_capacity(1);
     publisher.await_pushes(&mut errors).await;

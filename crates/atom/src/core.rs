@@ -9,7 +9,7 @@ use std::path::Path;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 
-use super::id::Id;
+use super::id::AtomTag;
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 /// Represents the deserialized form of an Atom, directly constructed from the TOML manifest.
@@ -19,7 +19,7 @@ use super::id::Id;
 #[serde(deny_unknown_fields)]
 pub struct Atom {
     /// The verified, human-readable Unicode identifier for the Atom.
-    pub id: Id,
+    pub tag: AtomTag,
 
     /// The version of the Atom.
     pub version: Version,

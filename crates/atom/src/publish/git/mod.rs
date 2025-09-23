@@ -60,7 +60,7 @@ struct AtomContext<'a> {
 
 struct FoundAtom {
     spec: Atom,
-    id: GitAtomId,
+    tag: GitAtomId,
     tree_id: ObjectId,
     spec_id: ObjectId,
 }
@@ -85,7 +85,7 @@ enum RefKind {
 use semver::Version;
 
 struct AtomRef<'a> {
-    id: String,
+    tag: String,
     kind: RefKind,
     version: &'a Version,
 }
@@ -170,7 +170,7 @@ impl<'a> StateValidator<Root> for GitPublisher<'a> {
             .map_err(|_| Error::NotFound)?;
 
         let cap = calculate_capacity(record.records.len());
-        let mut atoms: HashMap<Id, PathBuf> = HashMap::with_capacity(cap);
+        let mut atoms: HashMap<AtomTag, PathBuf> = HashMap::with_capacity(cap);
 
         for entry in record.records {
             let path = PathBuf::from(entry.filepath.to_string());
@@ -178,16 +178,16 @@ impl<'a> StateValidator<Root> for GitPublisher<'a> {
                 if let Ok(obj) = publisher.repo.find_object(entry.oid) {
                     match publisher.verify_manifest(&obj, &path) {
                         Ok(atom) => {
-                            if let Some(duplicate) = atoms.get(&atom.id) {
+                            if let Some(duplicate) = atoms.get(&atom.tag) {
                                 tracing::warn!(
                                     message = "Two atoms share the same ID",
-                                    duplicate.id = %atom.id,
+                                    duplicate.tag = %atom.tag,
                                     fst = %path.display(),
                                     snd = %duplicate.display(),
                                 );
                                 return Err(Error::Duplicates);
                             }
-                            atoms.insert(atom.id, path);
+                            atoms.insert(atom.tag, path);
                         },
                         Err(e) => e.warn(),
                     }
@@ -241,7 +241,7 @@ impl GitContent {
 use std::collections::HashMap;
 
 use super::Publish;
-use crate::id::Id;
+use crate::id::AtomTag;
 
 impl<'a> super::private::Sealed for GitContext<'a> {}
 
@@ -300,23 +300,23 @@ impl<'a> Publish<Root> for GitContext<'a> {
     fn publish_atom<P: AsRef<Path>>(&self, path: P) -> GitResult<GitOutcome> {
         use {Err as Skipped, Ok as Published};
 
-        let atom = AtomContext::set(path.as_ref(), self)?;
+        let context = AtomContext::set(path.as_ref(), self)?;
 
         if self
             .repo
-            .find_reference(&atom.refs(RefKind::Content).to_string())
+            .find_reference(&context.refs(RefKind::Content).to_string())
             .is_ok()
         {
-            return Ok(Skipped(atom.atom.spec.id.clone()));
+            return Ok(Skipped(context.atom.spec.tag.clone()));
         }
 
-        let refs = atom
-            .write_atom_commit(atom.atom.tree_id)?
-            .write_refs(&atom)?
-            .push(&atom);
+        let refs = context
+            .write_atom_commit(context.atom.tree_id)?
+            .write_refs(&context)?
+            .push(&context);
 
         Ok(Published(GitRecord {
-            id: atom.atom.id.clone(),
+            id: context.atom.tag.clone(),
             content: Content::Git(refs),
         }))
     }

@@ -17,7 +17,7 @@ expression: results?
                 path: "/repo",
             },
         ),
-        id: Id(
+        tag: AtomTag(
             "atom",
         ),
         version: Some(
@@ -50,7 +50,7 @@ expression: results?
                 path: "/",
             },
         ),
-        id: Id(
+        tag: AtomTag(
             "atom",
         ),
         version: Some(
@@ -83,7 +83,7 @@ expression: results?
                 path: "/path.with/dot",
             },
         ),
-        id: Id(
+        tag: AtomTag(
             "my-atom",
         ),
         version: Some(
@@ -116,7 +116,7 @@ expression: results?
                 path: "/owner/repo",
             },
         ),
-        id: Id(
+        tag: AtomTag(
             "this-atom",
         ),
         version: Some(
@@ -149,7 +149,7 @@ expression: results?
                 path: "/owner/repo",
             },
         ),
-        id: Id(
+        tag: AtomTag(
             "this-atom",
         ),
         version: Some(
@@ -182,7 +182,7 @@ expression: results?
                 path: "/owner/repo",
             },
         ),
-        id: Id(
+        tag: AtomTag(
             "foo",
         ),
         version: Some(
@@ -213,7 +213,7 @@ expression: results?
                 path: "/owner/repo",
             },
         ),
-        id: Id(
+        tag: AtomTag(
             "bar",
         ),
         version: Some(
@@ -244,7 +244,7 @@ expression: results?
                 path: "/owner/repo",
             },
         ),
-        id: Id(
+        tag: AtomTag(
             "λ",
         ),
         version: Some(
@@ -275,7 +275,7 @@ expression: results?
                 path: "/owner/repo",
             },
         ),
-        id: Id(
+        tag: AtomTag(
             "λ",
         ),
         version: Some(
@@ -308,7 +308,7 @@ expression: results?
                 path: "/owner/repo",
             },
         ),
-        id: Id(
+        tag: AtomTag(
             "λ",
         ),
         version: Some(
@@ -339,7 +339,7 @@ expression: results?
                 path: "/nixos/nixpkgs",
             },
         ),
-        id: Id(
+        tag: AtomTag(
             "zlib",
         ),
         version: Some(
@@ -374,7 +374,7 @@ expression: results?
                 path: "/my/repo",
             },
         ),
-        id: Id(
+        tag: AtomTag(
             "id",
         ),
         version: Some(
@@ -411,7 +411,7 @@ expression: results?
                 path: "/my/repo",
             },
         ),
-        id: Id(
+        tag: AtomTag(
             "id",
         ),
         version: Some(
@@ -446,7 +446,7 @@ expression: results?
                 path: "/my/repo",
             },
         ),
-        id: Id(
+        tag: AtomTag(
             "id",
         ),
         version: Some(
@@ -479,7 +479,7 @@ expression: results?
                 path: "/owner/repo",
             },
         ),
-        id: Id(
+        tag: AtomTag(
             "yep",
         ),
         version: Some(
@@ -510,7 +510,7 @@ expression: results?
                 path: "/",
             },
         ),
-        id: Id(
+        tag: AtomTag(
             "yep",
         ),
         version: Some(
@@ -539,7 +539,7 @@ expression: results?
                 path: "foo/bar/baz",
             },
         ),
-        id: Id(
+        tag: AtomTag(
             "my-atom",
         ),
         version: None,
@@ -556,7 +556,7 @@ expression: results?
                 path: "/foo/bar/baz",
             },
         ),
-        id: Id(
+        tag: AtomTag(
             "my-atom",
         ),
         version: None,
@@ -575,14 +575,14 @@ expression: results?
                 path: "/my/repo",
             },
         ),
-        id: Id(
+        tag: AtomTag(
             "hello",
         ),
         version: None,
     },
     Uri {
         url: None,
-        id: Id(
+        tag: AtomTag(
             "foo",
         ),
         version: Some(
@@ -603,14 +603,14 @@ expression: results?
     },
     Uri {
         url: None,
-        id: Id(
+        tag: AtomTag(
             "foo",
         ),
         version: None,
     },
     Uri {
         url: None,
-        id: Id(
+        tag: AtomTag(
             "foo",
         ),
         version: None,

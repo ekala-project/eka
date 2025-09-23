@@ -64,7 +64,7 @@ use url::Url;
 #[cfg(test)]
 mod test;
 
-use crate::id::Id;
+use crate::id::AtomTag;
 
 /// A wrapper around NixHash to provide custom serialization behavior.
 #[derive(Debug, PartialEq, PartialOrd, Eq, Clone, Serialize)]
@@ -113,7 +113,7 @@ pub enum AtomLocation {
 #[serde(deny_unknown_fields)]
 pub struct AtomDep {
     /// The unique identifier of the atom.
-    pub id: Id,
+    pub tag: AtomTag,
     /// The semantic version of the atom.
     pub version: Version,
     /// The resolved Git revision (commit hash) for verification.
@@ -196,7 +196,7 @@ pub struct FromDep {
     /// The name of the sourced dependency.
     pub name: String,
     /// The atom ID from which to source.
-    pub from: Id,
+    pub from: AtomTag,
     /// The name of the dependency to acquire from the 'from' atom (defaults to `name`).
     ///
     /// This field is omitted from serialization if None.

@@ -51,7 +51,7 @@ pub(super) fn run(args: Args) -> Result<()> {
     match args.uri {
         Ref::Atom(uri) => {
             // let atom = AtomReq::new(uri.version(), locale);
-            // doc["deps"]["atoms"][uri.id()] =
+            // doc["deps"]["atoms"][uri.tag()] =
             todo!();
         },
         Ref::Pin(aliased_url) => todo!(),

@@ -22,14 +22,14 @@ In order to provide a polished and simple UI, atom's have a convenient URI forma
 Conceptually, an atom URI is just a URL with a configurable shortener mechanism (aliases), sane defaults to help elide the scheme in many scenarios, and a custom extension at the end to address atoms unambiguously; abstractly expressed as:
 
 ```
-[scheme://][[user[:pass]@][url-alias:][url-fragment::]atom-id[@version]
+[scheme://][[user[:pass]@][url-alias:][url-fragment::]atom-tag[@version]
 ```
 
 ### Concrete Examples
 
 Below are some examples of atom URIs, with the URL portion expanded to demonstrate the alias functionality. Aliases are user settable via the `eka.toml` file, and some convenient defaults (`gh -> github.com`) are built in.
 
-Atom's, themselves, are abstracted to a flat namespace within the store, regardless of its physical location. To demonstrate this, in the following examples, say we have an atom manifest in the git repo at `foo/bar/my@.toml` which species the `atom.id` in the TOML as `my-atom`:
+Atom's, themselves, are abstracted to a flat namespace within the store, regardless of its physical location. To demonstrate this, in the following examples, say we have an atom manifest in the git repo at `foo/bar/my@.toml` which species the `atom.tag` in the TOML as `my-atom`:
 
 - `gh:owner/repo::my-atom@^1 -> https://github.com/owner/repo`
   - the `@^1` is a semantic version request

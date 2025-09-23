@@ -17,7 +17,7 @@ The `eka add` command needs to add dependencies to an Atom's manifest while ensu
 ```rust
 pub async fn check_atom_exists(
     url: &Url,
-    atom_id: &Id,
+    tag: &AtomTag,
     version: Option<&VersionReq>
 ) -> Result<bool, RemoteError>
 

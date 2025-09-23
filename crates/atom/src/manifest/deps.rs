@@ -54,7 +54,7 @@ use semver::VersionReq;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::id::Id;
+use crate::id::AtomTag;
 use crate::lock::AtomLocation;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -62,7 +62,7 @@ use crate::lock::AtomLocation;
 pub struct Dependency {
     /// An atom dependency variant.
     #[serde(skip_serializing_if = "Option::is_none")]
-    atoms: Option<HashMap<Id, AtomReq>>,
+    atoms: Option<HashMap<AtomTag, AtomReq>>,
     /// A direct pin to an external source variant.
     #[serde(skip_serializing_if = "Option::is_none")]
     pins: Option<HashMap<String, PinReq>>,
@@ -119,7 +119,7 @@ pub struct DirectPin {
 /// enabling composition of complex systems from simpler atom components.
 pub struct IndirectPin {
     /// The atom id to reference a pin from.
-    pub from: Id,
+    pub from: AtomTag,
     /// The name of the dependency to acquire from the atom (same as it's name if not present).
     ///
     /// This field is omitted from serialization if None.

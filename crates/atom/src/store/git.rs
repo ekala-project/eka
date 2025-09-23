@@ -17,7 +17,7 @@ use gix::sec::trust::Mapping;
 use gix::{Commit, ObjectId, ThreadSafeRepository};
 use thiserror::Error as ThisError;
 
-use crate::id::CalculateRoot;
+use crate::id::Origin;
 
 /// An error encountered during initialization or other git store operations.
 #[derive(ThisError, Debug)]
@@ -155,10 +155,10 @@ impl Deref for Root {
     }
 }
 
-impl<'a> CalculateRoot<Root> for Commit<'a> {
+impl<'a> Origin<Root> for Commit<'a> {
     type Error = Error;
 
-    fn calculate_root(&self) -> Result<Root, Self::Error> {
+    fn calculate_origin(&self) -> Result<Root, Self::Error> {
         use gix::revision::walk::Sorting;
         use gix::traverse::commit::simple::CommitTimeOrder;
         // FIXME: we rely on a custom crate patch to search the commit graph
@@ -274,7 +274,7 @@ impl<'repo> Init<Root, ObjectId> for gix::Remote<'repo> {
     /// Determines if this remote is a valid Ekala store by pulling HEAD and the root
     /// tag, ensuring the latter is actually the root of HEAD, returning the root.
     fn ekala_root(&self) -> Result<Root, Self::Error> {
-        use crate::id::CalculateRoot;
+        use crate::id::Origin;
 
         let repo = self.repo();
         self.get_refs(["HEAD", V1_ROOT]).map(|i| {
@@ -285,7 +285,7 @@ impl<'repo> Init<Root, ObjectId> for gix::Remote<'repo> {
                     .and_then(|id| Ok(repo.find_commit(id).map_err(Box::new)?))
                     .and_then(|c| {
                         if c.parent_ids().count() != 0 {
-                            c.calculate_root().map(|r| *r)
+                            c.calculate_origin().map(|r| *r)
                         } else {
                             Ok(c.id)
                         }
@@ -311,12 +311,15 @@ impl<'repo> Init<Root, ObjectId> for gix::Remote<'repo> {
     fn ekala_init(&self) -> Result<(), Error> {
         use gix::refs::transaction::PreviousValue;
 
-        use crate::CalculateRoot;
+        use crate::Origin;
 
         let name = self.try_symbol()?;
         let head = self.sync()?;
         let repo = self.repo();
-        let root = *repo.find_commit(head).map_err(Box::new)?.calculate_root()?;
+        let root = *repo
+            .find_commit(head)
+            .map_err(Box::new)?
+            .calculate_origin()?;
 
         let root_ref = repo
             .reference(V1_ROOT, root, PreviousValue::MustNotExist, "init: root")

@@ -46,9 +46,13 @@
 //! ## Example Usage
 //!
 //! ```rust,no_run
-//! use atom::publish::{Builder, Publish, Stats};
-//! use atom::store::git::{GitPublisher, Root};
+//! use std::path::PathBuf;
 //!
+//! use atom::publish::git::GitPublisher;
+//! use atom::publish::{Builder, Publish, Stats};
+//! use atom::store::git::Root;
+//!
+//! let repo = gix::open(".")?;
 //! // Create a publisher for a Git repository
 //! let publisher = GitPublisher::new(&repo, "origin", "main")?;
 //!
@@ -56,13 +60,13 @@
 //! let (valid_atoms, publisher) = publisher.build()?;
 //!
 //! // Publish all atoms
-//! let results = publisher.publish(vec![path_to_atom1, path_to_atom2]);
+//! let results = publisher.publish(vec![PathBuf::from("/path/to/atom")]);
 //!
 //! // Check results
 //! let stats = Stats::default();
 //! for result in results {
 //!     match result {
-//!         Ok(outcome) => println!("Published: {:?}", outcome),
+//!         Ok(outcome) => todo!(), // e.g. log `outcome`
 //!         Err(e) => println!("Failed: {:?}", e),
 //!     }
 //! }
@@ -79,7 +83,7 @@ use std::path::{Path, PathBuf};
 use git::GitContent;
 
 use crate::AtomId;
-use crate::id::Id;
+use crate::id::AtomTag;
 
 /// The results of Atom publishing, for reporting to the user.
 pub struct Record<R> {
@@ -100,13 +104,13 @@ pub struct Stats {
 
 /// A Result is used over an Option here mainly so we can report which
 /// Atom was skipped, but it does not represent a true failure condition
-type MaybeSkipped<T> = Result<T, Id>;
+type MaybeSkipped<T> = Result<T, AtomTag>;
 
 /// A Record that signifies whether an Atom was published or safetly skipped.
 type PublishOutcome<R> = MaybeSkipped<Record<R>>;
 
 /// A [`HashMap`] containing all valid Atoms in the current store.
-type ValidAtoms = HashMap<Id, PathBuf>;
+type ValidAtoms = HashMap<AtomTag, PathBuf>;
 
 /// Contains the content pertinent to a specific implementation for reporting results
 /// to the user.

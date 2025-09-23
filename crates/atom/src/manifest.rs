@@ -39,13 +39,13 @@
 //! ## Usage
 //!
 //! ```rust,no_run
-//! use atom::id::Id;
-//! use atom::manifest::{Atom, Manifest};
+//! use atom::manifest::Manifest;
+//! use atom::{Atom, AtomTag};
 //! use semver::Version;
 //!
 //! // Create a manifest programmatically
 //! let manifest = Manifest::new(
-//!     Id::try_from("my-atom").unwrap(),
+//!     AtomTag::try_from("my-atom").unwrap(),
 //!     Version::new(1, 0, 0),
 //!     Some("My first atom".to_string()),
 //! );
@@ -68,7 +68,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use toml_edit::{DocumentMut, de};
 
-use crate::{Atom, Id};
+use crate::{Atom, AtomTag};
 
 /// Errors which occur during manifest (de)serialization.
 #[derive(Error, Debug)]
@@ -102,10 +102,10 @@ pub struct Manifest {
 
 impl Manifest {
     /// Create a new atom Manifest with the given values.
-    pub fn new(id: Id, version: Version, description: Option<String>) -> Self {
+    pub fn new(tag: AtomTag, version: Version, description: Option<String>) -> Self {
         Manifest {
             atom: Atom {
-                id,
+                tag,
                 version,
                 description,
             },

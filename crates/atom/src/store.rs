@@ -37,12 +37,13 @@
 //! use gix::Remote;
 //!
 //! // Initialize a Git store
-//! let remote = Remote::new("origin");
+//! let repo = gix::open(".")?;
+//! let remote = repo.find_remote("origin")?;
 //! remote.ekala_init()?;
 //! let root = remote.ekala_root()?;
 //!
 //! // Normalize a path
-//! let normalized = remote.normalize("path/to/atom")?;
+//! let normalized = repo.normalize("path/to/atom")?;
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 #[cfg(feature = "git")]

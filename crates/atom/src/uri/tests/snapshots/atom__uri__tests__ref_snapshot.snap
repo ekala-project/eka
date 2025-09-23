@@ -8,7 +8,7 @@ expression: results
     pass: ~
     frag: "gl:repo"
   atom:
-    id: atom
+    tag: atom
     version: ^2.0
 - url:
     scheme: ~
@@ -16,7 +16,7 @@ expression: results
     pass: ~
     frag: gl
   atom:
-    id: atom
+    tag: atom
     version: ^2.1
 - url:
     scheme: ~
@@ -24,7 +24,7 @@ expression: results
     pass: ~
     frag: "gl:path.with/dot"
   atom:
-    id: my-atom
+    tag: my-atom
     version: ^2
 - url:
     scheme: ~
@@ -32,7 +32,7 @@ expression: results
     pass: ~
     frag: "github.com:owner/repo"
   atom:
-    id: this-atom
+    tag: this-atom
     version: ^1
 - url:
     scheme: ~
@@ -40,7 +40,7 @@ expression: results
     pass: ~
     frag: "gh:owner/repo"
   atom:
-    id: this-atom
+    tag: this-atom
     version: ^1
 - url:
     scheme: https
@@ -48,7 +48,7 @@ expression: results
     pass: ~
     frag: "example.com:8080/owner/repo"
   atom:
-    id: foo
+    tag: foo
     version: ^1
 - url:
     scheme: https
@@ -56,7 +56,7 @@ expression: results
     pass: ~
     frag: foo.com/owner/repo
   atom:
-    id: bar
+    tag: bar
     version: ^1
 - url:
     scheme: https
@@ -64,7 +64,7 @@ expression: results
     pass: ~
     frag: "gh:owner/repo"
   atom:
-    id: λ
+    tag: λ
     version: ^1
 - url:
     scheme: ~
@@ -72,7 +72,7 @@ expression: results
     pass: ~
     frag: "gh:owner/repo"
   atom:
-    id: λ
+    tag: λ
     version: ^1
 - url:
     scheme: ~
@@ -80,7 +80,7 @@ expression: results
     pass: ~
     frag: "gh:owner/repo"
   atom:
-    id: λ
+    tag: λ
     version: ^1
 - url:
     scheme: ~
@@ -88,7 +88,7 @@ expression: results
     pass: ~
     frag: pkgs
   atom:
-    id: zlib
+    tag: zlib
     version: ^1
 - url:
     scheme: https
@@ -96,7 +96,7 @@ expression: results
     pass: password
     frag: example.com/my/repo
   atom:
-    id: id
+    tag: id
     version: ^0.2
 - url:
     scheme: ~
@@ -104,7 +104,7 @@ expression: results
     pass: password
     frag: example.com/my/repo
   atom:
-    id: id
+    tag: id
     version: ^0.2
 - url:
     scheme: ~
@@ -112,7 +112,7 @@ expression: results
     pass: ~
     frag: example.com/my/repo
   atom:
-    id: id
+    tag: id
     version: ^0.2
 - url:
     scheme: ~
@@ -120,7 +120,7 @@ expression: results
     pass: ~
     frag: "gh:owner/repo"
   atom:
-    id: yep
+    tag: yep
     version: ^1
 - url:
     scheme: ~
@@ -128,7 +128,7 @@ expression: results
     pass: ~
     frag: bb
   atom:
-    id: yep
+    tag: yep
     version: ^1
 - url:
     scheme: ~
@@ -136,7 +136,7 @@ expression: results
     pass: ~
     frag: foo/bar/baz
   atom:
-    id: my-atom
+    tag: my-atom
     version: ~
 - url:
     scheme: ~
@@ -144,7 +144,7 @@ expression: results
     pass: ~
     frag: /foo/bar/baz
   atom:
-    id: my-atom
+    tag: my-atom
     version: ~
 - url:
     scheme: ~
@@ -152,7 +152,7 @@ expression: results
     pass: ~
     frag: "my.ssh.com:my/repo"
   atom:
-    id: hello
+    tag: hello
     version: ~
 - url:
     scheme: ~
@@ -160,7 +160,7 @@ expression: results
     pass: ~
     frag: ~
   atom:
-    id: foo
+    tag: foo
     version: ^0.8
 - url:
     scheme: ~
@@ -168,7 +168,7 @@ expression: results
     pass: ~
     frag: ~
   atom:
-    id: foo
+    tag: foo
     version: ~
 - url:
     scheme: ~
@@ -176,5 +176,5 @@ expression: results
     pass: ~
     frag: ~
   atom:
-    id: foo
+    tag: foo
     version: ~

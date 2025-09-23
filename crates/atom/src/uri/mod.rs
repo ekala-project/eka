@@ -42,23 +42,23 @@
 //!
 //! // Simple atom reference
 //! let uri: Uri = "my-atom".parse().unwrap();
-//! assert_eq!(uri.id().to_string(), "my-atom");
+//! assert_eq!(uri.tag().to_string(), "my-atom");
 //!
 //! // Atom with version
 //! let uri: Uri = "my-atom@^1.0.0".parse().unwrap();
-//! assert_eq!(uri.id().to_string(), "my-atom");
+//! assert_eq!(uri.tag().to_string(), "my-atom");
 //!
 //! // GitHub reference with alias
 //! let uri: Uri = "gh:user/repo::my-atom".parse().unwrap();
-//! assert_eq!(uri.url().unwrap().host_str().unwrap(), "github.com");
+//! assert_eq!(uri.url().unwrap().host().unwrap(), "github.com");
 //!
 //! // Direct URL reference
 //! let uri: Uri = "https://github.com/user/repo::my-atom".parse().unwrap();
-//! assert_eq!(uri.url().unwrap().host_str().unwrap(), "github.com");
+//! assert_eq!(uri.url().unwrap().host().unwrap(), "github.com");
 //!
 //! // Local file reference
 //! let uri: Uri = "file:///path/to/repo::my-atom".parse().unwrap();
-//! assert_eq!(uri.url().unwrap().scheme(), "file");
+//! assert_eq!(uri.url().unwrap().scheme, "file".into());
 //! ```
 //!
 //! ## Error Handling
@@ -82,7 +82,7 @@ use semver::VersionReq;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use super::id::Id;
+use super::id::AtomTag;
 use crate::id::Error;
 
 #[derive(Debug)]
@@ -96,7 +96,7 @@ pub struct Uri {
     /// The URL to the repository containing the Atom.
     url: Option<Url>,
     /// The Atom's ID.
-    id: Id,
+    tag: AtomTag,
     /// The requested Atom version.
     version: Option<VersionReq>,
 }
@@ -151,8 +151,8 @@ struct UrlRef<'a> {
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[cfg_attr(test, derive(Serialize, Deserialize))]
 struct AtomRef<'a> {
-    /// The path to the specific Atom within the repository.
-    id: Option<&'a str>,
+    /// The specific Atom within the repository.
+    tag: Option<&'a str>,
     /// The version of the Atom, if specified.
     version: Option<&'a str>,
 }
@@ -179,7 +179,7 @@ fn parse(input: &str) -> Ref<'_> {
         url.user,
         url.pass = url.pass.map(|_| "<redacted>"),
         url.frag,
-        atom.id,
+        atom.tag,
         atom.version,
         "{}",
         input
@@ -382,13 +382,13 @@ impl<'a> From<&'a str> for UrlRef<'a> {
 
 impl<'a> From<&'a str> for AtomRef<'a> {
     fn from(s: &'a str) -> Self {
-        let (id, version) = match split_at(s) {
+        let (tag, version) = match split_at(s) {
             Ok((rest, Some(atom))) => (Some(atom), not_empty(rest)),
             Ok((rest, None)) => (not_empty(rest), None),
             _ => (None, None),
         };
 
-        AtomRef { id, version }
+        AtomRef { tag, version }
     }
 }
 
@@ -498,8 +498,8 @@ impl<'a> UrlRef<'a> {
 }
 
 impl<'a> AtomRef<'a> {
-    fn render(&self) -> Result<(Id, Option<VersionReq>), UriError> {
-        let id = Id::try_from(self.id.ok_or(UriError::NoAtom)?)?;
+    fn render(&self) -> Result<(AtomTag, Option<VersionReq>), UriError> {
+        let id = AtomTag::try_from(self.tag.ok_or(UriError::NoAtom)?)?;
         let version = if let Some(v) = self.version {
             VersionReq::parse(v)?.into()
         } else {
@@ -521,7 +521,11 @@ impl<'a> TryFrom<Ref<'a>> for Uri {
 
         tracing::trace!(?url, %id, ?version);
 
-        Ok(Uri { url, id, version })
+        Ok(Uri {
+            url,
+            tag: id,
+            version,
+        })
     }
 }
 
@@ -565,7 +569,13 @@ impl Display for Uri {
             .as_ref()
             .map(|v| format!("@{v}"))
             .unwrap_or_default();
-        write!(f, "{}::{}{}", &url.trim_end_matches('/'), self.id, &version)
+        write!(
+            f,
+            "{}::{}{}",
+            &url.trim_end_matches('/'),
+            self.tag,
+            &version
+        )
     }
 }
 
@@ -578,8 +588,8 @@ impl Uri {
 
     #[must_use]
     /// Returns the Atom identifier parsed from the URI.
-    pub fn id(&self) -> &Id {
-        &self.id
+    pub fn tag(&self) -> &AtomTag {
+        &self.tag
     }
 
     #[must_use]

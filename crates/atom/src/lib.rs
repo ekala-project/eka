@@ -46,12 +46,12 @@
 //! ## Basic Usage
 //!
 //! ```rust,no_run
-//! use atom::{Atom, Id, Manifest};
+//! use atom::{Atom, AtomTag, Manifest};
 //! use semver::Version;
 //!
 //! // Create a new atom manifest
 //! let manifest = Manifest::new(
-//!     Id::try_from("my-atom").unwrap(),
+//!     AtomTag::try_from("my-atom").unwrap(),
 //!     Version::new(1, 0, 0),
 //!     Some("A sample atom".to_string()),
 //! );
@@ -78,7 +78,7 @@ pub mod uri;
 pub use core::Atom;
 use std::sync::LazyLock;
 
-pub use id::{AtomId, CalculateRoot, Id};
+pub use id::{AtomId, AtomTag, Compute, Origin};
 pub use lock::{Lockfile, ResolutionMode};
 pub use manifest::Manifest;
 
