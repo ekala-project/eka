@@ -34,14 +34,14 @@
 //! ```console
 //! ❯ git ls-remote
 //! From https://github.com/ekala-project/eka
-//! ceebaca6d44c4cda555db3fbf687c0604c4818eb        refs/atoms/ひらがな/0.1.0/atom
-//! a87bff5ae43894a158dadf40938c775cb5b62d4b        refs/atoms/ひらがな/0.1.0/spec
-//! 9f17c8c816bd1de6f8aa9c037d1b529212ab2a02        refs/atoms/ひらがな/0.1.0/src
+//! ceebaca6d44c4cda555db3fbf687c0604c4818eb        refs/eka/atoms/ひらがな/0.1.0
+//! a87bff5ae43894a158dadf40938c775cb5b62d4b        refs/eka/meta/ひらがな/0.1.0/manifest
+//! 9f17c8c816bd1de6f8aa9c037d1b529212ab2a02        refs/eka/meta/ひらがな/0.1.0/origin
 //! ```
 //!
-//! - The `atom` ref points to the complete atom contents
-//! - The `spec` ref points to a minimal tree containing only the manifest and lockfile
-//! - The `src` ref points to the original source commit for verification
+//! - The ref under eka/atoms points to the complete atom contents
+//! - The `manifest` ref points to a minimal tree containing only the manifest
+//! - The `origin` ref points to the original source commit for verification
 //!
 //! ## Basic Usage
 //!
