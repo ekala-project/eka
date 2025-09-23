@@ -73,7 +73,7 @@
 //!
 //! let id = AtomId::construct(&commit, tag).unwrap();
 //!
-//! // Get the has for disambiguated identification
+//! // Get the hash for disambiguated identification
 //! let hash = id.compute_hash();
 //! println!("Atom hash: {}", hash);
 //! ```
