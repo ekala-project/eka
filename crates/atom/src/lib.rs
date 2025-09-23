@@ -68,7 +68,7 @@
 #![cfg_attr(not(feature = "git"), allow(dead_code))]
 
 mod core;
-mod id;
+pub mod id;
 pub mod lock;
 pub mod manifest;
 

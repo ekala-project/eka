@@ -98,15 +98,47 @@ const ID_MAX: usize = 128;
 pub struct AtomTag(String);
 
 #[derive(Error, Debug, PartialEq, Eq)]
+/// Errors that can occur during atom tag validation.
+///
+/// These errors represent various validation failures when creating or parsing
+/// atom identifiers, ensuring they conform to the required format and constraints
+/// for cryptographically secure identification.
 pub enum Error {
+    /// The atom identifier exceeds the maximum allowed length of 128 bytes.
+    ///
+    /// Atom tags are limited in size to ensure efficient storage and processing
+    /// while maintaining a sufficient character space for meaningful identifiers.
     #[error("An Atom id cannot be more than {} bytes", ID_MAX)]
     TooLong,
+
+    /// The atom identifier is empty.
+    ///
+    /// Empty identifiers are not allowed as they provide no meaningful
+    /// identification for the atom.
     #[error("An Atom id cannot be empty")]
     Empty,
+
+    /// The atom identifier starts with an invalid character.
+    ///
+    /// Atom identifiers must start with a Unicode letter (not numbers, hyphens,
+    /// underscores, or other non-letter characters) to ensure they are
+    /// descriptive and follow identifier conventions.
     #[error("An Atom id cannot start with: '{0}'")]
     InvalidStart(char),
+
+    /// The atom identifier contains invalid characters.
+    ///
+    /// Only Unicode letters, numbers, hyphens, and underscores are permitted
+    /// in atom identifiers. This ensures compatibility across different systems
+    /// and maintains readability.
     #[error("The Atom id contains invalid characters: '{0}'")]
     InvalidCharacters(String),
+
+    /// The atom identifier contains invalid Unicode.
+    ///
+    /// Atom identifiers must be valid UTF-8 encoded Unicode strings.
+    /// This error occurs when the string contains invalid byte sequences
+    /// or encoding issues.
     #[error("An Atom id must be valid unicode")]
     InvalidUnicode,
 }
