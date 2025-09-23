@@ -75,14 +75,7 @@
 //!
 //! // Get the has for disambiguated identification
 //! let hash = id.compute_hash();
-//! println!("Atom fingerprint: {}", hash);
-//! ```
-//!
-//! ## TOML Configuration Example
-//!
-//! ```toml
-//! [atom]
-//! tag = "my-atom"
+//! println!("Atom hash: {}", hash);
 //! ```
 #[cfg(test)]
 mod tests;
