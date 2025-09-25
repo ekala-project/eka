@@ -6,9 +6,10 @@
 //!
 //! ## Architecture
 //!
-//! The store system is designed around two main traits:
+//! The store system is designed around three core traits:
 //!
 //! - [`Init`] - Handles store initialization and root calculation
+//! - [`QueryStore`] - Queries references from remote stores
 //! - [`NormalizeStorePath`] - Normalizes paths relative to store roots
 //!
 //! ## Storage Backends
@@ -26,6 +27,10 @@
 //! **Store Root**: A unique identifier that represents the base commit or
 //! state of the store. This is used as part of atom identity calculation.
 //!
+//! **Reference Querying**: The ability to efficiently query references from remote
+//! stores with different network strategies - lightweight queries for metadata
+//! or full fetches for complete store access.
+//!
 //! **Path Normalization**: Converting user-provided paths to canonical paths
 //! relative to the store root, handling both relative and absolute paths correctly.
 //!
@@ -33,14 +38,22 @@
 //!
 //! ```rust,no_run
 //! use atom::store::git::Root;
-//! use atom::store::{Init, NormalizeStorePath};
-//! use gix::Remote;
+//! use atom::store::{Init, NormalizeStorePath, QueryStore};
+//! use gix::{Remote, Url};
 //!
 //! // Initialize a Git store
 //! let repo = gix::open(".")?;
 //! let remote = repo.find_remote("origin")?;
 //! remote.ekala_init()?;
 //! let root = remote.ekala_root()?;
+//!
+//! // Query references from a remote store
+//! let url = gix::url::parse("https://github.com/example/repo.git".into())?;
+//! let refs = url.get_refs(["main", "refs/tags/v1.0"])?;
+//! for ref_info in refs {
+//!     let (name, target, peeled) = ref_info.unpack();
+//!     println!("Ref: {}, Target: {}", name, peeled.or(target).unwrap());
+//! }
 //!
 //! // Normalize a path
 //! let normalized = repo.normalize("path/to/atom")?;
