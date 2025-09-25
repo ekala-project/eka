@@ -86,16 +86,58 @@ pub trait NormalizeStorePath {
     fn normalize<P: AsRef<Path>>(&self, path: P) -> Result<PathBuf, Self::Error>;
 }
 
-pub(crate) trait QueryStore<Id> {
+/// A trait for querying remote stores to retrieve references.
+///
+/// This trait provides a unified interface for querying references from remote
+/// stores. It supports different query strategies depending on the implementation.
+///
+/// ## Examples
+///
+/// ```rust,no_run
+/// use atom::store::QueryStore;
+/// use gix::Url;
+///
+/// // Lightweight reference query
+/// let url = gix::url::parse("https://github.com/example/repo.git".into())?;
+/// let refs = url.get_refs(["main", "refs/tags/v1.0"])?;
+/// for ref_info in refs {
+///     let (name, target, peeled) = ref_info.unpack();
+///     println!("Ref: {}, Target: {}", name, peeled.or(target).unwrap());
+/// }
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub trait QueryStore<Ref> {
+    /// The error type representing errors which can occur during query operations.
     type Error;
+
+    /// Query a remote store for multiple references.
+    ///
+    /// This method retrieves information about the requested references from
+    /// the remote store. The exact network behavior depends on the implementation.
+    ///
+    /// # Arguments
+    /// * `targets` - An iterator of reference specifications (e.g., "main", "refs/tags/v1.0")
+    ///
+    /// # Returns
+    /// An iterator over the requested references, or an error if the query fails.
     fn get_refs<Spec>(
         &self,
         targets: impl IntoIterator<Item = Spec>,
-        fetch: bool,
-    ) -> Result<impl IntoIterator<Item = Id>, Self::Error>
+    ) -> Result<impl IntoIterator<Item = Ref>, Self::Error>
     where
         Spec: AsRef<BStr>;
-    fn get_ref<Spec>(&self, target: Spec, fetch: bool) -> Result<Id, Self::Error>
+
+    /// Query a remote store for a single reference.
+    ///
+    /// This is a convenience method that queries for a single reference and returns
+    /// the first result. See [`get_refs`] for details on network behavior.
+    ///
+    /// # Arguments
+    /// * `target` - The reference specification to query (e.g., "main", "refs/tags/v1.0")
+    ///
+    /// # Returns
+    /// The requested reference, or an error if not found or if the query fails.
+    fn get_ref<Spec>(&self, target: Spec) -> Result<Ref, Self::Error>
     where
         Spec: AsRef<BStr>;
 }

@@ -12,6 +12,7 @@ use std::sync::OnceLock;
 
 use bstr::BStr;
 use gix::discover::upwards::Options;
+use gix::protocol::handshake::Ref;
 use gix::sec::Trust;
 use gix::sec::trust::Mapping;
 use gix::{Commit, ObjectId, ThreadSafeRepository};
@@ -64,6 +65,24 @@ pub enum Error {
     /// A transparent wrapper for a [`Box<gix::reference::edit::Error>`]
     #[error(transparent)]
     WriteRef(#[from] Box<gix::reference::edit::Error>),
+    /// A transparent wrapper for a [`gix::protocol::transport::client::connect::Error`]
+    #[error(transparent)]
+    Connection(#[from] gix::protocol::transport::client::connect::Error),
+    /// A transparent wrapper for a [`gix::config::credential_helpers::Error`]
+    #[error(transparent)]
+    Creds(#[from] gix::config::credential_helpers::Error),
+    /// A transparent wrapper for a [`gix::config::file::init::from_paths::Error`]
+    #[error(transparent)]
+    File(#[from] gix::config::file::init::from_paths::Error),
+    /// A transparent wrapper for a [`gix::protocol::handshake::Error`]
+    #[error(transparent)]
+    Handshake(#[from] gix::protocol::handshake::Error),
+    /// A transparent wrapper for a [`gix::refspec::parse::Error`]
+    #[error(transparent)]
+    Refspec(#[from] gix::refspec::parse::Error),
+    /// A transparent wrapper for a [`gix::refspec::parse::Error`]
+    #[error(transparent)]
+    Refmap(#[from] gix::protocol::fetch::refmap::init::Error),
 }
 
 impl Error {
@@ -267,8 +286,14 @@ impl<'repo> EkalaRemote for gix::Remote<'repo> {
 
 const V1_ROOT: &str = "refs/tags/ekala/root/v1";
 
+fn to_id(r: Ref) -> ObjectId {
+    let (_, t, p) = r.unpack();
+    // unwrap can't fail here as at least one of these is guaranteed Some
+    p.or(t).map(ToOwned::to_owned).unwrap()
+}
+
 use super::Init;
-impl<'repo> Init<Root, ObjectId> for gix::Remote<'repo> {
+impl<'repo> Init<Root, Ref> for gix::Remote<'repo> {
     type Error = Error;
 
     /// Determines if this remote is a valid Ekala store by pulling HEAD and the root
@@ -277,12 +302,15 @@ impl<'repo> Init<Root, ObjectId> for gix::Remote<'repo> {
         use crate::id::Origin;
 
         let repo = self.repo();
-        self.get_refs(["HEAD", V1_ROOT], true).map(|i| {
+        self.get_refs(["HEAD", V1_ROOT]).map(|i| {
             let mut i = i.into_iter();
-            let root_for = |i: &mut dyn Iterator<Item = ObjectId>| {
+            let root_for = |i: &mut dyn Iterator<Item = Ref>| {
                 i.next()
                     .ok_or(Error::NoRef(V1_ROOT.to_owned(), self.symbol().to_owned()))
-                    .and_then(|id| Ok(repo.find_commit(id).map_err(Box::new)?))
+                    .and_then(|r| {
+                        let id = to_id(r);
+                        Ok(repo.find_commit(id).map_err(Box::new)?)
+                    })
                     .and_then(|c| {
                         if c.parent_ids().count() != 0 {
                             c.calculate_origin().map(|r| *r)
@@ -303,8 +331,8 @@ impl<'repo> Init<Root, ObjectId> for gix::Remote<'repo> {
     }
 
     /// Sync with the given remote and get the most up to date HEAD according to it.
-    fn sync(&self) -> Result<ObjectId, Error> {
-        self.get_ref("HEAD", true)
+    fn sync(&self) -> Result<Ref, Error> {
+        self.get_ref("HEAD")
     }
 
     /// Initialize the repository by calculating the root, according to the latest HEAD.
@@ -314,7 +342,7 @@ impl<'repo> Init<Root, ObjectId> for gix::Remote<'repo> {
         use crate::Origin;
 
         let name = self.try_symbol()?;
-        let head = self.sync()?;
+        let head = to_id(self.sync()?);
         let repo = self.repo();
         let root = *repo
             .find_commit(head)
@@ -360,30 +388,167 @@ fn setup_line_renderer(
     )
 }
 
-impl<'repo> super::QueryStore<ObjectId> for gix::Remote<'repo> {
+impl super::QueryStore<Ref> for gix::Url {
     type Error = Error;
 
-    /// returns the git object ids for the given references
+    /// Efficiently queries git references from a remote repository URL.
+    ///
+    /// This implementation performs a lightweight network operation that only retrieves
+    /// reference information (branch/tag names and their commit IDs) without downloading
+    /// the actual repository objects. This makes it ideal for scenarios where you need
+    /// to check reference existence or get commit IDs without the overhead of a full
+    /// repository fetch.
+    ///
+    /// ## Network Behavior
+    /// - **Lightweight**: Only queries reference metadata, not repository content
+    /// - **Fast**: Minimal network overhead compared to full fetch operations
+    /// - **Efficient**: Suitable for checking reference existence and getting commit IDs
+    ///
+    /// ## Use Cases
+    /// - Checking if specific branches or tags exist on a remote
+    /// - Getting commit IDs for references without downloading objects
+    /// - Lightweight remote repository inspection
+    ///
+    /// ## Performance
+    /// This is significantly faster than the [`gix::Remote`] implementation since it
+    /// avoids downloading actual git objects, making it appropriate for read-only
+    /// reference queries.
     fn get_refs<Spec>(
         &self,
-        references: impl IntoIterator<Item = Spec>,
-        fetch: bool,
-    ) -> Result<impl IntoIterator<Item = gix::ObjectId>, Self::Error>
+        targets: impl IntoIterator<Item = Spec>,
+    ) -> std::result::Result<
+        impl std::iter::IntoIterator<Item = Ref>,
+        <Self as super::QueryStore<Ref>>::Error,
+    >
     where
         Spec: AsRef<BStr>,
     {
-        use std::collections::HashSet;
+        use gix::open::permissions::Environment;
+        use gix::protocol::transport::client::connect::Options;
+        use gix::refspec::RefSpec;
+        use gix::sec::Permission;
+
+        let mut transport = gix::protocol::transport::connect(self.to_owned(), Options::default())?;
+
+        let config = gix::config::File::from_globals()?;
+        let (mut cascade, _, prompt_opts) = gix::config::credential_helpers(
+            self.to_owned(),
+            &config,
+            true,
+            gix::config::section::is_trusted,
+            Environment {
+                xdg_config_home: Permission::Allow,
+                home: Permission::Allow,
+                http_transport: Permission::Allow,
+                identity: Permission::Allow,
+                objects: Permission::Allow,
+                git_prefix: Permission::Allow,
+                ssh_prefix: Permission::Allow,
+            },
+            false,
+        )?;
+
+        let authenticate = Box::new(move |action| cascade.invoke(action, prompt_opts.clone()));
+
+        let mut handshake = gix::protocol::fetch::handshake(
+            &mut transport,
+            authenticate,
+            Vec::new(),
+            &mut prodash::progress::Discard,
+        )?;
+
+        use gix::refspec::parse::Operation;
+        let refs: Vec<_> = targets
+            .into_iter()
+            .map(|t| gix::refspec::parse(t.as_ref(), Operation::Fetch).map(RefSpec::from))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        use gix::protocol::fetch::refmap::init::Options as RefOptions;
+        use gix::protocol::fetch::{Context, RefMap};
+
+        let context = Context {
+            handshake: &mut handshake,
+            transport: &mut transport,
+            user_agent: ("agent", Some(gix::env::agent().into())),
+            trace_packetlines: true,
+        };
+
+        let refmap = RefMap::new(
+            prodash::progress::Discard,
+            refs.as_slice(),
+            context,
+            RefOptions::default(),
+        )?;
+        Ok(refmap.remote_refs)
+    }
+
+    fn get_ref<Spec>(&self, target: Spec) -> Result<Ref, Self::Error>
+    where
+        Spec: AsRef<BStr>,
+    {
+        let name = target.as_ref().to_string();
+        self.get_refs(Some(target)).and_then(|r| {
+            r.into_iter()
+                .next()
+                .ok_or(Error::NoRef(name, self.to_string()))
+        })
+    }
+}
+
+impl<'repo> super::QueryStore<Ref> for gix::Remote<'repo> {
+    type Error = Error;
+
+    /// Performs a full git fetch operation to retrieve references and repository data.
+    ///
+    /// This implementation executes a complete git fetch operation, which downloads
+    /// both reference information and the actual repository objects (commits, trees,
+    /// blobs) from the remote. This provides full access to the repository content
+    /// but is significantly more expensive than the URL-based implementation.
+    ///
+    /// ## Network Behavior
+    /// - **Heavyweight**: Performs a full git fetch operation, downloading all objects
+    /// - **Complete**: Provides access to the entire repository state after fetching
+    /// - **Expensive**: Higher network usage and longer execution time
+    ///
+    /// ## Use Cases
+    /// - When you need to access repository content after fetching references
+    /// - When working with local repositories that need to sync with remotes
+    /// - When you require the complete repository state, not just reference metadata
+    ///
+    /// ## Performance
+    /// This implementation is slower and uses more network bandwidth than the
+    /// [`gix::Url`] implementation because it downloads actual git objects.
+    /// Use it only when you need access to repository content beyond reference metadata.
+    ///
+    /// ## Progress Reporting
+    /// The fetch operation includes progress reporting for sync and initialization phases.
+    /// Progress is displayed when the log level is set above WARN.
+    fn get_refs<Spec>(
+        &self,
+        references: impl IntoIterator<Item = Spec>,
+    ) -> std::result::Result<
+        impl std::iter::IntoIterator<Item = Ref>,
+        <Self as super::QueryStore<Ref>>::Error,
+    >
+    where
+        Spec: AsRef<BStr>,
+    {
         use std::sync::atomic::AtomicBool;
 
         use gix::progress::prodash::tree::Root;
         use gix::remote::Direction;
         use gix::remote::fetch::Tags;
         use gix::remote::ref_map::Options;
+        use tracing::level_filters::LevelFilter;
 
         let tree = Root::new();
         let sync_progress = tree.add_child("sync");
         let init_progress = tree.add_child("init");
-        let handle = setup_line_renderer(&tree);
+        let _ = if LevelFilter::current() > LevelFilter::WARN {
+            Some(setup_line_renderer(&tree))
+        } else {
+            None
+        };
 
         let mut remote = self.clone().with_fetch_tags(Tags::None);
 
@@ -391,48 +556,26 @@ impl<'repo> super::QueryStore<ObjectId> for gix::Remote<'repo> {
             .replace_refspecs(references, Direction::Fetch)
             .map_err(Box::new)?;
 
-        let requested: HashSet<_> = remote
-            .refspecs(Direction::Fetch)
-            .iter()
-            .filter_map(|r| r.to_ref().source().map(ToOwned::to_owned))
-            .collect();
-
         let client = remote.connect(Direction::Fetch).map_err(Box::new)?;
+
         let query = client
             .prepare_fetch(sync_progress, Options::default())
             .map_err(Box::new)?;
 
-        let refs = if fetch {
-            let outcome = query
-                .receive(init_progress, &AtomicBool::new(false))
-                .map_err(Box::new)?;
+        let outcome = query
+            .with_write_packed_refs_only(true)
+            .receive(init_progress, &AtomicBool::new(false))
+            .map_err(Box::new)?;
 
-            outcome.ref_map.remote_refs
-        } else {
-            query.ref_map().remote_refs.clone()
-        };
-        handle.shutdown_and_wait();
-
-        refs.iter()
-            .filter_map(|r| {
-                let (name, target, peeled) = r.unpack();
-                requested.get(name)?;
-                Some(
-                    peeled
-                        .or(target)
-                        .map(ToOwned::to_owned)
-                        .ok_or_else(|| Error::NoRef(name.to_string(), self.symbol().to_owned())),
-                )
-            })
-            .collect::<Result<HashSet<_>, _>>()
+        Ok(outcome.ref_map.remote_refs)
     }
 
-    fn get_ref<Spec>(&self, target: Spec, fetch: bool) -> Result<ObjectId, Self::Error>
+    fn get_ref<Spec>(&self, target: Spec) -> Result<Ref, Self::Error>
     where
         Spec: AsRef<BStr>,
     {
         let name = target.as_ref().to_string();
-        self.get_refs(Some(target), fetch).and_then(|r| {
+        self.get_refs(Some(target)).and_then(|r| {
             r.into_iter()
                 .next()
                 .ok_or(Error::NoRef(name, self.symbol().to_owned()))

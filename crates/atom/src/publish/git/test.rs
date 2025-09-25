@@ -117,7 +117,7 @@ async fn publish_atom() -> Result<(), anyhow::Error> {
     let repo = gix::open(repo.as_ref())?;
     let remote = repo.find_remote("origin")?;
     remote.ekala_init()?;
-    remote.get_refs(Some("refs/heads/*:refs/heads/*"), true)?;
+    remote.get_refs(Some("refs/heads/*:refs/heads/*"))?;
 
     let tag = "foo";
     let (file_path, src) = repo.mock(tag, "0.1.0", "some atom")?;

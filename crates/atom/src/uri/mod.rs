@@ -77,6 +77,8 @@ use std::fmt::Display;
 use std::ops::Deref;
 use std::str::FromStr;
 
+#[cfg(feature = "git")]
+use gix::url as gix_url;
 use gix_url::Url;
 use semver::VersionReq;
 use serde::{Deserialize, Serialize};

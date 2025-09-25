@@ -53,7 +53,7 @@
 //! // Parse a manifest from a string
 //! let manifest_str = r#"
 //! [atom]
-//! id = "parsed-atom"
+//! tag = "parsed-atom"
 //! version = "2.0.0"
 //! "#;
 //! let parsed: Manifest = manifest_str.parse().unwrap();
@@ -63,6 +63,8 @@ pub mod deps;
 use std::path::PathBuf;
 use std::str::FromStr;
 
+#[cfg(feature = "git")]
+use gix::url as gix_url;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
