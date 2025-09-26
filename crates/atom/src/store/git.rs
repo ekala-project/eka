@@ -19,6 +19,7 @@ use gix::{Commit, ObjectId, ThreadSafeRepository};
 use thiserror::Error as ThisError;
 
 use crate::id::Origin;
+use crate::store::QueryVersion;
 
 /// An error encountered during initialization or other git store operations.
 #[derive(ThisError, Debug)]
@@ -582,3 +583,25 @@ impl<'repo> super::QueryStore<Ref> for gix::Remote<'repo> {
         })
     }
 }
+
+use semver::Version;
+
+use crate::AtomTag;
+impl super::UnpackRef<ObjectId> for Ref {
+    fn unpack_atom_ref(&self) -> Option<super::UnpackedRef<ObjectId>> {
+        let (n, t, p) = self.unpack();
+        let mut path = PathBuf::from(n.to_string());
+        let v_str = path.file_name()?.to_str()?;
+        let version = Version::parse(v_str).ok()?;
+        path.pop();
+        let a_str = path.file_name()?.to_str()?;
+        let tag = AtomTag::try_from(a_str).ok()?;
+        let id = p.or(t).map(ToOwned::to_owned)?;
+
+        Some((tag, version, id))
+    }
+}
+
+type Refs = Vec<super::UnpackedRef<ObjectId>>;
+impl QueryVersion<Ref, ObjectId, Refs> for gix::Url {}
+impl<'repo> QueryVersion<Ref, ObjectId, Refs> for gix::Remote<'repo> {}

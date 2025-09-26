@@ -154,3 +154,35 @@ pub trait QueryStore<Ref> {
     where
         Spec: AsRef<BStr>;
 }
+
+use semver::{Version, VersionReq};
+
+use crate::AtomTag;
+type UnpackedRef<Id> = (AtomTag, Version, Id);
+pub trait QueryVersion<Ref, Id, C>: QueryStore<Ref>
+where
+    C: FromIterator<UnpackedRef<Id>> + IntoIterator<Item = UnpackedRef<Id>>,
+    Ref: UnpackRef<Id>,
+{
+    fn get_atoms(
+        &self,
+    ) -> Result<impl IntoIterator<Item = UnpackedRef<Id>>, <Self as QueryStore<Ref>>::Error> {
+        let r = format!("{}/*", crate::ATOM_REFS.as_str());
+        Ok(self
+            .get_refs(&[format!("{}:{}", r, r).as_str()])?
+            .into_iter()
+            .filter_map(|x| x.unpack_atom_ref())
+            .collect::<C>())
+    }
+    fn get_highest_match(&self, tag: &AtomTag, req: VersionReq) -> Option<(Version, Id)> {
+        self.get_atoms()
+            .ok()?
+            .into_iter()
+            .filter_map(|(t, v, id)| (&t == tag && req.matches(&v)).then_some((v, id)))
+            .max_by_key(|&(ref version, _)| version.to_owned())
+    }
+}
+
+trait UnpackRef<Id> {
+    fn unpack_atom_ref(&self) -> Option<UnpackedRef<Id>>;
+}
