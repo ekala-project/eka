@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::io::Write;
 use std::os::unix::fs::MetadataExt;
 use std::str::FromStr;
@@ -116,18 +117,21 @@ async fn publish_atom() -> Result<(), anyhow::Error> {
     let (repo, _remote) = git::test::init_repo_and_remote()?;
     let repo = gix::open(repo.as_ref())?;
     let remote = repo.find_remote("origin")?;
-    remote.ekala_init()?;
-    remote.get_refs(Some("refs/heads/*:refs/heads/*"))?;
+    let progress = &tracing::info_span!("test");
+    let (paths, mut publisher) = GitPublisher::new(&repo, "origin", "HEAD", progress)?.build()?;
+    remote.ekala_init(Some(&mut publisher.transport))?;
+    remote.get_refs(
+        Some("refs/heads/*:refs/heads/*"),
+        Some(&mut publisher.transport),
+    )?;
 
     let tag = "foo";
     let (file_path, src) = repo.mock(tag, "0.1.0", "some atom")?;
 
-    let (paths, publisher) = GitPublisher::new(&repo, "origin", "HEAD")?.build()?;
-
     let path = paths
         .get(&AtomTag::try_from(tag)?)
         .context("path is messed up")?;
-    let result = publisher.publish_atom(path)?;
+    let result = publisher.publish_atom(path, &HashMap::new())?;
     let mut errors = Vec::with_capacity(1);
     publisher.await_pushes(&mut errors).await;
     (!errors.is_empty()).then_some(0).context("push errors")?;

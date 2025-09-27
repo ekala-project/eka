@@ -13,6 +13,7 @@ use std::sync::OnceLock;
 use bstr::BStr;
 use gix::discover::upwards::Options;
 use gix::protocol::handshake::Ref;
+use gix::protocol::transport::client::Transport;
 use gix::sec::Trust;
 use gix::sec::trust::Mapping;
 use gix::{Commit, ObjectId, ThreadSafeRepository};
@@ -27,6 +28,9 @@ pub enum Error {
     /// No git ref found.
     #[error("No ref named `{0}` found for remote `{1}`")]
     NoRef(String, String),
+    /// No remote url configured
+    #[error("No `{0}` url configured for remote `{1}`")]
+    NoUrl(String, String),
     /// This git repository does not have a working directory.
     #[error("Repository does not have a working directory")]
     NoWorkDir,
@@ -299,11 +303,18 @@ impl<'repo> Init<Root, Ref> for gix::Remote<'repo> {
 
     /// Determines if this remote is a valid Ekala store by pulling HEAD and the root
     /// tag, ensuring the latter is actually the root of HEAD, returning the root.
-    fn ekala_root(&self) -> Result<Root, Self::Error> {
+    #[tracing::instrument(skip(transport))]
+    fn ekala_root(
+        &self,
+        transport: Option<&mut Box<dyn Transport + Send>>,
+    ) -> Result<Root, Self::Error> {
         use crate::id::Origin;
 
+        let span = tracing::Span::current();
+        crate::log::set_sub_task(&span, "💪 ensuring consistency with remote");
+
         let repo = self.repo();
-        self.get_refs(["HEAD", V1_ROOT]).map(|i| {
+        self.get_refs(["HEAD", V1_ROOT], transport).map(|i| {
             let mut i = i.into_iter();
             let root_for = |i: &mut dyn Iterator<Item = Ref>| {
                 i.next()
@@ -332,18 +343,18 @@ impl<'repo> Init<Root, Ref> for gix::Remote<'repo> {
     }
 
     /// Sync with the given remote and get the most up to date HEAD according to it.
-    fn sync(&self) -> Result<Ref, Error> {
-        self.get_ref("HEAD")
+    fn sync(&self, transport: Option<&mut Box<dyn Transport + Send>>) -> Result<Ref, Error> {
+        self.get_ref("HEAD", transport)
     }
 
     /// Initialize the repository by calculating the root, according to the latest HEAD.
-    fn ekala_init(&self) -> Result<(), Error> {
+    fn ekala_init(&self, transport: Option<&mut Box<dyn Transport + Send>>) -> Result<(), Error> {
         use gix::refs::transaction::PreviousValue;
 
         use crate::Origin;
 
         let name = self.try_symbol()?;
-        let head = to_id(self.sync()?);
+        let head = to_id(self.sync(transport)?);
         let repo = self.repo();
         let root = *repo
             .find_commit(head)
@@ -417,6 +428,7 @@ impl super::QueryStore<Ref> for gix::Url {
     fn get_refs<Spec>(
         &self,
         targets: impl IntoIterator<Item = Spec>,
+        transport: Option<&mut Box<dyn Transport + Send>>,
     ) -> std::result::Result<
         impl std::iter::IntoIterator<Item = Ref>,
         <Self as super::QueryStore<Ref>>::Error,
@@ -425,11 +437,14 @@ impl super::QueryStore<Ref> for gix::Url {
         Spec: AsRef<BStr>,
     {
         use gix::open::permissions::Environment;
-        use gix::protocol::transport::client::connect::Options;
         use gix::refspec::RefSpec;
         use gix::sec::Permission;
 
-        let mut transport = gix::protocol::transport::connect(self.to_owned(), Options::default())?;
+        let transport = if let Some(transport) = transport {
+            transport
+        } else {
+            &mut self.get_transport()?
+        };
 
         let config = gix::config::File::from_globals()?;
         let (mut cascade, _, prompt_opts) = gix::config::credential_helpers(
@@ -452,7 +467,7 @@ impl super::QueryStore<Ref> for gix::Url {
         let authenticate = Box::new(move |action| cascade.invoke(action, prompt_opts.clone()));
 
         let mut handshake = gix::protocol::fetch::handshake(
-            &mut transport,
+            &mut *transport,
             authenticate,
             Vec::new(),
             &mut prodash::progress::Discard,
@@ -469,7 +484,7 @@ impl super::QueryStore<Ref> for gix::Url {
 
         let context = Context {
             handshake: &mut handshake,
-            transport: &mut transport,
+            transport,
             user_agent: ("agent", Some(gix::env::agent().into())),
             trace_packetlines: true,
         };
@@ -483,12 +498,22 @@ impl super::QueryStore<Ref> for gix::Url {
         Ok(refmap.remote_refs)
     }
 
-    fn get_ref<Spec>(&self, target: Spec) -> Result<Ref, Self::Error>
+    fn get_transport(&self) -> Result<Box<dyn Transport + Send>, Self::Error> {
+        use gix::protocol::transport::client::connect::Options;
+        let transport = gix::protocol::transport::connect(self.to_owned(), Options::default())?;
+        Ok(Box::new(transport))
+    }
+
+    fn get_ref<Spec>(
+        &self,
+        target: Spec,
+        transport: Option<&mut Box<dyn Transport + Send>>,
+    ) -> Result<Ref, Self::Error>
     where
         Spec: AsRef<BStr>,
     {
         let name = target.as_ref().to_string();
-        self.get_refs(Some(target)).and_then(|r| {
+        self.get_refs(Some(target), transport).and_then(|r| {
             r.into_iter()
                 .next()
                 .ok_or(Error::NoRef(name, self.to_string()))
@@ -527,6 +552,7 @@ impl<'repo> super::QueryStore<Ref> for gix::Remote<'repo> {
     fn get_refs<Spec>(
         &self,
         references: impl IntoIterator<Item = Spec>,
+        transport: Option<&mut Box<dyn Transport + Send>>,
     ) -> std::result::Result<
         impl std::iter::IntoIterator<Item = Ref>,
         <Self as super::QueryStore<Ref>>::Error,
@@ -557,7 +583,13 @@ impl<'repo> super::QueryStore<Ref> for gix::Remote<'repo> {
             .replace_refspecs(references, Direction::Fetch)
             .map_err(Box::new)?;
 
-        let client = remote.connect(Direction::Fetch).map_err(Box::new)?;
+        let transport = if let Some(transport) = transport {
+            transport
+        } else {
+            &mut remote.get_transport()?
+        };
+
+        let client = remote.to_connection_with_transport(transport);
 
         let query = client
             .prepare_fetch(sync_progress, Options::default())
@@ -571,12 +603,24 @@ impl<'repo> super::QueryStore<Ref> for gix::Remote<'repo> {
         Ok(outcome.ref_map.remote_refs)
     }
 
-    fn get_ref<Spec>(&self, target: Spec) -> Result<Ref, Self::Error>
+    fn get_transport(&self) -> Result<Box<dyn Transport + Send>, Self::Error> {
+        use gix::remote::Direction;
+        let url = self
+            .url(Direction::Fetch)
+            .ok_or_else(|| Error::NoUrl("fetch".to_string(), self.symbol().to_string()))?;
+        url.get_transport()
+    }
+
+    fn get_ref<Spec>(
+        &self,
+        target: Spec,
+        transport: Option<&mut Box<dyn Transport + Send>>,
+    ) -> Result<Ref, Self::Error>
     where
         Spec: AsRef<BStr>,
     {
         let name = target.as_ref().to_string();
-        self.get_refs(Some(target)).and_then(|r| {
+        self.get_refs(Some(target), transport).and_then(|r| {
             r.into_iter()
                 .next()
                 .ok_or(Error::NoRef(name, self.symbol().to_owned()))

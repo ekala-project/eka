@@ -133,7 +133,7 @@ pub trait Builder<'a, R> {
     ///
     /// This function must be called before `Publish::publish` to ensure that there are
     /// no duplicates, as this is the only way to construct an implementation.
-    fn build(&self) -> Result<(ValidAtoms, Self::Publisher), Self::Error>;
+    fn build(self) -> Result<(ValidAtoms, Self::Publisher), Self::Error>;
 }
 
 trait StateValidator<R> {
@@ -159,6 +159,8 @@ mod private {
 pub trait Publish<R>: private::Sealed {
     /// The error type returned by the publisher.
     type Error;
+    /// The type representing the machine-readable identity for a specific version of an atom.
+    type Id;
 
     /// Publishes Atoms.
     ///
@@ -174,7 +176,11 @@ pub trait Publish<R>: private::Sealed {
     /// Returns a vector of results types, where the outter result represents whether an Atom has
     /// failed, and the inner result determines whether an Atom was safely skipped, e.g. because it
     /// already exists.
-    fn publish<C>(&self, paths: C) -> Vec<Result<PublishOutcome<R>, Self::Error>>
+    fn publish<C>(
+        &self,
+        paths: C,
+        remotes: HashMap<AtomTag, (semver::Version, Self::Id)>,
+    ) -> Vec<Result<PublishOutcome<R>, Self::Error>>
     where
         C: IntoIterator<Item = PathBuf>;
 
@@ -188,7 +194,11 @@ pub trait Publish<R>: private::Sealed {
     ///
     /// - The function will return an error ([`Self::Error`]) if the Atom could not be published for
     ///   any reason, e.g. invalid manifests.
-    fn publish_atom<P: AsRef<Path>>(&self, path: P) -> Result<PublishOutcome<R>, Self::Error>;
+    fn publish_atom<P: AsRef<Path>>(
+        &self,
+        path: P,
+        remotes: &HashMap<AtomTag, (semver::Version, Self::Id)>,
+    ) -> Result<PublishOutcome<R>, Self::Error>;
 }
 
 impl<R> Record<R> {
@@ -203,10 +213,18 @@ impl<R> Record<R> {
     }
 }
 
+use std::sync::LazyLock;
+
 const EMPTY_SIG: &str = "";
-const ATOMIC_ROOT: &str = "eka";
+const STORE_ROOT: &str = "eka";
 const ATOM_FORMAT_VERSION: &str = "pre1.0";
 const ATOM_REF: &str = "atoms";
 const ATOM_MANIFEST: &str = "manifest";
 const ATOM_META_REF: &str = "meta";
 const ATOM_ORIGIN: &str = "origin";
+const REF_ROOT: LazyLock<String> = LazyLock::new(|| format!("refs/{}", STORE_ROOT));
+/// the default location where atom refs are stored
+pub const ATOM_REFS: LazyLock<String> =
+    LazyLock::new(|| format!("{}/{}", REF_ROOT.as_str(), ATOM_REF));
+const META_REFS: LazyLock<String> =
+    LazyLock::new(|| format!("{}/{}", REF_ROOT.as_str(), ATOM_META_REF));

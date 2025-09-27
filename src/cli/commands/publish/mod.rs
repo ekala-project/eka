@@ -46,10 +46,12 @@ pub(super) async fn run(store: Detected, args: PublishArgs) -> Result<Stats, Pub
                     Ok(Published(atom)) => {
                         stats.published += 1;
                         let Content::Git(content) = atom.content();
+                        let name = content.content().name.clone();
                         tracing::info!(
                             atom.tag = %atom.id().tag(),
                             path = %content.path().display(),
-                            "Atom successfully published"
+                            r#ref = %name,
+                            "success"
                         );
                     },
                     Ok(Skipped(tag)) => {

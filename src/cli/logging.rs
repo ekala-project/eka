@@ -1,7 +1,6 @@
 use std::str::FromStr;
 
 use clap::Parser;
-use tracing_error::ErrorLayer;
 use tracing_subscriber::filter::{EnvFilter, LevelFilter};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -21,9 +20,8 @@ fn get_log_level(args: LogArgs) -> LevelFilter {
     }
 
     match args.verbosity {
-        0 => LevelFilter::WARN,
-        1 => LevelFilter::INFO,
-        2 => LevelFilter::DEBUG,
+        0 => LevelFilter::INFO,
+        1 => LevelFilter::DEBUG,
         _ => LevelFilter::TRACE,
     }
 }
@@ -39,11 +37,20 @@ pub fn init_global_subscriber(args: LogArgs) -> WorkerGuard {
 
     let (non_blocking, guard) = tracing_appender::non_blocking(std::io::stderr());
 
+    use tracing_indicatif::IndicatifLayer;
+    use tracing_indicatif::style::ProgressStyle;
+    let progress_layer = IndicatifLayer::new().with_progress_style(
+        ProgressStyle::with_template("{prefix:.bold.dim} {spinner} {wide_msg}").unwrap(),
+    );
     use std::io::IsTerminal;
+
     let fmt = if std::io::stderr().is_terminal() {
         fmt::layer()
             .without_time()
-            .with_writer(non_blocking)
+            .with_writer(progress_layer.get_stderr_writer())
+            .with_target(false)
+            .with_span_events(tracing_subscriber::fmt::format::FmtSpan::NONE)
+            .compact()
             .boxed()
     } else {
         ANSI.store(false, Ordering::SeqCst);
@@ -57,7 +64,7 @@ pub fn init_global_subscriber(args: LogArgs) -> WorkerGuard {
     tracing_subscriber::registry()
         .with(fmt)
         .with(env_filter)
-        .with(ErrorLayer::default())
+        .with(progress_layer)
         .init();
 
     if log_level == LevelFilter::TRACE {

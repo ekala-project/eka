@@ -5,5 +5,5 @@ use clap::Parser;
 pub(super) struct GitArgs {
     /// The target remote for local atom refs
     #[arg(long, short = 't', default_value_t = git::default_remote().to_owned(), name = "TARGET")]
-    remote: String,
+    pub(super) remote: String,
 }

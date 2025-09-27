@@ -18,14 +18,18 @@ mod inner;
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 
-use gix::{Commit, ObjectId, Repository, Tree};
+use bstr::ByteSlice;
+use gix::config::AsKey;
+use gix::{Commit, ObjectId, Remote, Repository, Tree};
+use nom::AsBytes;
 use tokio::task::JoinSet;
+use tracing_indicatif::span_ext::IndicatifSpanExt;
 
 use super::error::git::Error;
 use super::{Content, PublishOutcome, Record};
 use crate::core::AtomPaths;
-use crate::store::NormalizeStorePath;
 use crate::store::git::Root;
+use crate::store::{NormalizeStorePath, QueryStore, QueryVersion};
 use crate::{Atom, AtomId};
 
 type GitAtomId = AtomId<Root>;
@@ -35,7 +39,6 @@ pub type GitOutcome = PublishOutcome<Root>;
 pub type GitResult<T> = Result<T, Error>;
 type GitRecord = Record<Root>;
 
-#[derive(Debug)]
 /// Holds the shared context needed for publishing Atoms.
 pub struct GitContext<'a> {
     /// Reference to the repository we are publish from.
@@ -44,12 +47,18 @@ pub struct GitContext<'a> {
     tree: Tree<'a>,
     /// The commit to publish from.
     commit: Commit<'a>,
-    /// Store the given remote name as a &str for convenient use.
+    /// Store the given remote
+    remote: Remote<'a>,
+    /// Store the given remote str for convenient use.
     remote_str: &'a str,
     /// The reported root commit according to the remote.
     root: Root,
     /// A [`JoinSet`] of push tasks to avoid blocking on them.
     push_tasks: RefCell<JoinSet<Result<Vec<u8>, Error>>>,
+    /// A git server transport to avoid connection overhead
+    transport: Box<dyn Transport + Send>,
+    /// The Span representing to overall progress bar (for easy incrementing)
+    progress: &'a tracing::Span,
 }
 
 struct AtomContext<'a> {
@@ -58,9 +67,10 @@ struct AtomContext<'a> {
     git: &'a GitContext<'a>,
 }
 
+#[derive(Debug)]
 struct FoundAtom {
     spec: Atom,
-    tag: GitAtomId,
+    id: GitAtomId,
     tree_id: ObjectId,
     spec_id: ObjectId,
 }
@@ -118,29 +128,39 @@ use super::{Builder, ValidAtoms};
 /// The type representing a Git specific Atom publisher.
 pub struct GitPublisher<'a> {
     repo: &'a Repository,
-    remote: &'a str,
+    remote: Remote<'a>,
+    remote_str: &'a str,
     spec: &'a str,
     root: Root,
+    transport: Box<dyn Transport + Send>,
+    progress: &'a tracing::Span,
 }
 
+use gix::protocol::transport::client::Transport;
 impl<'a> GitPublisher<'a> {
     /// Constructs a new [`GitPublisher`].
-    pub fn new(repo: &'a Repository, remote: &'a str, spec: &'a str) -> GitResult<Self> {
+    pub fn new(
+        repo: &'a Repository,
+        remote_str: &'a str,
+        spec: &'a str,
+        progress: &'a tracing::Span,
+    ) -> GitResult<Self> {
         use crate::store::Init;
-        let root = repo
-            .find_remote(remote)
-            .map_err(Box::new)?
-            .ekala_root()
-            .map_err(|e| {
-                e.warn();
-                Error::NotInitialized
-            })?;
+        let remote = repo.find_remote(remote_str).map_err(Box::new)?;
+        let mut transport = remote.get_transport()?;
+        let root = remote.ekala_root(Some(&mut transport)).map_err(|e| {
+            e.warn();
+            Error::NotInitialized
+        })?;
 
         Ok(GitPublisher {
             repo,
             remote,
+            remote_str,
             spec,
+            transport,
             root,
+            progress,
         })
     }
 }
@@ -173,8 +193,8 @@ impl<'a> StateValidator<Root> for GitPublisher<'a> {
         let mut atoms: HashMap<AtomTag, PathBuf> = HashMap::with_capacity(cap);
 
         for entry in record.records {
-            let path = PathBuf::from(entry.filepath.to_string());
-            if entry.mode.is_blob() && path.file_name() == Some(crate::ATOM_MANIFEST.as_ref()) {
+            let path = PathBuf::from(entry.filepath.to_str_lossy().as_ref());
+            if entry.mode.is_blob() && path.file_name() == Some(crate::MANIFEST_NAME.as_ref()) {
                 if let Ok(obj) = publisher.repo.find_object(entry.oid) {
                     match publisher.verify_manifest(&obj, &path) {
                         Ok(atom) => {
@@ -205,8 +225,16 @@ impl<'a> Builder<'a, Root> for GitPublisher<'a> {
     type Error = Error;
     type Publisher = GitContext<'a>;
 
-    fn build(&self) -> Result<(ValidAtoms, Self::Publisher), Self::Error> {
-        let publisher = GitContext::set(self.repo, self.remote, self.spec, self.root)?;
+    fn build(self) -> Result<(ValidAtoms, Self::Publisher), Self::Error> {
+        let publisher = GitContext::set(
+            self.repo,
+            self.remote.clone(),
+            self.remote_str,
+            self.spec,
+            self.root,
+            self.transport,
+            self.progress,
+        )?;
         let atoms = GitPublisher::validate(&publisher)?;
         Ok((atoms, publisher))
     }
@@ -247,6 +275,7 @@ impl<'a> super::private::Sealed for GitContext<'a> {}
 
 impl<'a> Publish<Root> for GitContext<'a> {
     type Error = Error;
+    type Id = ObjectId;
 
     /// Publishes atoms.
     ///
@@ -279,35 +308,48 @@ impl<'a> Publish<Root> for GitContext<'a> {
     /// Returns a vector of results types (`Vec<Result<PublishOutcome<T>, Self::Error>>`), where the
     /// outter result represents whether an atom has failed, and the inner result determines whether
     /// an atom was safely skipped, e.g. because it already exists..
-    fn publish<C>(&self, paths: C) -> Vec<GitResult<GitOutcome>>
+    fn publish<C>(
+        &self,
+        paths: C,
+        remotes: HashMap<AtomTag, (Version, ObjectId)>,
+    ) -> Vec<GitResult<GitOutcome>>
     where
         C: IntoIterator<Item = PathBuf>,
     {
         use crate::store::git;
-        paths
-            .into_iter()
-            .map(|path| {
-                let path = match self.repo.normalize(&path) {
-                    Ok(path) => path,
-                    Err(git::Error::NoWorkDir) => path,
-                    Err(e) => return Err(e.into()),
-                };
-                self.publish_atom(&path)
-            })
-            .collect()
+        let iter = paths.into_iter();
+        iter.map(|path| {
+            let path = match self.repo.normalize(&path) {
+                Ok(path) => path,
+                Err(git::Error::NoWorkDir) => path,
+                Err(e) => return Err(e.into()),
+            };
+            self.publish_atom(&path, &remotes)
+        })
+        .collect()
     }
 
-    fn publish_atom<P: AsRef<Path>>(&self, path: P) -> GitResult<GitOutcome> {
+    fn publish_atom<P: AsRef<Path>>(
+        &self,
+        path: P,
+        remotes: &HashMap<AtomTag, (Version, ObjectId)>,
+    ) -> GitResult<GitOutcome> {
         use {Err as Skipped, Ok as Published};
-
         let context = AtomContext::set(path.as_ref(), self)?;
+        let span = tracing::info_span!("publish atom", atom=%context.atom.id.tag());
+        crate::log::set_sub_task(&span, &format!("⚛️ `{}`", context.atom.id.tag(),));
+        let _enter = span.enter();
 
-        if self
-            .repo
-            .find_reference(&context.refs(RefKind::Content).to_string())
-            .is_ok()
-        {
-            return Ok(Skipped(context.atom.spec.tag.clone()));
+        let r = &context.refs(RefKind::Content);
+        let lr = self.repo.find_reference(&r.to_string());
+
+        if let Ok(lr) = lr {
+            if let Some((v, id)) = remotes.get(context.atom.id.tag()) {
+                if r.version == v && lr.id().detach() == *id {
+                    // remote and local atoms are identical; skip
+                    return Ok(Skipped(context.atom.spec.tag.clone()));
+                }
+            }
         }
 
         let refs = context
@@ -316,7 +358,7 @@ impl<'a> Publish<Root> for GitContext<'a> {
             .push(&context);
 
         Ok(Published(GitRecord {
-            id: context.atom.tag.clone(),
+            id: context.atom.id.clone(),
             content: Content::Git(refs),
         }))
     }
@@ -332,12 +374,13 @@ impl<'a> AtomContext<'a> {
 impl<'a> GitContext<'a> {
     fn set(
         repo: &'a Repository,
+        remote: Remote<'a>,
         remote_str: &'a str,
         refspec: &str,
         root: Root,
+        transport: Box<dyn Transport + Send>,
+        progress: &'a tracing::Span,
     ) -> GitResult<Self> {
-        // short-circuit publishing if the passed remote doesn't exist
-        let _remote = repo.find_remote(remote_str).map_err(Box::new)?;
         let commit = repo
             .rev_parse_single(refspec)
             .map(|s| repo.find_commit(s))
@@ -352,8 +395,11 @@ impl<'a> GitContext<'a> {
             root,
             tree,
             commit,
+            remote,
             remote_str,
             push_tasks,
+            transport,
+            progress,
         })
     }
 
@@ -386,5 +432,10 @@ impl<'a> GitContext<'a> {
     /// Return a reference to the git tree object of the commit the Atom originates from.
     pub fn tree(&self) -> Tree<'a> {
         self.tree.clone()
+    }
+
+    /// Return a reference to the git remote.
+    pub fn remote(&self) -> Remote<'a> {
+        self.remote.clone()
     }
 }

@@ -6,14 +6,15 @@ use gix::actor::Signature;
 use gix::diff::object::Commit as AtomCommit;
 use gix::object::tree::Entry;
 use gix::objs::WriteTo;
+use gix::protocol::transport::client::Transport;
 use gix::{ObjectId, Reference};
+use tracing_indicatif::span_ext::IndicatifSpanExt;
 
 use super::{AtomContext, AtomRef, GitContext, GitResult, RefKind};
 use crate::core::AtomPaths;
 use crate::publish::error::git::Error;
 use crate::publish::{
-    ATOM_FORMAT_VERSION, ATOM_MANIFEST, ATOM_META_REF, ATOM_ORIGIN, ATOM_REF, ATOMIC_ROOT,
-    EMPTY_SIG,
+    ATOM_FORMAT_VERSION, ATOM_MANIFEST, ATOM_ORIGIN, ATOM_REFS, EMPTY_SIG, META_REFS,
 };
 use crate::store::git;
 use crate::{Atom, AtomId, Manifest};
@@ -96,13 +97,18 @@ impl<'a> GitContext<'a> {
                 Ok((
                     FoundAtom {
                         spec,
-                        tag: id,
+                        id,
                         tree_id,
                         spec_id,
                     },
                     paths,
                 ))
             })
+    }
+
+    /// return a mutable reference to the transport
+    pub fn transport(&mut self) -> &mut Box<dyn Transport + Send> {
+        &mut self.transport
     }
 }
 
@@ -120,21 +126,23 @@ impl<'a> fmt::Display for AtomRef<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.kind {
             RefKind::Content => {
-                write!(
-                    f,
-                    "{}/{}/{}/{}",
-                    ATOMIC_ROOT, ATOM_REF, self.tag, self.version
-                )
+                write!(f, "{}/{}/{}", ATOM_REFS.as_str(), self.tag, self.version)
             },
             RefKind::Origin => write!(
                 f,
-                "{}/{}/{}/{}/{}",
-                ATOMIC_ROOT, ATOM_META_REF, self.tag, self.version, ATOM_ORIGIN
+                "{}/{}/{}/{}",
+                META_REFS.as_str(),
+                self.tag,
+                self.version,
+                ATOM_ORIGIN
             ),
             RefKind::Spec => write!(
                 f,
-                "{}/{}/{}/{}/{}",
-                ATOMIC_ROOT, ATOM_META_REF, self.tag, self.version, ATOM_MANIFEST
+                "{}/{}/{}/{}",
+                META_REFS.as_str(),
+                self.tag,
+                self.version,
+                ATOM_MANIFEST
             ),
         }
     }
@@ -143,7 +151,7 @@ impl<'a> fmt::Display for AtomRef<'a> {
 impl<'a> AtomContext<'a> {
     pub(super) fn refs(&self, kind: RefKind) -> AtomRef<'_> {
         AtomRef::new(
-            self.atom.tag.tag().to_string(),
+            self.atom.id.tag().to_string(),
             kind,
             &self.atom.spec.version,
         )
@@ -199,7 +207,7 @@ fn write_ref<'a>(
     let AtomContext { atom, git, .. } = atom;
 
     Ok(git.repo.reference(
-        format!("refs/{atom_ref}"),
+        atom_ref.to_string(),
         id,
         PreviousValue::MustNotExist,
         format!(
@@ -238,11 +246,24 @@ impl<'a> AtomReferences<'a> {
         let remote = atom.git.remote_str.to_owned();
         let mut tasks = atom.git.push_tasks.borrow_mut();
 
+        tracing::info!(
+            message = "pushing",
+            atom = %atom.atom.id.tag(),
+            remote = %remote
+        );
         for r in [&self.content, &self.spec, &self.origin] {
             let r = r.name().as_bstr().to_string();
             let remote = remote.clone();
+            let parent = tracing::Span::current();
+            let progress = atom.git.progress.clone();
             let task = async move {
+                let _guard = parent.enter();
+                let span = tracing::info_span!("push", msg = %r, %remote);
+                crate::log::set_sub_task(&span, &format!("🚀 push: {}", r));
+                let _enter = span.enter();
                 let result = git::run_git_command(&["push", &remote, format!("{r}:{r}").as_str()])?;
+
+                progress.pb_inc(1);
 
                 Ok(result)
             };

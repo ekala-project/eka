@@ -31,7 +31,7 @@ pub(super) fn run(store: Detected, args: Args) -> anyhow::Result<()> {
             use atom::store::Init;
             let repo = repo.to_thread_local();
             let remote = repo.find_remote(args.git.remote.as_str())?;
-            remote.ekala_init()?
+            remote.ekala_init(None)?
         },
         _ => {},
     }

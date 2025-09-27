@@ -70,6 +70,7 @@
 mod core;
 pub mod id;
 pub mod lock;
+pub mod log;
 pub mod manifest;
 
 pub mod publish;
@@ -94,4 +95,4 @@ const BASE32: base32::Alphabet = base32::Alphabet::Rfc4648HexLower { padding: fa
 /// The filename used for Atom manifest files.
 ///
 /// This is constructed by combining the base name "atom" with the TOML extension.
-static ATOM_MANIFEST: LazyLock<String> = LazyLock::new(|| format!("atom.{}", crate::TOML));
+pub static MANIFEST_NAME: LazyLock<String> = LazyLock::new(|| format!("atom.{}", crate::TOML));
