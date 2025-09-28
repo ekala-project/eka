@@ -30,4 +30,4 @@ jobs:
       - name: Lint
         run: nix-shell shell --run "cargo clippy -- -D warnings && cargo clippy --no-default-features -- -D warnings"
       - name: Run Tests
-        run: nix-shell shell --run "cargo test --all && cargo test --all --no-default-features"
+        run: nix-shell shell --run "cargo test --all && cargo test --all-targets --all --no-default-features"
