@@ -298,7 +298,7 @@ fn to_id(r: Ref) -> ObjectId {
 }
 
 use super::Init;
-impl<'repo> Init<Root, Ref> for gix::Remote<'repo> {
+impl<'repo> Init<Root, Ref, Box<dyn Transport + Send>> for gix::Remote<'repo> {
     type Error = Error;
 
     /// Determines if this remote is a valid Ekala store by pulling HEAD and the root
@@ -400,7 +400,7 @@ fn setup_line_renderer(
     )
 }
 
-impl super::QueryStore<Ref> for gix::Url {
+impl super::QueryStore<Ref, Box<dyn Transport + Send>> for gix::Url {
     type Error = Error;
 
     /// Efficiently queries git references from a remote repository URL.
@@ -431,7 +431,7 @@ impl super::QueryStore<Ref> for gix::Url {
         transport: Option<&mut Box<dyn Transport + Send>>,
     ) -> std::result::Result<
         impl std::iter::IntoIterator<Item = Ref>,
-        <Self as super::QueryStore<Ref>>::Error,
+        <Self as super::QueryStore<Ref, Box<dyn Transport + Send>>>::Error,
     >
     where
         Spec: AsRef<BStr>,
@@ -521,7 +521,7 @@ impl super::QueryStore<Ref> for gix::Url {
     }
 }
 
-impl<'repo> super::QueryStore<Ref> for gix::Remote<'repo> {
+impl<'repo> super::QueryStore<Ref, Box<dyn Transport + Send>> for gix::Remote<'repo> {
     type Error = Error;
 
     /// Performs a full git fetch operation to retrieve references and repository data.
@@ -555,7 +555,7 @@ impl<'repo> super::QueryStore<Ref> for gix::Remote<'repo> {
         transport: Option<&mut Box<dyn Transport + Send>>,
     ) -> std::result::Result<
         impl std::iter::IntoIterator<Item = Ref>,
-        <Self as super::QueryStore<Ref>>::Error,
+        <Self as super::QueryStore<Ref, Box<dyn Transport + Send>>>::Error,
     >
     where
         Spec: AsRef<BStr>,
@@ -647,5 +647,5 @@ impl super::UnpackRef<ObjectId> for Ref {
 }
 
 type Refs = Vec<super::UnpackedRef<ObjectId>>;
-impl QueryVersion<Ref, ObjectId, Refs> for gix::Url {}
-impl<'repo> QueryVersion<Ref, ObjectId, Refs> for gix::Remote<'repo> {}
+impl QueryVersion<Ref, ObjectId, Refs, Box<dyn Transport + Send>> for gix::Url {}
+impl<'repo> QueryVersion<Ref, ObjectId, Refs, Box<dyn Transport + Send>> for gix::Remote<'repo> {}

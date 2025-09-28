@@ -89,21 +89,15 @@ use crate::AtomTag;
 type UnpackedRef<Id> = (AtomTag, Version, Id);
 
 /// A trait representing the methods required to initialize an Ekala store.
-pub trait Init<R, O> {
+pub trait Init<R, O, T: Send> {
     /// The error type returned by the methods of this trait.
     type Error;
     /// Sync with the Ekala store, for implementations that require it.
-    fn sync(&self, transport: Option<&mut Box<dyn Transport + Send>>) -> Result<O, Self::Error>;
+    fn sync(&self, transport: Option<&mut T>) -> Result<O, Self::Error>;
     /// Initialize the Ekala store.
-    fn ekala_init(
-        &self,
-        transport: Option<&mut Box<dyn Transport + Send>>,
-    ) -> Result<(), Self::Error>;
+    fn ekala_init(&self, transport: Option<&mut T>) -> Result<(), Self::Error>;
     /// Returns the root as reported by the remote store, or an error if it is inconsistent.
-    fn ekala_root(
-        &self,
-        transport: Option<&mut Box<dyn Transport + Send>>,
-    ) -> Result<R, Self::Error>;
+    fn ekala_root(&self, transport: Option<&mut T>) -> Result<R, Self::Error>;
 }
 
 /// A trait containing a path normalization method, to normalize paths in an Ekala store
@@ -128,7 +122,6 @@ pub trait NormalizeStorePath {
     fn normalize<P: AsRef<Path>>(&self, path: P) -> Result<PathBuf, Self::Error>;
 }
 
-use gix::protocol::transport::client::Transport;
 /// A trait for querying remote stores to retrieve references.
 ///
 /// This trait provides a unified interface for querying references from remote
@@ -149,7 +142,7 @@ use gix::protocol::transport::client::Transport;
 /// }
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
-pub trait QueryStore<Ref> {
+pub trait QueryStore<Ref, T: Send> {
     /// The error type representing errors which can occur during query operations.
     type Error;
 
@@ -168,13 +161,13 @@ pub trait QueryStore<Ref> {
     fn get_refs<Spec>(
         &self,
         targets: impl IntoIterator<Item = Spec>,
-        transport: Option<&mut Box<dyn Transport + Send>>,
+        transport: Option<&mut T>,
     ) -> Result<impl IntoIterator<Item = Ref>, Self::Error>
     where
         Spec: AsRef<BStr>;
 
     /// Establish a persistent connection to a git server.
-    fn get_transport(&self) -> Result<Box<dyn Transport + Send>, Self::Error>;
+    fn get_transport(&self) -> Result<T, Self::Error>;
 
     /// Query a remote store for a single reference.
     ///
@@ -188,11 +181,7 @@ pub trait QueryStore<Ref> {
     ///
     /// # Returns
     /// The requested reference, or an error if not found or if the query fails.
-    fn get_ref<Spec>(
-        &self,
-        target: Spec,
-        transport: Option<&mut Box<dyn Transport + Send>>,
-    ) -> Result<Ref, Self::Error>
+    fn get_ref<Spec>(&self, target: Spec, transport: Option<&mut T>) -> Result<Ref, Self::Error>
     where
         Spec: AsRef<BStr>;
 }
@@ -249,11 +238,12 @@ pub trait QueryStore<Ref> {
 /// }
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
-pub trait QueryVersion<Ref, Id, C>: QueryStore<Ref>
+pub trait QueryVersion<Ref, Id, C, T>: QueryStore<Ref, T>
 where
     C: FromIterator<UnpackedRef<Id>> + IntoIterator<Item = UnpackedRef<Id>>,
     Ref: UnpackRef<Id>,
     Self: std::fmt::Debug,
+    T: Send,
 {
     /// Retrieves all atoms available in the remote store.
     ///
@@ -270,8 +260,9 @@ where
     /// Returns an error if the reference query fails or if reference parsing fails.
     fn get_atoms(
         &self,
-        transport: Option<&mut Box<dyn Transport + Send>>,
-    ) -> Result<impl IntoIterator<Item = UnpackedRef<Id>>, <Self as QueryStore<Ref>>::Error> {
+        transport: Option<&mut T>,
+    ) -> Result<impl IntoIterator<Item = UnpackedRef<Id>>, <Self as QueryStore<Ref, T>>::Error>
+    {
         let r = format!("{}/*", crate::ATOM_REFS.as_str());
         Ok(self
             .get_refs(&[format!("{}:{}", r, r).as_str()], transport)?
@@ -306,7 +297,7 @@ where
         &self,
         tag: &AtomTag,
         req: &VersionReq,
-        transport: Option<&mut Box<dyn Transport + Send>>,
+        transport: Option<&mut T>,
     ) -> Option<(Version, Id)> {
         self.get_atoms(transport)
             .ok()?
