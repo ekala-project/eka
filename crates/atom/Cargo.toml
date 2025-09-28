@@ -12,14 +12,15 @@ nom               = "^7"
 path-clean        = "^1"
 unic-ucd-category = "^0.9"
 
-prodash.workspace   = true
-semver.workspace    = true
-serde.workspace     = true
-thiserror.workspace = true
-tokio.workspace     = true
-toml_edit.workspace = true
-tracing.workspace   = true
-tracing-indicatif.workspace  = true
+prodash.workspace           = true
+semver.workspace            = true
+serde.workspace             = true
+thiserror.workspace         = true
+tokio.workspace             = true
+toml_edit.workspace         = true
+tracing.workspace           = true
+tracing-indicatif.workspace = true
+url.workspace               = true
 
 config = { path = "../config" }
 gix = { workspace = true, default-features = false, features = [

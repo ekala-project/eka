@@ -96,3 +96,5 @@ const BASE32: base32::Alphabet = base32::Alphabet::Rfc4648HexLower { padding: fa
 ///
 /// This is constructed by combining the base name "atom" with the TOML extension.
 pub static MANIFEST_NAME: LazyLock<String> = LazyLock::new(|| format!("atom.{}", crate::TOML));
+
+pub use publish::ATOM_REFS;

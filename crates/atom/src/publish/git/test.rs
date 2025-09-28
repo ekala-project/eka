@@ -118,16 +118,13 @@ async fn publish_atom() -> Result<(), anyhow::Error> {
     let repo = gix::open(repo.as_ref())?;
     let remote = repo.find_remote("origin")?;
     let progress = &tracing::info_span!("test");
-    let (paths, mut publisher) = GitPublisher::new(&repo, "origin", "HEAD", progress)?.build()?;
-    remote.ekala_init(Some(&mut publisher.transport))?;
-    remote.get_refs(
-        Some("refs/heads/*:refs/heads/*"),
-        Some(&mut publisher.transport),
-    )?;
+    remote.ekala_init(None)?;
+    remote.get_refs(Some("refs/heads/*:refs/heads/*"), None)?;
 
     let tag = "foo";
     let (file_path, src) = repo.mock(tag, "0.1.0", "some atom")?;
 
+    let (paths, publisher) = GitPublisher::new(&repo, "origin", "HEAD", progress)?.build()?;
     let path = paths
         .get(&AtomTag::try_from(tag)?)
         .context("path is messed up")?;

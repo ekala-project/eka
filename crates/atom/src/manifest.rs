@@ -63,8 +63,6 @@ pub mod deps;
 use std::path::PathBuf;
 use std::str::FromStr;
 
-#[cfg(feature = "git")]
-use gix::url as gix_url;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;

@@ -87,7 +87,7 @@ pub mod git {
         Failed,
         /// A transparent wrapper for a [`crate::store::git::Error`]
         #[error(transparent)]
-        StoreError(#[from] crate::store::git::Error),
+        StoreError(#[from] Box<crate::store::git::Error>),
         /// No Atoms found under the given directory.
         #[error("Failed to find any Atoms under the current directory")]
         NotFound,

@@ -41,6 +41,7 @@
 //! ## Usage
 //!
 //! ```rust,no_run
+//! use atom::AtomTag;
 //! use atom::store::git::Root;
 //! use atom::store::{Init, NormalizeStorePath, QueryStore, QueryVersion};
 //! use gix::{Remote, Url};
@@ -49,26 +50,26 @@
 //! // Initialize a Git store
 //! let repo = gix::open(".")?;
 //! let remote = repo.find_remote("origin")?;
-//! remote.ekala_init()?;
-//! let root = remote.ekala_root()?;
+//! remote.ekala_init(None)?;
+//! let root = remote.ekala_root(None)?;
 //!
 //! // Query references from a remote store
 //! let url = gix::url::parse("https://github.com/example/repo.git".into())?;
-//! let refs = url.get_refs(["main", "refs/tags/v1.0"])?;
+//! let refs = url.get_refs(["main", "refs/tags/v1.0"], None)?;
 //! for ref_info in refs {
 //!     let (name, target, peeled) = ref_info.unpack();
 //!     println!("Ref: {}, Target: {}", name, peeled.or(target).unwrap());
 //! }
 //!
 //! // Query atom versions from a remote store
-//! let atoms = url.get_atoms()?;
+//! let atoms = url.get_atoms(None)?;
 //! for (tag, version, id) in atoms {
 //!     println!("Atom: {} v{} -> {}", tag, version, id);
 //! }
 //!
 //! // Find highest version matching requirements
 //! let req = VersionReq::parse(">=1.0.0,<2.0.0")?;
-//! if let Some((version, id)) = url.get_highest_match(&"mylib".into(), &req) {
+//! if let Some((version, id)) = url.get_highest_match(&AtomTag::try_from("mylib")?, &req, None) {
 //!     println!("Selected version {} with id {}", version, id);
 //! }
 //!
@@ -135,7 +136,7 @@ pub trait NormalizeStorePath {
 ///
 /// // Lightweight reference query
 /// let url = gix::url::parse("https://github.com/example/repo.git".into())?;
-/// let refs = url.get_refs(["main", "refs/tags/v1.0"])?;
+/// let refs = url.get_refs(["main", "refs/tags/v1.0"], None)?;
 /// for ref_info in refs {
 ///     let (name, target, peeled) = ref_info.unpack();
 ///     println!("Ref: {}, Target: {}", name, peeled.or(target).unwrap());
@@ -186,6 +187,7 @@ pub trait QueryStore<Ref, T: Send> {
         Spec: AsRef<BStr>;
 }
 
+use std::collections::HashMap;
 /// A trait for querying version information about atoms in remote stores.
 ///
 /// This trait extends [`QueryStore`] to provide high-level operations for working
@@ -218,6 +220,7 @@ pub trait QueryStore<Ref, T: Send> {
 /// ## Examples
 ///
 /// ```rust,no_run
+/// use atom::AtomTag;
 /// use atom::store::{QueryStore, QueryVersion};
 /// use gix::Url;
 /// use semver::VersionReq;
@@ -226,14 +229,15 @@ pub trait QueryStore<Ref, T: Send> {
 /// let url = gix::url::parse("https://github.com/example/atoms.git".into())?;
 ///
 /// // Get all available atoms
-/// let atoms = url.get_atoms()?;
+/// let atoms = url.get_atoms(None)?;
 /// for (tag, version, id) in atoms {
 ///     println!("Atom: {} v{} -> {}", tag, version, id);
 /// }
 ///
 /// // Find the highest version matching a requirement
 /// let req = VersionReq::parse(">=1.0.0,<2.0.0")?;
-/// if let Some((version, id)) = url.get_highest_match(&"mylib".into(), &req) {
+///
+/// if let Some((version, id)) = url.get_highest_match(&AtomTag::try_from("mylib")?, &req, None) {
 ///     println!("Selected version {} with id {}", version, id);
 /// }
 /// # Ok::<(), Box<dyn std::error::Error>>(())
@@ -286,11 +290,13 @@ where
     ///
     /// # Examples
     /// ```rust,no_run
+    /// use atom::AtomTag;
     /// use atom::store::QueryVersion;
     /// use semver::VersionReq;
     ///
+    /// let url = gix::url::parse("https://example.com/my-repo.git".into())?;
     /// let req = VersionReq::parse(">=1.0.0,<2.0.0")?;
-    /// let result = store.get_highest_match(&"mylib".into(), &req);
+    /// let result = url.get_highest_match(&AtomTag::try_from("mylib")?, &req, None);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     fn get_highest_match(
@@ -303,7 +309,37 @@ where
             .ok()?
             .into_iter()
             .filter_map(|(t, v, id)| (&t == tag && req.matches(&v)).then_some((v, id)))
-            .max_by_key(|&(ref version, _)| version.to_owned())
+            .max_by_key(|(ref version, _)| version.to_owned())
+    }
+
+    /// Retrieves all atoms from the remote store and maps them by their tag.
+    ///
+    /// This method provides a convenient way to get a comprehensive overview of all
+    /// atoms available in the remote store, organized by their unique `AtomTag`.
+    /// If an atom has multiple versions, only the highest version is returned.
+    ///
+    /// # Returns
+    ///
+    /// A `HashMap` where:
+    /// - The key is the `AtomTag`, representing the unique identifier of the atom.
+    /// - The value is a tuple containing the `Version` and `Id` of the atom.
+    ///
+    /// If the remote store cannot be reached or if there are no atoms, an empty
+    /// `HashMap` is returned.
+    fn remote_atoms(&self, transport: Option<&mut T>) -> HashMap<AtomTag, (Version, Id)> {
+        if let Ok(refs) = self.get_atoms(transport) {
+            let iter = refs.into_iter();
+            let s = match iter.size_hint() {
+                (l, None) => l,
+                (_, Some(u)) => u,
+            };
+            iter.fold(HashMap::with_capacity(s), |mut acc, (t, v, id)| {
+                acc.insert(t, (v, id));
+                acc
+            })
+        } else {
+            HashMap::new()
+        }
     }
 }
 

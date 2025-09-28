@@ -50,17 +50,23 @@
 //!
 //! use atom::publish::git::GitPublisher;
 //! use atom::publish::{Builder, Publish, Stats};
+//! use atom::store::QueryVersion;
 //! use atom::store::git::Root;
 //!
 //! let repo = gix::open(".")?;
 //! // Create a publisher for a Git repository
-//! let publisher = GitPublisher::new(&repo, "origin", "main")?;
+//! let progress_span = tracing::info_span!("test");
+//! let publisher = GitPublisher::new(&repo, "origin", "main", &progress_span)?;
 //!
 //! // Build and validate the publisher
 //! let (valid_atoms, publisher) = publisher.build()?;
 //!
+//! // query upstream store for remote atom refs to compare against
+//! let remote = publisher.remote();
+//! let remote_atoms = remote.remote_atoms(None);
+//!
 //! // Publish all atoms
-//! let results = publisher.publish(vec![PathBuf::from("/path/to/atom")]);
+//! let results = publisher.publish(vec![PathBuf::from("/path/to/atom")], remote_atoms);
 //!
 //! // Check results
 //! let stats = Stats::default();
@@ -222,9 +228,9 @@ const ATOM_REF: &str = "atoms";
 const ATOM_MANIFEST: &str = "manifest";
 const ATOM_META_REF: &str = "meta";
 const ATOM_ORIGIN: &str = "origin";
-const REF_ROOT: LazyLock<String> = LazyLock::new(|| format!("refs/{}", STORE_ROOT));
+static REF_ROOT: LazyLock<String> = LazyLock::new(|| format!("refs/{}", STORE_ROOT));
 /// the default location where atom refs are stored
-pub const ATOM_REFS: LazyLock<String> =
+pub static ATOM_REFS: LazyLock<String> =
     LazyLock::new(|| format!("{}/{}", REF_ROOT.as_str(), ATOM_REF));
-const META_REFS: LazyLock<String> =
+static META_REFS: LazyLock<String> =
     LazyLock::new(|| format!("{}/{}", REF_ROOT.as_str(), ATOM_META_REF));

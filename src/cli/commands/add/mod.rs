@@ -8,8 +8,6 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 use anyhow::Result;
-use atom::lock::AtomLocation;
-use atom::manifest::deps::AtomReq;
 use atom::uri::{AliasedUrl, Uri};
 use clap::Parser;
 
@@ -47,15 +45,7 @@ pub(super) fn run(args: Args) -> Result<()> {
         args.path.join("atom.toml")
     };
     let toml_str = fs::read_to_string(path)?;
-    let mut doc = toml_str.parse::<DocumentMut>()?;
-    match args.uri {
-        Ref::Atom(uri) => {
-            // let atom = AtomReq::new(uri.version(), locale);
-            // doc["deps"]["atoms"][uri.tag()] =
-            todo!();
-        },
-        Ref::Pin(aliased_url) => todo!(),
-    }
+    let mut _doc = toml_str.parse::<DocumentMut>()?;
     Ok(())
 }
 

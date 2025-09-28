@@ -1,5 +1,4 @@
-use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::collections::HashSet;
 
 use atom::publish::error::git::Error;
 use atom::publish::git::{GitOutcome, GitResult};
@@ -62,7 +61,7 @@ pub(super) async fn run(
 
     let paths = if args.recursive {
         let paths: HashSet<_> = if !repo.is_bare() {
-            let cwd = repo.normalize(repo.current_dir())?;
+            let cwd = repo.normalize(repo.current_dir()).map_err(Box::new)?;
             atoms
                 .into_values()
                 .filter_map(|path| path.strip_prefix(&cwd).map(Path::to_path_buf).ok())
@@ -84,19 +83,7 @@ pub(super) async fn run(
         let span = tracing::info_span!("check");
         atom::log::set_sub_task(&span, "✔️ querying remote for existing atoms");
         let _enter = span.enter();
-        if let Ok(refs) = remote.get_atoms(Some(publisher.transport())) {
-            let iter = refs.into_iter();
-            let s = match iter.size_hint() {
-                (l, None) => l,
-                (_, Some(u)) => u,
-            };
-            iter.fold(HashMap::with_capacity(s), |mut acc, (t, v, id)| {
-                acc.insert(t, (v, id));
-                acc
-            })
-        } else {
-            HashMap::new()
-        }
+        remote.remote_atoms(Some(publisher.transport()))
     };
 
     let results = {

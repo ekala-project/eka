@@ -19,17 +19,14 @@ use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 
 use bstr::ByteSlice;
-use gix::config::AsKey;
 use gix::{Commit, ObjectId, Remote, Repository, Tree};
-use nom::AsBytes;
 use tokio::task::JoinSet;
-use tracing_indicatif::span_ext::IndicatifSpanExt;
 
 use super::error::git::Error;
 use super::{Content, PublishOutcome, Record};
 use crate::core::AtomPaths;
 use crate::store::git::Root;
-use crate::store::{NormalizeStorePath, QueryStore, QueryVersion};
+use crate::store::{NormalizeStorePath, QueryStore};
 use crate::{Atom, AtomId};
 
 type GitAtomId = AtomId<Root>;
@@ -147,7 +144,7 @@ impl<'a> GitPublisher<'a> {
     ) -> GitResult<Self> {
         use crate::store::Init;
         let remote = repo.find_remote(remote_str).map_err(Box::new)?;
-        let mut transport = remote.get_transport()?;
+        let mut transport = remote.get_transport().map_err(Box::new)?;
         let root = remote.ekala_root(Some(&mut transport)).map_err(|e| {
             e.warn();
             Error::NotInitialized
@@ -322,7 +319,7 @@ impl<'a> Publish<Root> for GitContext<'a> {
             let path = match self.repo.normalize(&path) {
                 Ok(path) => path,
                 Err(git::Error::NoWorkDir) => path,
-                Err(e) => return Err(e.into()),
+                Err(e) => return Err(Box::new(e).into()),
             };
             self.publish_atom(&path, &remotes)
         })

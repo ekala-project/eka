@@ -87,7 +87,7 @@ impl<'a> GitContext<'a> {
 
         self.verify_manifest(&entry.object()?, paths.spec())
             .and_then(|spec| {
-                let id = AtomId::construct(&self.commit, spec.tag.clone())?;
+                let id = AtomId::construct(&self.commit, spec.tag.clone()).map_err(Box::new)?;
                 if self.root != *id.root() {
                     return Err(Error::InconsistentRoot {
                         remote: self.root,
