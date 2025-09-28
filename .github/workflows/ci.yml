@@ -14,15 +14,18 @@ concurrency:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
       - name: Install Nix
-        uses: nixbuild/nix-quick-install-action@v28
+        uses: nixbuild/nix-quick-install-action@v34
       - name: Setup Cache
-        uses: DeterminateSystems/magic-nix-cache-action@v8
-      - uses: Swatinem/rust-cache@v2
+        uses: DeterminateSystems/magic-nix-cache-action@v13
+      - uses: Swatinem/rust-cache@v2.8.1
       - name: Eval Devshell
         run: nix-instantiate shell.nix --add-root shell
       - name: Check Format
