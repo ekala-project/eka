@@ -74,7 +74,7 @@ mod tests;
 
 use std::collections::HashMap;
 use std::fmt::Display;
-use std::ops::Deref;
+use std::ops::{Deref, Not};
 use std::str::FromStr;
 
 #[cfg(feature = "git")]
@@ -114,12 +114,23 @@ struct Ref<'a> {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Default)]
 #[cfg_attr(test, derive(Serialize, Deserialize))]
 /// a url potentially containing an alias
-pub struct AliasedUrl(Url);
+pub struct AliasedUrl {
+    url: Url,
+    r#ref: Option<String>,
+}
 
 impl Display for AliasedUrl {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let AliasedUrl(url) = self;
-        url.fmt(f)
+        let AliasedUrl { url, r#ref } = self;
+        if let Some(r) = r#ref {
+            if r.is_empty() {
+                url.fmt(f)
+            } else {
+                write!(f, "{}^^{}", url, r)
+            }
+        } else {
+            url.fmt(f)
+        }
     }
 }
 
@@ -127,13 +138,28 @@ impl FromStr for AliasedUrl {
     type Err = UriError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let r = UrlRef::from(s);
-        let u = r.to_url();
+        let (r, url) = match split_carot(s) {
+            Ok((s, Some(u))) => (s, u),
+            Ok((s, None)) => ("", s),
+            _ => return Err(UriError::NoUrl),
+        };
+
+        let url = UrlRef::from(url);
+        let u = url.to_url();
+        let r#ref = r.is_empty().not().then_some(r.to_string());
         if let Some(url) = u {
-            Ok(AliasedUrl(url))
+            Ok(AliasedUrl { url, r#ref })
         } else {
             Err(UriError::NoUrl)
         }
+    }
+}
+
+impl TryFrom<&str> for AliasedUrl {
+    type Error = UriError;
+
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
+        FromStr::from_str(s)
     }
 }
 
@@ -289,6 +315,10 @@ fn scheme(input: &str) -> IResult<&str, Option<&str>> {
 
 fn split_at(input: &str) -> IResult<&str, Option<&str>> {
     opt_split(input, "@")
+}
+
+fn split_carot(input: &str) -> IResult<&str, Option<&str>> {
+    opt_split(input, "^^")
 }
 
 fn split_colon(input: &str) -> IResult<&str, Option<&str>> {

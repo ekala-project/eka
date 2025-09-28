@@ -1,0 +1,9 @@
+---
+source: crates/atom/src/uri/tests/mod.rs
+expression: results
+---
+- "https://github.com/foo/bar^^master"
+- "https://bitbucket.org/^^refs/heads/my-work"
+- "https://gitlab.com/bar/baz"
+- "https://github.com/nixos/nixpkgs^^main"
+- "git@github.com:/owner/repo^^master"

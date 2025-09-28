@@ -26,6 +26,14 @@ const ALIASES: &[&str] = &[
     "::foo",
 ];
 
+const ALIASED_URLS: &[&str] = &[
+    "gh:foo/bar^^master",
+    "bb^^refs/heads/my-work",
+    "https://gl:bar/baz",
+    "pkgs^^main",
+    "git@gh:owner/repo^^master",
+];
+
 #[test]
 fn ref_snapshot() {
     let results: Vec<Ref> = ALIASES.iter().map(|x| (*x).into()).collect();
@@ -36,5 +44,16 @@ fn ref_snapshot() {
 fn uri_snapshot() -> Result<(), UriError> {
     let results: Result<Vec<Uri>, UriError> = ALIASES.iter().map(|v| v.parse::<Uri>()).collect();
     insta::assert_debug_snapshot!(results?);
+    Ok(())
+}
+
+#[test]
+fn url_snapshot() -> anyhow::Result<()> {
+    let parsed: Vec<AliasedUrl> = ALIASED_URLS
+        .iter()
+        .map(|x| (*x).try_into())
+        .collect::<Result<Vec<_>, _>>()?;
+    let results: Vec<_> = parsed.iter().map(|x| x.to_string()).collect();
+    insta::assert_yaml_snapshot!(results);
     Ok(())
 }
