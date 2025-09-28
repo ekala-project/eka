@@ -12,6 +12,8 @@ opt-level     = 3
 strip         = true
 
 [dependencies]
+
+tracing-indicatif.workspace  = true
 anyhow.workspace             = true
 clap.workspace               = true
 semver.workspace             = true
@@ -36,6 +38,7 @@ thiserror        = "^1"
 tracing          = "^0.1"
 tracing-appender = "^0.2"
 tracing-error    = "^0.2"
+tracing-indicatif = "^0.3"
 
 clap               = { version = "^4", features = ["derive"] }
 insta              = { version = "^1", features = ["yaml"] }

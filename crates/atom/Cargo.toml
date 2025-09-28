@@ -19,7 +19,7 @@ thiserror.workspace = true
 tokio.workspace     = true
 toml_edit.workspace = true
 tracing.workspace   = true
-url.workspace       = true
+tracing-indicatif.workspace  = true
 
 config = { path = "../config" }
 gix = { workspace = true, default-features = false, features = [
