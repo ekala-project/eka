@@ -48,14 +48,34 @@
 //! validation and prevent typos in manifest files. Optional fields are properly
 //! handled with `skip_serializing_if` to keep the TOML output clean.
 use std::collections::HashMap;
+use std::marker::PhantomData;
 use std::path::PathBuf;
 
 use semver::VersionReq;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use toml_edit::DocumentMut;
 use url::Url;
 
+use crate::Manifest;
 use crate::id::AtomTag;
 use crate::lock::AtomLocation;
+
+/// Newtype wrapper to tie DocumentMut to a specific serializable type T.
+pub struct TypedDocument<T> {
+    /// The actual document we want associated with our type
+    inner: DocumentMut,
+    _marker: PhantomData<T>,
+}
+
+/// A trait to implement writing to a mutable toml document representing an atom Manifest
+trait WriteDeps<T: Serialize> {
+    /// The error type returned by the methods.
+    type Error;
+
+    /// write the dep to the given toml doc
+    fn write_dep(&self, name: &str, doc: &mut TypedDocument<T>) -> Result<(), Self::Error>;
+}
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
 /// The dependencies specified in the manifest
@@ -75,6 +95,9 @@ pub struct Dependency {
 /// Represents a locked atom dependency, referencing a verifiable repository slice.
 #[serde(deny_unknown_fields)]
 pub struct AtomReq {
+    /// The tag of the atom (if the toml key is different)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tag: Option<AtomTag>,
     /// The semantic version request specification of the atom.
     version: VersionReq,
     /// The location of the atom, whether local or remote.
@@ -166,7 +189,82 @@ impl AtomReq {
     /// # Returns
     ///
     /// A new `AtomReq` instance with the provided version and location.
-    pub fn new(version: VersionReq, locale: AtomLocation) -> Self {
-        Self { version, locale }
+    pub fn new(version: VersionReq, locale: AtomLocation, tag: Option<AtomTag>) -> Self {
+        Self {
+            version,
+            locale,
+            tag,
+        }
+    }
+}
+
+#[derive(thiserror::Error, Debug)]
+/// transparent errors for TypedDocument
+pub enum DocError {
+    /// Toml deserialization errors
+    #[error(transparent)]
+    De(#[from] toml_edit::de::Error),
+    /// Toml error
+    #[error(transparent)]
+    Ser(#[from] toml_edit::TomlError),
+}
+
+impl<T: Serialize + DeserializeOwned> TypedDocument<T> {
+    /// Constructor: Create from a serializable instance of T.
+    /// This enforces that the document comes from serializing T.
+    pub fn new(doc: &str) -> Result<Self, DocError> {
+        let _validate: T = toml_edit::de::from_str(doc)?;
+
+        let inner = doc.parse::<DocumentMut>()?;
+        Ok(Self {
+            inner,
+            _marker: PhantomData,
+        })
+    }
+}
+
+impl<T: Serialize> AsMut<DocumentMut> for TypedDocument<T> {
+    fn as_mut(&mut self) -> &mut DocumentMut {
+        &mut self.inner
+    }
+}
+impl TypedDocument<Manifest> {
+    /// Write an atom dependency into the manifest document
+    pub fn write_atom_dep(
+        &mut self,
+        key: &str,
+        req: &AtomReq,
+    ) -> Result<(), toml_edit::ser::Error> {
+        req.write_dep(key, self)
+    }
+}
+
+impl WriteDeps<Manifest> for AtomReq {
+    type Error = toml_edit::ser::Error;
+
+    fn write_dep(&self, key: &str, doc: &mut TypedDocument<Manifest>) -> Result<(), Self::Error> {
+        let doc = doc.as_mut();
+        let atom_table = toml_edit::ser::to_document(self)?.as_table().to_owned();
+
+        if !doc.contains_table("deps") {
+            doc["deps"] = toml_edit::table();
+        }
+
+        let pos = doc.len();
+        let deps = doc["deps"].as_table_mut().unwrap();
+        deps.set_implicit(true);
+        deps.set_position(pos + 1);
+
+        if !deps.contains_table("atoms") {
+            deps["atoms"] = toml_edit::table();
+        }
+
+        let pos = deps.len();
+        let atoms = doc["deps"]["atoms"].as_table_mut().unwrap();
+        atoms.set_implicit(true);
+        atoms.set_position(pos + 1);
+
+        doc["deps"]["atoms"][key] = toml_edit::Item::Table(atom_table);
+        Ok(())
     }
 }

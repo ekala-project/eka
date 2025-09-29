@@ -10,18 +10,21 @@ version = 1
 [[deps]]
 type = "atom"
 tag = "nix"
+id = "36e2c6c52d4b3b10983d79367aeef03b0f47578ade287b08e89f68b647af26a3" # currently not validated
 version = "0.1.2"
 rev = "bca8295431846ed43bdbe9d95a8b8958785245e6"
 
 [[deps]]
 type = "atom"
 tag = "home"
+id = "4ef4c265e176136f4c6cc348c61489b92f163ee571d08ea12c2268e9d2c4c790"
 version = "0.1.8"
 rev = "795ae541b7fd67dd3c6e1a9dddf903312696aa17"
 url = "https://git.example.com/my-repo.git"
 
 [[deps]]
 type = "atom"
+id = "734538b25b6840e47fbd491550de267b985255b5b842b41baf4ccf5afd224c3d"
 tag = "users"
 version = "0.1.4"
 rev = "a460f02d145b870bb4f8762fd7a163afee68512e"

@@ -179,22 +179,23 @@ impl Deref for Root {
     }
 }
 
+type AtomQuery = (AtomTag, Version, ObjectId);
+impl Origin<Root> for std::vec::IntoIter<AtomQuery> {
+    type Error = Error;
+
+    fn calculate_origin(&self) -> Result<Root, Self::Error> {
+        let root = <gix::Url as QueryVersion<_, _, _, _>>::process_root(self.to_owned())
+            .ok_or(Error::RootNotFound)?;
+        Ok(Root(root))
+    }
+}
+
 impl<'a> Origin<Root> for Commit<'a> {
     type Error = Error;
 
     fn calculate_origin(&self) -> Result<Root, Self::Error> {
         use gix::revision::walk::Sorting;
         use gix::traverse::commit::simple::CommitTimeOrder;
-        // FIXME: we rely on a custom crate patch to search the commit graph
-        // with a bias for older commits. The default gix behavior is the opposite
-        // starting with bias for newer commits.
-        //
-        // it is based on the more general concept of an OldestFirst traversal
-        // introduce by @nrdxp upstream: https://github.com/Byron/gitoxide/pull/1610
-        //
-        // However, that work tracks main and the goal of this patch is to remain
-        // as minimal as possible on top of a release tag, for easier maintenance
-        // assuming it may take a while to merge upstream.
         let mut walk = self
             .ancestors()
             .use_commit_graph(true)
@@ -289,7 +290,8 @@ impl<'repo> EkalaRemote for gix::Remote<'repo> {
     }
 }
 
-const V1_ROOT: &str = "refs/tags/ekala/root/v1";
+pub(super) const V1_ROOT: &str = "refs/tags/ekala/root/v1";
+const V1_ROOT_SEMVER: &str = "1.0.0";
 
 fn to_id(r: Ref) -> ObjectId {
     let (_, t, p) = r.unpack();
@@ -633,6 +635,14 @@ use semver::Version;
 use crate::AtomTag;
 impl super::UnpackRef<ObjectId> for Ref {
     fn unpack_atom_ref(&self) -> Option<super::UnpackedRef<ObjectId>> {
+        let maybe_root = self.find_root_ref();
+        if let Some(root) = maybe_root {
+            return Some((
+                AtomTag::root_tag(),
+                Version::parse(V1_ROOT_SEMVER).ok()?,
+                root,
+            ));
+        }
         let (n, t, p) = self.unpack();
         let mut path = PathBuf::from(n.to_string());
         let v_str = path.file_name()?.to_str()?;
@@ -643,6 +653,19 @@ impl super::UnpackRef<ObjectId> for Ref {
         let id = p.or(t).map(ToOwned::to_owned)?;
 
         Some((tag, version, id))
+    }
+
+    fn find_root_ref(&self) -> Option<ObjectId> {
+        if let Ref::Direct {
+            full_ref_name: name,
+            object: id,
+        } = self
+        {
+            if name == V1_ROOT {
+                return Some(id.to_owned());
+            }
+        }
+        None
     }
 }
 

@@ -266,12 +266,28 @@ where
     }
 }
 
+pub(crate) const ROOT_TAG: &str = "__ROOT";
+
+/// For contexts where you want an identifier that is validated similarly to an AtomTag.
+pub type Name = AtomTag;
+
 impl AtomTag {
     fn validate_start(c: char) -> Result<(), Error> {
         if AtomTag::is_invalid_start(c) {
             return Err(Error::InvalidStart(c));
         }
         Ok(())
+    }
+
+    /// special purpose, internal only function to return what would normally be an invalid tag
+    /// specifying the repo root commit. Allowing the root commit to be, e.g. packaged in iterators
+    /// containing AtomTags
+    pub(crate) fn root_tag() -> AtomTag {
+        AtomTag(ROOT_TAG.into())
+    }
+
+    pub(crate) fn is_root(&self) -> bool {
+        self == &AtomTag::root_tag()
     }
 
     pub(super) fn validate(s: &str) -> Result<(), Error> {

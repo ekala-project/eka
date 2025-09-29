@@ -90,6 +90,17 @@ use crate::id::Error;
 #[derive(Debug)]
 struct Aliases(&'static HashMap<&'static str, &'static str>);
 
+/// Represents either an atom URI or an aliased URL component
+///
+/// When built through the `FromStr` implementation, aliases are resolved.
+#[derive(Debug, Clone)]
+pub enum UriOrUrl {
+    /// Atom URI variant
+    Atom(Uri),
+    /// URL variant
+    Pin(AliasedUrl),
+}
+
 /// Represents the parsed components of an Atom URI.
 ///
 /// It is typically created through the `FromStr` implementation, not constructed directly.
@@ -345,9 +356,9 @@ impl<'a> From<&'a str> for Ref<'a> {
 /// A error encountered when constructing the concrete types from an Atom URI
 #[derive(Error, Debug)]
 pub enum UriError {
-    /// An alias uses the same validation logic as the Unicode Atom identifier.
+    /// Malformed atom tag.
     #[error(transparent)]
-    AliasValidation(#[from] Error),
+    BadTag(#[from] Error),
     /// The version requested is not valid.
     #[error(transparent)]
     InvalidVersionReq(#[from] semver::Error),
@@ -628,5 +639,32 @@ impl Uri {
     /// Returns the Atom version parsed from the URI.
     pub fn version(&self) -> Option<&VersionReq> {
         self.version.as_ref()
+    }
+}
+
+impl Display for UriOrUrl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            UriOrUrl::Atom(uri) => uri.fmt(f),
+            UriOrUrl::Pin(url) => url.fmt(f),
+        }
+    }
+}
+
+impl FromStr for UriOrUrl {
+    type Err = UriError;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s.parse::<Uri>() {
+            Ok(uri) => return Ok(UriOrUrl::Atom(uri)),
+            Err(e @ UriError::BadTag(_)) => {
+                if s.contains("::") {
+                    return Err(e);
+                }
+            },
+            Err(e @ UriError::InvalidVersionReq(_)) => return Err(e),
+            Err(_) => (),
+        }
+        s.parse::<AliasedUrl>().map(UriOrUrl::Pin)
     }
 }

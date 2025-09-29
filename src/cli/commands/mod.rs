@@ -37,8 +37,8 @@ pub(super) enum Commands {
     Resolve(resolve::Args),
     /// Add dependencies from a given atom uri to the manifest.
     ///
-    /// This command will take an atom uri or pin spec and update the
-    /// manifest with given result.
+    /// This command takes atom uri or pin spec and updates the
+    /// manifest and lock with the result.
     #[command(verbatim_doc_comment)]
     Add(add::Args),
     /// Create a new atom at the specified path.

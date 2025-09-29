@@ -56,6 +56,8 @@
 
 use std::path::PathBuf;
 
+#[cfg(feature = "git")]
+use gix::ObjectId;
 use nix_compat::nixhash::NixHash;
 use semver::Version;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -76,13 +78,16 @@ pub struct WrappedNixHash(pub NixHash);
 /// as untagged values in TOML for maximum compatibility.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Eq)]
 #[serde(untagged)]
-pub enum GitSha {
+pub enum LockDigest {
     /// A SHA-1 commit hash.
     #[serde(rename = "sha1")]
     Sha1(#[serde(with = "hex")] [u8; 20]),
     /// A SHA-256 commit hash.
     #[serde(rename = "sha256")]
     Sha256(#[serde(with = "hex")] [u8; 32]),
+    /// A BLAKE-3 digest.
+    #[serde(rename = "id")]
+    Blake3(#[serde(with = "serde_base32")] [u8; 32]),
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Eq)]
@@ -105,6 +110,11 @@ pub enum AtomLocation {
     Path(PathBuf),
 }
 
+#[cfg(feature = "git")]
+use crate::AtomId;
+use crate::id::Name;
+#[cfg(feature = "git")]
+use crate::store::git::Root;
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
 /// Represents a locked atom dependency, referencing a verifiable repository slice.
 ///
@@ -112,12 +122,17 @@ pub enum AtomLocation {
 /// fetch a specific version of an atom from a Git repository.
 #[serde(deny_unknown_fields)]
 pub struct AtomDep {
-    /// The unique identifier of the atom.
+    /// The name corresponding to the atom in the manifest at `deps.atoms.<name>`, if diffferent
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<Name>,
+    /// than the tag The unique identifier of the atom.
     pub tag: AtomTag,
+    /// than cryptographic identity of the atom.
+    pub id: LockDigest,
     /// The semantic version of the atom.
     pub version: Version,
     /// The resolved Git revision (commit hash) for verification.
-    pub rev: GitSha,
+    pub rev: LockDigest,
     /// The location of the atom, whether local or remote.
     ///
     /// This field is flattened in the TOML serialization and omitted if None.
@@ -158,7 +173,7 @@ pub struct PinGitDep {
     /// The Git repository URL.
     pub url: Url,
     /// The resolved revision (commit hash).
-    pub rev: GitSha,
+    pub rev: LockDigest,
     /// The relative path within the repo.
     ///
     /// This field is omitted from serialization if None.
@@ -343,5 +358,52 @@ impl<'de> Deserialize<'de> for WrappedNixHash {
             serde::de::Error::invalid_value(serde::de::Unexpected::Str(&s), &"NixHash")
         })?;
         Ok(WrappedNixHash(hash))
+    }
+}
+
+#[cfg(feature = "git")]
+impl From<ObjectId> for LockDigest {
+    fn from(id: ObjectId) -> Self {
+        match id {
+            ObjectId::Sha1(bytes) => LockDigest::Sha1(bytes),
+        }
+    }
+}
+
+use base32::{self};
+use serde::Serializer;
+
+mod serde_base32 {
+    use super::*;
+
+    pub fn serialize<S>(hash: &[u8; 32], serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let encoded = base32::encode(crate::BASE32, hash);
+        serializer.serialize_str(&encoded)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<[u8; 32], D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        base32::decode(crate::BASE32, &s)
+            .ok_or_else(|| serde::de::Error::custom("Invalid Base32 string"))
+            .and_then(|bytes| {
+                bytes
+                    .try_into()
+                    .map_err(|_| serde::de::Error::custom("Expected 32 bytes for BLAKE3 hash"))
+            })
+    }
+}
+
+#[cfg(feature = "git")]
+impl From<AtomId<Root>> for LockDigest {
+    fn from(value: AtomId<Root>) -> Self {
+        use crate::Compute;
+
+        LockDigest::Blake3(*value.compute_hash())
     }
 }

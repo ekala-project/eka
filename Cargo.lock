@@ -645,6 +645,7 @@ dependencies = [
  "clap",
  "gix",
  "semver",
+ "tempfile",
  "thiserror 1.0.64",
  "tokio",
  "toml_edit 0.22.22",

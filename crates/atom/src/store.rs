@@ -245,10 +245,17 @@ use std::collections::HashMap;
 pub trait QueryVersion<Ref, Id, C, T>: QueryStore<Ref, T>
 where
     C: FromIterator<UnpackedRef<Id>> + IntoIterator<Item = UnpackedRef<Id>>,
-    Ref: UnpackRef<Id>,
+    Ref: UnpackRef<Id> + std::fmt::Debug,
     Self: std::fmt::Debug,
     T: Send,
 {
+    /// Hello world
+    fn process_atoms(refs: impl IntoIterator<Item = Ref>) -> <C as IntoIterator>::IntoIter {
+        refs.into_iter()
+            .filter_map(|x| x.unpack_atom_ref())
+            .collect::<C>()
+            .into_iter()
+    }
     /// Retrieves all atoms available in the remote store.
     ///
     /// This method queries the store for all atom references using the standard
@@ -265,14 +272,37 @@ where
     fn get_atoms(
         &self,
         transport: Option<&mut T>,
-    ) -> Result<impl IntoIterator<Item = UnpackedRef<Id>>, <Self as QueryStore<Ref, T>>::Error>
-    {
+    ) -> Result<<C as IntoIterator>::IntoIter, <Self as QueryStore<Ref, T>>::Error> {
         let r = format!("{}/*", crate::ATOM_REFS.as_str());
-        Ok(self
-            .get_refs(&[format!("{}:{}", r, r).as_str()], transport)?
-            .into_iter()
-            .filter_map(|x| x.unpack_atom_ref())
-            .collect::<C>())
+        let a = format!("{}:{}", r, r);
+        #[cfg(feature = "git")]
+        let ro = format!("{}:{}", git::V1_ROOT, git::V1_ROOT);
+
+        let query = [
+            a.as_str(),
+            #[cfg(feature = "git")]
+            ro.as_str(),
+        ];
+        let refs = self.get_refs(&query, transport)?;
+        let atoms = Self::process_atoms(refs);
+        Ok(atoms)
+    }
+
+    /// foobar
+    fn process_highest_match(
+        atoms: <C as IntoIterator>::IntoIter,
+        tag: &AtomTag,
+        req: &VersionReq,
+    ) -> Option<(Version, Id)> {
+        atoms
+            .filter_map(|(t, v, id)| (&t == tag && req.matches(&v)).then_some((v, id)))
+            .max_by_key(|(ref version, _)| version.to_owned())
+    }
+
+    #[cfg(feature = "git")]
+    /// find the root commit of the remote repo
+    fn process_root(mut atoms: <C as IntoIterator>::IntoIter) -> Option<Id> {
+        atoms.find_map(|(n, _, id)| (n.is_root()).then_some(id))
     }
 
     /// Finds the highest version of an atom matching the given version requirement.
@@ -305,11 +335,8 @@ where
         req: &VersionReq,
         transport: Option<&mut T>,
     ) -> Option<(Version, Id)> {
-        self.get_atoms(transport)
-            .ok()?
-            .into_iter()
-            .filter_map(|(t, v, id)| (&t == tag && req.matches(&v)).then_some((v, id)))
-            .max_by_key(|(ref version, _)| version.to_owned())
+        let atoms = self.get_atoms(transport).ok()?;
+        Self::process_highest_match(atoms, tag, req)
     }
 
     /// Retrieves all atoms from the remote store and maps them by their tag.
@@ -362,4 +389,6 @@ pub trait UnpackRef<Id> {
     /// - `Some((tag, version, id))` if the reference follows atom reference format
     /// - `None` if the reference is not an atom reference or is malformed
     fn unpack_atom_ref(&self) -> Option<UnpackedRef<Id>>;
+    /// placeholder
+    fn find_root_ref(&self) -> Option<Id>;
 }
