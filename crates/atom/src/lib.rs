@@ -83,8 +83,9 @@ pub use id::{AtomId, AtomTag, Compute, Origin};
 pub use lock::{Lockfile, ResolutionMode};
 pub use manifest::Manifest;
 
-/// The file extension used for Atom manifest files.
 const TOML: &str = "toml";
+const LOCK: &str = "lock";
+const ATOM: &str = "atom";
 
 /// The base32 alphabet used for encoding Atom hashes.
 ///
@@ -93,8 +94,8 @@ const TOML: &str = "toml";
 const BASE32: base32::Alphabet = base32::Alphabet::Rfc4648HexLower { padding: false };
 
 /// The filename used for Atom manifest files.
-///
-/// This is constructed by combining the base name "atom" with the TOML extension.
-pub static MANIFEST_NAME: LazyLock<String> = LazyLock::new(|| format!("atom.{}", crate::TOML));
+pub static MANIFEST_NAME: LazyLock<String> = LazyLock::new(|| format!("{}.{}", ATOM, TOML));
+/// The filename used for Atom lock files.
+pub static LOCK_NAME: LazyLock<String> = LazyLock::new(|| format!("{}.{}", ATOM, LOCK));
 
 pub use publish::ATOM_REFS;

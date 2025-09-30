@@ -54,6 +54,7 @@
 //! - **Strict field validation** with `#[serde(deny_unknown_fields)]`
 //! - **Type-safe dependency resolution** preventing invalid configurations
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 #[cfg(feature = "git")]
@@ -66,6 +67,7 @@ use url::Url;
 #[cfg(test)]
 mod test;
 
+use crate::Manifest;
 use crate::id::AtomTag;
 
 /// A wrapper around NixHash to provide custom serialization behavior.
@@ -127,18 +129,18 @@ pub struct AtomDep {
     pub name: Option<Name>,
     /// than the tag The unique identifier of the atom.
     pub tag: AtomTag,
-    /// than cryptographic identity of the atom.
-    pub id: LockDigest,
     /// The semantic version of the atom.
     pub version: Version,
-    /// The resolved Git revision (commit hash) for verification.
-    pub rev: LockDigest,
     /// The location of the atom, whether local or remote.
     ///
     /// This field is flattened in the TOML serialization and omitted if None.
     #[serde(flatten)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub location: Option<AtomLocation>,
+    /// The resolved Git revision (commit hash) for verification.
+    pub rev: LockDigest,
+    /// than cryptographic identity of the atom.
+    pub id: LockDigest,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -149,7 +151,7 @@ pub struct AtomDep {
 #[serde(deny_unknown_fields)]
 pub struct PinDep {
     /// The name of the pinned source.
-    pub name: String,
+    pub name: Name,
     /// The URL of the source.
     pub url: Url,
     /// The hash for integrity verification (e.g., sha256).
@@ -169,7 +171,7 @@ pub struct PinDep {
 #[serde(deny_unknown_fields)]
 pub struct PinGitDep {
     /// The name of the pinned Git source.
-    pub name: String,
+    pub name: Name,
     /// The Git repository URL.
     pub url: Url,
     /// The resolved revision (commit hash).
@@ -189,7 +191,7 @@ pub struct PinGitDep {
 #[serde(deny_unknown_fields)]
 pub struct PinTarDep {
     /// The name of the tar source.
-    pub name: String,
+    pub name: Name,
     /// The URL to the tarball.
     pub url: Url,
     /// The hash of the tarball.
@@ -209,7 +211,7 @@ pub struct PinTarDep {
 #[serde(deny_unknown_fields)]
 pub struct FromDep {
     /// The name of the sourced dependency.
-    pub name: String,
+    pub name: Name,
     /// The atom ID from which to source.
     pub from: AtomTag,
     /// The name of the dependency to acquire from the 'from' atom (defaults to `name`).
@@ -262,16 +264,6 @@ pub enum Dep {
     /// composition of complex systems from simpler atom components.
     #[serde(rename = "from")]
     From(FromDep),
-}
-
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
-#[serde(tag = "type")]
-/// Enum representing the different types of locked sources, serialized as tagged TOML tables.
-///
-/// This enum provides a type-safe way to represent different kinds of sources
-/// that need to be available during the build process, such as registries
-/// or configuration files.
-pub enum Src {
     /// A reference to a build source.
     ///
     /// Represents a source that needs to be fetched and available during the
@@ -289,12 +281,17 @@ pub enum Src {
 /// at build time.
 pub struct BuildSrc {
     /// The name of the source.
-    pub name: String,
+    pub name: Name,
     /// The URL to fetch the source.
     pub url: Url,
     /// The hash for verification.
     pub hash: WrappedNixHash,
 }
+
+/// A wrapper type holding our dependencies in a BTreeMap for efficient lookup by key for trivial
+/// comparison to the manifest and consistent ordering, for consistent and minimal diffs.
+#[derive(Debug, PartialEq, Eq)]
+pub struct DepMap<Deps>(BTreeMap<Name, Deps>);
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 /// The root structure for the lockfile, containing resolved dependencies and sources.
@@ -310,22 +307,22 @@ pub struct Lockfile {
     /// This field allows for future evolution of the lockfile format while
     /// maintaining backward compatibility.
     pub version: u8,
+    /// The mode of dependency resolution.
+    ///
+    /// Valid values are are:
+    /// * shallow: every atom manages only it's own direct dependencies
+    /// * deep (not implemented): a minimal set of dependencies is derived from all transitive
+    ///   dependencies
+    pub mode: ResolutionMode,
     /// The list of locked dependencies (absent or empty if none).
     ///
     /// This field contains all the resolved dependencies with their exact
     /// versions and revisions. It is omitted from serialization if None or empty.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub deps: Option<Vec<Dep>>,
-    /// The list of locked build-time sources (absent or empty if none).
-    ///
-    /// This field contains sources that need to be available during the build
-    /// process, such as registries or configuration files. It is omitted from
-    /// serialization if None or empty.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub srcs: Option<Vec<Src>>,
+    #[serde(default, skip_serializing_if = "DepMap::is_empty")]
+    pub deps: DepMap<Dep>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 /// The resolution mode for generating the lockfile.
 ///
 /// This enum controls how dependencies are resolved when generating a lockfile,
@@ -337,12 +334,14 @@ pub enum ResolutionMode {
     /// In this mode, only the immediate dependencies declared in the manifest
     /// are resolved and locked. Transitive dependencies are not included in
     /// the lockfile, making it faster but less comprehensive.
+    #[serde(rename = "shallow")]
     Shallow,
     /// Deep resolution: Recursively lock all transitive dependencies (future).
     ///
     /// In this mode, all dependencies and their dependencies are recursively
     /// resolved and locked, ensuring complete reproducibility but requiring
     /// more time and resources. This feature is planned for future implementation.
+    #[serde(rename = "deep")]
     Deep,
 }
 
@@ -405,5 +404,100 @@ impl From<AtomId<Root>> for LockDigest {
         use crate::Compute;
 
         LockDigest::Blake3(*value.compute_hash())
+    }
+}
+
+impl Default for Lockfile {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            mode: ResolutionMode::Shallow,
+            deps: Default::default(),
+        }
+    }
+}
+
+impl<T> AsRef<BTreeMap<Name, T>> for DepMap<T> {
+    fn as_ref(&self) -> &BTreeMap<Name, T> {
+        let DepMap(map) = self;
+        map
+    }
+}
+
+impl<T> AsMut<BTreeMap<Name, T>> for DepMap<T> {
+    fn as_mut(&mut self) -> &mut BTreeMap<Name, T> {
+        let DepMap(map) = self;
+        map
+    }
+}
+
+impl<T: Clone + Serialize> Serialize for DepMap<T> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        // BTreeMap iterates in sorted order automatically.
+        let values: Vec<_> = self.as_ref().values().cloned().collect();
+        values.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for DepMap<Dep> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let entries: Vec<Dep> = Vec::deserialize(deserializer)?;
+        let mut map = BTreeMap::new();
+        for dep in entries {
+            match dep {
+                Dep::Atom(atom_dep) => {
+                    let key = if let Some(n) = &atom_dep.name {
+                        n
+                    } else {
+                        &atom_dep.tag
+                    };
+                    map.insert(key.to_owned(), Dep::Atom(atom_dep));
+                },
+                Dep::Pin(pin_dep) => {
+                    map.insert(pin_dep.name.to_owned(), Dep::Pin(pin_dep));
+                },
+                Dep::PinGit(pin_git_dep) => {
+                    map.insert(pin_git_dep.name.to_owned(), Dep::PinGit(pin_git_dep));
+                },
+                Dep::PinTar(pin_tar_dep) => {
+                    map.insert(pin_tar_dep.name.to_owned(), Dep::PinTar(pin_tar_dep));
+                },
+                Dep::From(from_dep) => {
+                    map.insert(from_dep.name.to_owned(), Dep::From(from_dep));
+                },
+                Dep::Build(build_dep) => {
+                    map.insert(build_dep.name.to_owned(), Dep::Build(build_dep));
+                },
+            }
+        }
+        Ok(DepMap(map))
+    }
+}
+
+impl<T> DepMap<T> {
+    fn is_empty(&self) -> bool {
+        self.as_ref().is_empty()
+    }
+}
+
+impl<T> Default for DepMap<T> {
+    fn default() -> Self {
+        Self(Default::default())
+    }
+}
+
+impl Lockfile {
+    /// Retain only those entries which are present in the manifest, maintaining the manifest file
+    /// as the single source of truth.
+    pub fn sanitize(&mut self, manifest: Manifest) {
+        self.deps
+            .as_mut()
+            .retain(|k, _| manifest.deps.contains_key(k));
     }
 }

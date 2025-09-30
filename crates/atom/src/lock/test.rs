@@ -6,6 +6,7 @@ use super::*;
 fn parse_lock() -> anyhow::Result<()> {
     let lock_str = r#"
 version = 1
+mode = "shallow"
 
 [[deps]]
 type = "atom"
@@ -57,14 +58,14 @@ url = "https://github.com/microvm-nix/microvm.nix/archive/80bddbd51fda2c71d83449
 hash = "sha256:0lkjn8q6p0c18acj43pj1cbiyixnf98wvkbgppr5vz73qkypii2g"
 path = "nixos-modules/host"
 
-[[srcs]]
+[[deps]]
 name = "registry"
 url = "https://raw.githubusercontent.com/NixOS/flake-registry/refs/heads/master/flake-registry.json"
 type = "build"
 hash = "sha256-hClMprWwiEQe7mUUToXZAR5wbhoVFi+UuqLL2K/eIPw="
 "#;
 
-    let lock: Result<Lockfile, _> = from_str(lock_str);
+    let _lock: Lockfile = from_str(lock_str)?;
 
     let invalid_lock_str = r#"
 version = 1
@@ -78,7 +79,6 @@ from = "nix"
 "#;
 
     let invalid: Result<Lockfile, _> = from_str(invalid_lock_str);
-    assert!(lock.is_ok());
     assert!(invalid.is_err());
 
     Ok(())

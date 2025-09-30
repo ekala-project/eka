@@ -48,7 +48,7 @@ impl MockAtom for gix::Repository {
                 version: Version::from_str(version)?,
                 description: (!description.is_empty()).then_some(description.into()),
             },
-            deps: None,
+            deps: Default::default(),
         };
 
         let buf = ser::to_string_pretty(&manifest)?;

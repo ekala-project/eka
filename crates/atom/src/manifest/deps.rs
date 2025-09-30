@@ -47,7 +47,6 @@
 //! All dependency types use `#[serde(deny_unknown_fields)]` to ensure strict
 //! validation and prevent typos in manifest files. Optional fields are properly
 //! handled with `skip_serializing_if` to keep the TOML output clean.
-use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::path::PathBuf;
 
@@ -59,7 +58,6 @@ use url::Url;
 
 use crate::Manifest;
 use crate::id::AtomTag;
-use crate::lock::AtomLocation;
 
 /// Newtype wrapper to tie DocumentMut to a specific serializable type T.
 pub struct TypedDocument<T> {
@@ -79,16 +77,14 @@ trait WriteDeps<T: Serialize> {
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
 /// The dependencies specified in the manifest
-pub struct Dependency {
+#[serde(untagged)]
+pub enum Dependency {
     /// An atom dependency variant.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    atoms: Option<HashMap<AtomTag, AtomReq>>,
+    Atom(AtomReq),
     /// A direct pin to an external source variant.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pins: Option<HashMap<String, PinReq>>,
+    Pin(PinReq),
     /// A dependency fetched at build-time as an FOD.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    srcs: Option<HashMap<String, SrcReq>>,
+    Src(SrcReq),
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -101,8 +97,7 @@ pub struct AtomReq {
     /// The semantic version request specification of the atom.
     version: VersionReq,
     /// The location of the atom, whether local or remote.
-    #[serde(flatten)]
-    locale: AtomLocation,
+    store: Url,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -119,19 +114,49 @@ pub enum PinType {
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+#[serde(untagged)]
+/// Represents the two types of direct pins.
+pub enum DirectPin {
+    /// A simple pin, with an optional unpack field.
+    Straight(Pin),
+    /// A git pin, with a ref or version.
+    Git(GitPin),
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
 #[serde(deny_unknown_fields)]
-/// Represents a direct pin to an external source.
+/// Represents a simple pin, with an optional unpack field.
+pub struct Pin {
+    /// The url of the pin.
+    pub pin: Url,
+    /// Whether or not to unpack the pin.
+    #[serde(skip_serializing_if = "not")]
+    pub unpack: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+#[serde(deny_unknown_fields)]
+/// Represents a direct git pin to an external source.
 ///
-/// This struct is used when a dependency is pinned directly to a URL,
-/// such as a Git repository, tarball, or other external source.
-pub struct DirectPin {
+/// This struct is used when a dependency is pinned directly to a Git repository.
+pub struct GitPin {
     /// The URL of the source.
-    pub url: Url,
+    pub repo: Url,
+    /// The strategy used to fetch the resource, by version (resolving version tags), or by
+    /// straight ref
+    #[serde(flatten)]
+    pub fetch: GitStrat,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+/// Represents the two types of git fetch strategies.
+pub enum GitStrat {
+    #[serde(rename = "ref")]
     /// The refspec (e.g. branch or tag) of the source (for git-type pins).
-    ///
-    /// This field is omitted from serialization if None.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub r#ref: Option<String>,
+    Ref(String),
+    #[serde(rename = "version")]
+    /// The version requirement of the source (for git-type pins).
+    Version(VersionReq),
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -147,7 +172,7 @@ pub struct IndirectPin {
     ///
     /// This field is omitted from serialization if None.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub get: Option<String>,
+    pub set: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -175,7 +200,7 @@ pub struct PinReq {
 #[serde(deny_unknown_fields)]
 pub struct SrcReq {
     /// The URL of the source.
-    pub url: Url,
+    pub src: Url,
 }
 
 impl AtomReq {
@@ -189,10 +214,10 @@ impl AtomReq {
     /// # Returns
     ///
     /// A new `AtomReq` instance with the provided version and location.
-    pub fn new(version: VersionReq, locale: AtomLocation, tag: Option<AtomTag>) -> Self {
+    pub fn new(version: VersionReq, store: Url, tag: Option<AtomTag>) -> Self {
         Self {
             version,
-            locale,
+            store,
             tag,
         }
     }
@@ -212,14 +237,17 @@ pub enum DocError {
 impl<T: Serialize + DeserializeOwned> TypedDocument<T> {
     /// Constructor: Create from a serializable instance of T.
     /// This enforces that the document comes from serializing T.
-    pub fn new(doc: &str) -> Result<Self, DocError> {
-        let _validate: T = toml_edit::de::from_str(doc)?;
+    pub fn new(doc: &str) -> Result<(Self, T), DocError> {
+        let validated: T = toml_edit::de::from_str(doc)?;
 
         let inner = doc.parse::<DocumentMut>()?;
-        Ok(Self {
-            inner,
-            _marker: PhantomData,
-        })
+        Ok((
+            Self {
+                inner,
+                _marker: PhantomData,
+            },
+            validated,
+        ))
     }
 }
 
@@ -250,21 +278,15 @@ impl WriteDeps<Manifest> for AtomReq {
             doc["deps"] = toml_edit::table();
         }
 
-        let pos = doc.len();
         let deps = doc["deps"].as_table_mut().unwrap();
         deps.set_implicit(true);
-        deps.set_position(pos + 1);
+        deps.set_position(deps.len() + 1);
 
-        if !deps.contains_table("atoms") {
-            deps["atoms"] = toml_edit::table();
-        }
-
-        let pos = deps.len();
-        let atoms = doc["deps"]["atoms"].as_table_mut().unwrap();
-        atoms.set_implicit(true);
-        atoms.set_position(pos + 1);
-
-        doc["deps"]["atoms"][key] = toml_edit::Item::Table(atom_table);
+        doc["deps"][key] = toml_edit::Item::Table(atom_table);
         Ok(())
     }
+}
+
+fn not(b: &bool) -> bool {
+    !b
 }

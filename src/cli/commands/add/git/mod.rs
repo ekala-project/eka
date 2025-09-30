@@ -1,10 +1,10 @@
 use anyhow::{Result, anyhow};
 use atom::id::Name;
-use atom::lock::AtomDep;
+use atom::lock::{AtomDep, AtomLocation, Dep};
 use atom::manifest::deps::{AtomReq, TypedDocument};
 use atom::store::{QueryVersion, git};
 use atom::uri::{AliasedUrl, Uri, UriOrUrl};
-use atom::{AtomId, Manifest};
+use atom::{AtomId, Lockfile, Manifest};
 use clap::Parser;
 use semver::VersionReq;
 
@@ -17,17 +17,26 @@ pub(super) struct GitArgs {
     pub(super) remote: String,
 }
 
-pub(super) fn run(doc: &mut TypedDocument<Manifest>, args: Args) -> Result<()> {
+pub(super) fn run(
+    doc: &mut TypedDocument<Manifest>,
+    lock: &mut Lockfile,
+    args: Args,
+) -> Result<()> {
     for uri in args.uri {
         match uri {
-            (UriOrUrl::Atom(uri), key) => process_uri(uri, key, doc)?,
+            (UriOrUrl::Atom(uri), key) => process_uri(uri, key, doc, lock)?,
             (UriOrUrl::Pin(aliased_url), _) => process_url(aliased_url, doc)?,
         }
     }
     Ok(())
 }
 
-fn process_uri(uri: Uri, key: Option<Name>, doc: &mut TypedDocument<Manifest>) -> Result<()> {
+fn process_uri(
+    uri: Uri,
+    key: Option<Name>,
+    doc: &mut TypedDocument<Manifest>,
+    lock: &mut Lockfile,
+) -> Result<()> {
     let tag = uri.tag();
     let maybe_version = uri.version();
     let url = uri.url();
@@ -45,8 +54,7 @@ fn process_uri(uri: Uri, key: Option<Name>, doc: &mut TypedDocument<Manifest>) -
         let id = AtomId::construct(&atoms, tag.to_owned())?;
         if let Some((version, object)) = maybe_atom {
             let url_str = url.to_string();
-            let location = atom::lock::AtomLocation::Url(url_str.parse()?);
-            let req = if let Some(v) = maybe_version {
+            let ver_req = if let Some(v) = maybe_version {
                 v
             } else {
                 &VersionReq::parse(&version.to_string())?
@@ -57,25 +65,30 @@ fn process_uri(uri: Uri, key: Option<Name>, doc: &mut TypedDocument<Manifest>) -
                 tag.to_owned()
             };
             let atom: AtomReq = AtomReq::new(
-                req.to_owned(),
-                location.to_owned(),
+                ver_req.to_owned(),
+                url_str.parse()?,
                 (&key != tag).then(|| tag.to_owned()),
             );
             // TODO: handle locking
-            let _lock: AtomDep = AtomDep {
+            let lock_entry: AtomDep = AtomDep {
                 name: (&key != tag).then(|| key.to_owned()),
                 tag: tag.to_owned(),
                 id: id.into(),
                 version,
                 rev: object.into(),
-                location: Some(location),
+                location: Some(AtomLocation::Url(url_str.parse()?)),
             };
 
+            if lock
+                .deps
+                .as_mut()
+                .insert(key.to_owned(), Dep::Atom(lock_entry))
+                .is_some()
+            {
+                tracing::warn!("updating `{}`", key);
+            }
+
             doc.write_atom_dep(key.as_str(), &atom)?;
-            println!(
-                "lock: (currently not saved)\n {}",
-                toml_edit::ser::to_string_pretty(&_lock)?
-            );
         } else {
             return Err(anyhow!("No atom `{}` matching `{}` at `{}`", tag, req, url));
         };

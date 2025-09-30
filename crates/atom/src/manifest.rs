@@ -60,6 +60,7 @@
 //! ```
 
 pub mod deps;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::str::FromStr;
 
@@ -88,6 +89,7 @@ pub enum AtomError {
 }
 
 type AtomResult<T> = Result<T, AtomError>;
+use crate::id::Name;
 
 /// The type representing the required fields of an Atom's manifest.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
@@ -96,8 +98,8 @@ pub struct Manifest {
     /// The required \[atom] key of the TOML manifest.
     pub atom: Atom,
     /// The dependencies of the Atom.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub deps: Option<deps::Dependency>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub deps: HashMap<Name, deps::Dependency>,
 }
 
 impl Manifest {
@@ -109,7 +111,7 @@ impl Manifest {
                 version,
                 description,
             },
-            deps: None,
+            deps: HashMap::new(),
         }
     }
 
