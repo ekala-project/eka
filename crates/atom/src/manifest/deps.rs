@@ -50,6 +50,9 @@
 use std::marker::PhantomData;
 use std::path::PathBuf;
 
+use bstr::ByteSlice;
+#[cfg(feature = "git")]
+use gix::url as gix_url;
 use semver::VersionReq;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -97,7 +100,8 @@ pub struct AtomReq {
     /// The semantic version request specification of the atom.
     version: VersionReq,
     /// The location of the atom, whether local or remote.
-    store: Url,
+    #[serde(serialize_with = "serialize_url", deserialize_with = "deserialize_url")]
+    store: gix_url::Url,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -214,12 +218,32 @@ impl AtomReq {
     /// # Returns
     ///
     /// A new `AtomReq` instance with the provided version and location.
-    pub fn new(version: VersionReq, store: Url, tag: Option<AtomTag>) -> Self {
+    pub fn new(version: VersionReq, store: gix_url::Url, tag: Option<AtomTag>) -> Self {
         Self {
             version,
             store,
             tag,
         }
+    }
+
+    /// return a reference to the version
+    pub fn version(&self) -> &VersionReq {
+        &self.version
+    }
+
+    /// set the version to a new value
+    pub fn set_version(&mut self, version: VersionReq) {
+        self.version = version
+    }
+
+    /// return a reference to the store location
+    pub fn store(&self) -> &gix_url::Url {
+        &self.store
+    }
+
+    /// return a reference to the atom tag
+    pub fn tag(&self) -> Option<&AtomTag> {
+        self.tag.as_ref()
     }
 }
 
@@ -267,6 +291,12 @@ impl TypedDocument<Manifest> {
     }
 }
 
+impl AsMut<AtomReq> for AtomReq {
+    fn as_mut(&mut self) -> &mut AtomReq {
+        self
+    }
+}
+
 impl WriteDeps<Manifest> for AtomReq {
     type Error = toml_edit::ser::Error;
 
@@ -289,4 +319,23 @@ impl WriteDeps<Manifest> for AtomReq {
 
 fn not(b: &bool) -> bool {
     !b
+}
+
+use serde::{Deserializer, Serializer};
+pub(crate) fn serialize_url<S>(url: &gix_url::Url, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    let str = url.to_string();
+    serializer.serialize_str(&str)
+}
+
+pub(crate) fn deserialize_url<'de, D>(deserializer: D) -> Result<gix_url::Url, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use bstr::BString;
+    let name = BString::deserialize(deserializer)?;
+    gix_url::parse(name.as_bstr())
+        .map_err(|e| <D::Error as serde::de::Error>::custom(e.to_string()))
 }

@@ -6,7 +6,6 @@ use super::*;
 fn parse_lock() -> anyhow::Result<()> {
     let lock_str = r#"
 version = 1
-mode = "shallow"
 
 [[deps]]
 type = "atom"
@@ -14,6 +13,7 @@ tag = "nix"
 id = "36e2c6c52d4b3b10983d79367aeef03b0f47578ade287b08e89f68b647af26a3" # currently not validated
 version = "0.1.2"
 rev = "bca8295431846ed43bdbe9d95a8b8958785245e6"
+path = "."
 
 [[deps]]
 type = "atom"

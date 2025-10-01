@@ -512,7 +512,7 @@ impl<'a> UrlRef<'a> {
             ?resolved
         );
 
-        let alternate_form = scheme == Scheme::File || scheme == Scheme::Ssh;
+        let alternate_form = scheme == Scheme::File;
         let port = if scheme == Scheme::Ssh {
             tracing::warn!(
                 port,

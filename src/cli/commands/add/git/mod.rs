@@ -1,10 +1,10 @@
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use atom::id::Name;
-use atom::lock::{AtomDep, AtomLocation, Dep};
+use atom::lock::Dep;
 use atom::manifest::deps::{AtomReq, TypedDocument};
-use atom::store::{QueryVersion, git};
+use atom::store::git;
 use atom::uri::{AliasedUrl, Uri, UriOrUrl};
-use atom::{AtomId, Lockfile, Manifest};
+use atom::{Lockfile, Manifest};
 use clap::Parser;
 use semver::VersionReq;
 
@@ -22,11 +22,9 @@ pub(super) fn run(
     lock: &mut Lockfile,
     args: Args,
 ) -> Result<()> {
-    for uri in args.uri {
-        match uri {
-            (UriOrUrl::Atom(uri), key) => process_uri(uri, key, doc, lock)?,
-            (UriOrUrl::Pin(aliased_url), _) => process_url(aliased_url, doc)?,
-        }
+    match args.uri {
+        UriOrUrl::Atom(uri) => process_uri(uri, args.key, doc, lock)?,
+        UriOrUrl::Pin(aliased_url) => process_url(aliased_url, doc)?,
     }
     Ok(())
 }
@@ -44,54 +42,37 @@ fn process_uri(
     let req = if let Some(v) = maybe_version {
         v
     } else {
-        &VersionReq::parse("*")?
+        &VersionReq::STAR
+    };
+
+    let key = if let Some(key) = key {
+        key
+    } else {
+        tag.to_owned()
     };
 
     if let Some(url) = url {
-        let atoms = url.get_atoms(None)?;
-        let maybe_atom =
-            <gix::Url as QueryVersion<_, _, _, _>>::process_highest_match(atoms.clone(), tag, req);
-        let id = AtomId::construct(&atoms, tag.to_owned())?;
-        if let Some((version, object)) = maybe_atom {
-            let url_str = url.to_string();
-            let ver_req = if let Some(v) = maybe_version {
-                v
-            } else {
-                &VersionReq::parse(&version.to_string())?
-            };
-            let key = if let Some(key) = key {
-                key
-            } else {
-                tag.to_owned()
-            };
-            let atom: AtomReq = AtomReq::new(
-                ver_req.to_owned(),
-                url_str.parse()?,
-                (&key != tag).then(|| tag.to_owned()),
-            );
-            // TODO: handle locking
-            let lock_entry: AtomDep = AtomDep {
-                name: (&key != tag).then(|| key.to_owned()),
-                tag: tag.to_owned(),
-                id: id.into(),
-                version,
-                rev: object.into(),
-                location: Some(AtomLocation::Url(url_str.parse()?)),
-            };
+        let mut atom: AtomReq = AtomReq::new(
+            req.to_owned(),
+            url.to_owned(),
+            (&key != tag).then(|| tag.to_owned()),
+        );
+        let lock_entry = atom.resolve(&key)?;
 
-            if lock
-                .deps
-                .as_mut()
-                .insert(key.to_owned(), Dep::Atom(lock_entry))
-                .is_some()
-            {
-                tracing::warn!("updating `{}`", key);
-            }
-
-            doc.write_atom_dep(key.as_str(), &atom)?;
-        } else {
-            return Err(anyhow!("No atom `{}` matching `{}` at `{}`", tag, req, url));
+        if maybe_version.is_none() {
+            let version = VersionReq::parse(lock_entry.version.to_string().as_str())?;
+            atom.set_version(version);
         };
+
+        doc.write_atom_dep(key.as_str(), &atom)?;
+        if lock
+            .deps
+            .as_mut()
+            .insert(key.to_owned(), Dep::Atom(lock_entry))
+            .is_some()
+        {
+            tracing::warn!("updating lock entry for `{}`", key);
+        }
     } else {
         // search locally for atom tag
         todo!()

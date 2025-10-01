@@ -1,5 +1,6 @@
 ---
 source: crates/atom/src/uri/tests/mod.rs
+assertion_line: 46
 expression: results?
 ---
 [
@@ -111,7 +112,7 @@ expression: results?
                 host: Some(
                     "github.com",
                 ),
-                serialize_alternative_form: true,
+                serialize_alternative_form: false,
                 port: None,
                 path: "/owner/repo",
             },
@@ -144,7 +145,7 @@ expression: results?
                 host: Some(
                     "github.com",
                 ),
-                serialize_alternative_form: true,
+                serialize_alternative_form: false,
                 port: None,
                 path: "/owner/repo",
             },
@@ -303,7 +304,7 @@ expression: results?
                 host: Some(
                     "github.com",
                 ),
-                serialize_alternative_form: true,
+                serialize_alternative_form: false,
                 port: None,
                 path: "/owner/repo",
             },
@@ -441,7 +442,7 @@ expression: results?
                 host: Some(
                     "example.com",
                 ),
-                serialize_alternative_form: true,
+                serialize_alternative_form: false,
                 port: None,
                 path: "/my/repo",
             },
@@ -570,7 +571,7 @@ expression: results?
                 host: Some(
                     "my.ssh.com",
                 ),
-                serialize_alternative_form: true,
+                serialize_alternative_form: false,
                 port: None,
                 path: "/my/repo",
             },

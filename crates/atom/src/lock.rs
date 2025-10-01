@@ -59,6 +59,8 @@ use std::path::PathBuf;
 
 #[cfg(feature = "git")]
 use gix::ObjectId;
+#[cfg(feature = "git")]
+use gix::url as gix_url;
 use nix_compat::nixhash::NixHash;
 use semver::Version;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -69,6 +71,8 @@ mod test;
 
 use crate::Manifest;
 use crate::id::AtomTag;
+use crate::manifest::deps::AtomReq;
+use crate::store::QueryVersion;
 
 /// A wrapper around NixHash to provide custom serialization behavior.
 #[derive(Debug, PartialEq, PartialOrd, Eq, Clone, Serialize)]
@@ -92,6 +96,7 @@ pub enum LockDigest {
     Blake3(#[serde(with = "serde_base32")] [u8; 32]),
 }
 
+use crate::manifest::deps::{deserialize_url, serialize_url};
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Eq)]
 /// Represents the location of an atom, either as a URL or a relative path.
 ///
@@ -102,8 +107,12 @@ pub enum AtomLocation {
     ///
     /// When this variant is used, the atom will be fetched from the specified
     /// Git repository URL. If not provided, defaults to the current repository.
-    #[serde(rename = "url")]
-    Url(Url),
+    #[serde(
+        rename = "url",
+        serialize_with = "serialize_url",
+        deserialize_with = "deserialize_url"
+    )]
+    Url(gix_url::Url),
     /// A relative path within the repository where the atom is located.
     ///
     /// When this variant is used, the atom is located at the specified path
@@ -124,19 +133,18 @@ use crate::store::git::Root;
 /// fetch a specific version of an atom from a Git repository.
 #[serde(deny_unknown_fields)]
 pub struct AtomDep {
+    /// than the tag The unique identifier of the atom.
+    pub tag: AtomTag,
     /// The name corresponding to the atom in the manifest at `deps.atoms.<name>`, if diffferent
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<Name>,
-    /// than the tag The unique identifier of the atom.
-    pub tag: AtomTag,
     /// The semantic version of the atom.
     pub version: Version,
     /// The location of the atom, whether local or remote.
     ///
     /// This field is flattened in the TOML serialization and omitted if None.
     #[serde(flatten)]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub location: Option<AtomLocation>,
+    pub location: AtomLocation,
     /// The resolved Git revision (commit hash) for verification.
     pub rev: LockDigest,
     /// than cryptographic identity of the atom.
@@ -307,13 +315,6 @@ pub struct Lockfile {
     /// This field allows for future evolution of the lockfile format while
     /// maintaining backward compatibility.
     pub version: u8,
-    /// The mode of dependency resolution.
-    ///
-    /// Valid values are are:
-    /// * shallow: every atom manages only it's own direct dependencies
-    /// * deep (not implemented): a minimal set of dependencies is derived from all transitive
-    ///   dependencies
-    pub mode: ResolutionMode,
     /// The list of locked dependencies (absent or empty if none).
     ///
     /// This field contains all the resolved dependencies with their exact
@@ -411,7 +412,6 @@ impl Default for Lockfile {
     fn default() -> Self {
         Self {
             version: 1,
-            mode: ResolutionMode::Shallow,
             deps: Default::default(),
         }
     }
@@ -495,9 +495,100 @@ impl<T> Default for DepMap<T> {
 impl Lockfile {
     /// Retain only those entries which are present in the manifest, maintaining the manifest file
     /// as the single source of truth.
-    pub fn sanitize(&mut self, manifest: Manifest) {
+    pub fn sanitize(&mut self, manifest: &Manifest) {
         self.deps
             .as_mut()
             .retain(|k, _| manifest.deps.contains_key(k));
+        self.synchronize(manifest);
+    }
+
+    /// For any key found in the manifest but not in the lock, resolve it, for every other key,
+    /// ensure the version specs still align with the remote.
+    pub fn synchronize(&mut self, manifest: &Manifest) {
+        for (k, v) in manifest.deps.iter() {
+            if !self.deps.as_ref().contains_key(k) {
+                match v {
+                    crate::manifest::deps::Dependency::Atom(atom_req) => {
+                        if let Ok(dep) = atom_req.resolve(k) {
+                            self.deps.as_mut().insert(k.to_owned(), Dep::Atom(dep));
+                        } else {
+                            tracing::warn!(message = "unlocked dependency could not be resolved", key = %k);
+                        };
+                    },
+                    crate::manifest::deps::Dependency::Pin(_) => todo!(),
+                    crate::manifest::deps::Dependency::Src(_) => todo!(),
+                }
+            } else {
+                match v {
+                    crate::manifest::deps::Dependency::Atom(atom_req) => {
+                        let req = atom_req.version();
+                        if let Some(Dep::Atom(dep)) = self.deps.as_ref().get(k) {
+                            if !req.matches(&dep.version) {
+                                tracing::warn!(message = "updating out of date dependency in accordance with spec", key = %k);
+                                if let Ok(dep) = atom_req.resolve(k) {
+                                    self.deps.as_mut().insert(k.to_owned(), Dep::Atom(dep));
+                                } else {
+                                    tracing::warn!(message = "out of sync dependency could not be resolved, check the version spec", key = %k);
+                                };
+                            }
+                        } else if let Ok(dep) = atom_req.resolve(k) {
+                            self.deps.as_mut().insert(k.to_owned(), Dep::Atom(dep));
+                        } else {
+                            tracing::warn!(message = "dependency is mislabeled as inproper type, and attempts to rectify failed", key = %k);
+                        };
+                    },
+                    crate::manifest::deps::Dependency::Pin(_) => todo!(),
+                    crate::manifest::deps::Dependency::Src(_) => todo!(),
+                }
+            }
+        }
+    }
+}
+
+impl AtomReq {
+    /// Here it is assumed that, if the AtomTag has a value for it's tag field, that the passed key
+    /// will diverge from it, as the manifest only encodes the tag if the TOML key != tag.
+    ///
+    /// Failure condition: if the passed key diverges from the atom's intended tag, and the tag
+    /// field is `None`, then the resulting atom will be incorrectly tagged with the keys name,
+    /// likely resulting in a resolution failure, or resolving the wrong dependency.
+    ///
+    /// For this reason, we only call this function in a context where the key and tag are both
+    /// known and can be compared.
+    pub fn resolve(&self, key: &AtomTag) -> Result<AtomDep, crate::store::git::Error> {
+        let url = self.store();
+
+        let atoms = url.get_atoms(None)?;
+        let tag = if let Some(tag) = self.tag() {
+            tag.to_owned()
+        } else {
+            // TODO: see if we can find a way to avoid incorrectly encoding the wrong tag here if
+            // the wrong key is passed. Perhaps a non-serialized field which unconditionally stores
+            // the `AtomId`, to remain unambiguous?
+            key.to_owned()
+        };
+        let (version, oid) = <gix::Url as QueryVersion<_, _, _, _>>::process_highest_match(
+            atoms.clone(),
+            &tag,
+            self.version(),
+        )
+        .ok_or(crate::store::git::Error::NoMatchingVersion)?;
+        let name = (key != &tag).then_some(key.to_owned());
+        let id = AtomId::construct(&atoms, tag.to_owned())?;
+
+        Ok(AtomDep {
+            tag: tag.to_owned(),
+            name,
+            version,
+            location: if let gix::url::Scheme::File = url.scheme {
+                AtomLocation::Path(url.path.to_string().into())
+            } else {
+                AtomLocation::Url(url.to_owned())
+            },
+            rev: match oid {
+                ObjectId::Sha1(bytes) => LockDigest::Sha1(bytes),
+            },
+            id: id.into(),
+        })
     }
 }

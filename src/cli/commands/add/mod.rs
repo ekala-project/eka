@@ -20,11 +20,13 @@ pub struct Args {
     /// The path to the atom to modify
     #[clap(long, short, default_value = ".")]
     path: PathBuf,
-    #[clap(value_parser = split_names)]
     /// The atom uri or URL to add as a dependency. The TOML key inserted into the dependency
-    /// table can be renamed from the default by passing a name after a `,`, e.g.
-    /// `gh:owner/repo::my-atom,key_name`, `https://example.com/repo,key_name`
-    uri: Vec<(UriOrUrl, Option<Name>)>,
+    /// `gh:owner/repo::my-atom`, `https://example.com/repo`.
+    uri: UriOrUrl,
+    /// The TOML key inserted into the dependency, serving as the name of the dependency in the
+    /// source. Useful for avoiding conflicts (e.g. two different atoms with the same tag).
+    #[clap(long, short)]
+    key: Option<Name>,
     #[command(flatten)]
     store: StoreArgs,
 }
@@ -54,7 +56,7 @@ pub(super) fn run(args: Args) -> Result<()> {
         Lockfile::default()
     };
     let owned_path = path.to_owned();
-    lock.sanitize(manifest);
+    lock.sanitize(&manifest);
 
     #[cfg(feature = "git")]
     git::run(&mut doc, &mut lock, args)?;
@@ -73,14 +75,4 @@ pub(super) fn run(args: Args) -> Result<()> {
     tmp_lock.persist(lock_path)?;
 
     Ok(())
-}
-
-fn split_names(uri: &str) -> Result<(UriOrUrl, Option<Name>), atom::uri::UriError> {
-    let (url, name) = if let Some((url, name)) = uri.rsplit_once(',') {
-        (url, Some(name.parse()?))
-    } else {
-        (uri, None)
-    };
-
-    Ok((url.parse()?, name))
 }

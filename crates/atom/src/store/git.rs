@@ -40,6 +40,9 @@ pub enum Error {
     /// The calculated root does not match what was reported by the remote.
     #[error("The calculated root does not match the reported one")]
     RootInconsistent,
+    /// The requested version is not contained on the remote.
+    #[error("The version requested does not exist on the remote")]
+    NoMatchingVersion,
     /// A transparent wrapper for a [`gix::revision::walk::Error`]
     #[error(transparent)]
     WalkFailure(#[from] gix::revision::walk::Error),
@@ -81,13 +84,16 @@ pub enum Error {
     File(#[from] gix::config::file::init::from_paths::Error),
     /// A transparent wrapper for a [`gix::protocol::handshake::Error`]
     #[error(transparent)]
-    Handshake(#[from] gix::protocol::handshake::Error),
+    Handshake(#[from] Box<gix::protocol::handshake::Error>),
     /// A transparent wrapper for a [`gix::refspec::parse::Error`]
     #[error(transparent)]
     Refspec(#[from] gix::refspec::parse::Error),
     /// A transparent wrapper for a [`gix::refspec::parse::Error`]
     #[error(transparent)]
     Refmap(#[from] gix::protocol::fetch::refmap::init::Error),
+    /// A transparent wrapper for a [`gix::refspec::parse::Error`]
+    #[error(transparent)]
+    UrlParse(#[from] gix::url::parse::Error),
 }
 
 impl Error {
@@ -473,7 +479,8 @@ impl super::QueryStore<Ref, Box<dyn Transport + Send>> for gix::Url {
             authenticate,
             Vec::new(),
             &mut prodash::progress::Discard,
-        )?;
+        )
+        .map_err(Box::new)?;
 
         use gix::refspec::parse::Operation;
         let refs: Vec<_> = targets
@@ -556,7 +563,7 @@ impl<'repo> super::QueryStore<Ref, Box<dyn Transport + Send>> for gix::Remote<'r
         references: impl IntoIterator<Item = Spec>,
         transport: Option<&mut Box<dyn Transport + Send>>,
     ) -> std::result::Result<
-        impl std::iter::IntoIterator<Item = Ref>,
+        impl IntoIterator<Item = Ref>,
         <Self as super::QueryStore<Ref, Box<dyn Transport + Send>>>::Error,
     >
     where
