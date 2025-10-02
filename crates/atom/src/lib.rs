@@ -81,6 +81,7 @@ use std::sync::LazyLock;
 pub use id::{AtomId, AtomTag, Compute, Origin};
 pub use lock::{Lockfile, ResolutionMode};
 pub use manifest::Manifest;
+pub use manifest::deps::ManifestWriter;
 
 const TOML: &str = "toml";
 const LOCK: &str = "lock";

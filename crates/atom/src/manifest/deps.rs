@@ -58,11 +58,18 @@ use serde::{Deserialize, Serialize};
 use toml_edit::DocumentMut;
 use url::Url;
 
-use crate::Manifest;
 use crate::id::AtomTag;
+use crate::{Lockfile, Manifest};
+
+/// A Writer struct to ensure modifications to the manifest and lock stay in sync
+pub struct ManifestWriter {
+    path: PathBuf,
+    doc: TypedDocument<Manifest>,
+    lock: Lockfile,
+}
 
 /// Newtype wrapper to tie DocumentMut to a specific serializable type T.
-pub struct TypedDocument<T> {
+struct TypedDocument<T> {
     /// The actual document we want associated with our type
     inner: DocumentMut,
     _marker: PhantomData<T>,
@@ -249,12 +256,30 @@ impl AtomReq {
 #[derive(thiserror::Error, Debug)]
 /// transparent errors for TypedDocument
 pub enum DocError {
+    /// The manifest path access.
+    #[error("the atom directory disappeared or is inaccessible: {0}")]
+    Missing(PathBuf),
     /// Toml deserialization errors
     #[error(transparent)]
     De(#[from] toml_edit::de::Error),
     /// Toml error
     #[error(transparent)]
     Ser(#[from] toml_edit::TomlError),
+    /// Filesystem error
+    #[error(transparent)]
+    Read(#[from] std::io::Error),
+    /// Serialization error
+    #[error(transparent)]
+    Manifest(#[from] toml_edit::ser::Error),
+    /// Serialization error
+    #[error(transparent)]
+    Write(#[from] tempfile::PersistError),
+    /// Git resolution error
+    #[error(transparent)]
+    Git(#[from] Box<crate::store::git::Error>),
+    /// Version resolution error
+    #[error(transparent)]
+    Semver(#[from] semver::Error),
 }
 
 impl<T: Serialize + DeserializeOwned> TypedDocument<T> {
@@ -337,4 +362,111 @@ where
     let name = BString::deserialize(deserializer)?;
     gix_url::parse(name.as_bstr())
         .map_err(|e| <D::Error as serde::de::Error>::custom(e.to_string()))
+}
+
+use std::path::Path;
+
+use crate::id::Name;
+use crate::uri::Uri;
+impl ManifestWriter {
+    /// Construct a new instance of a manifest writer ensuring all the constraints necessary to keep
+    /// the lock and manifest in sync are respected.
+    pub fn new(path: &Path) -> Result<Self, DocError> {
+        use std::ffi::OsStr;
+        use std::fs;
+        let path = if path.file_name() == Some(OsStr::new(crate::MANIFEST_NAME.as_str())) {
+            path.into()
+        } else {
+            path.join(crate::MANIFEST_NAME.as_str())
+        };
+        let lock_path = path.with_file_name(crate::LOCK_NAME.as_str());
+        let toml_str = fs::read_to_string(&path).inspect_err(|_| {
+            tracing::error!(message = "No atom exists", path = %path.display());
+        })?;
+        let (doc, manifest) = TypedDocument::new(&toml_str)?;
+
+        let mut lock = if let Ok(lock_str) = fs::read_to_string(&lock_path) {
+            toml_edit::de::from_str(&lock_str)?
+        } else {
+            Lockfile::default()
+        };
+        lock.sanitize(&manifest);
+
+        Ok(ManifestWriter { doc, lock, path })
+    }
+
+    /// After processing all changes, write the changes to the manifest and lock to disk. This
+    /// method should be called last, after processing any requested changes.
+    pub fn write_atomic(&mut self) -> Result<(), DocError> {
+        use std::io::Write;
+
+        use tempfile::NamedTempFile;
+
+        let dir = self
+            .path
+            .parent()
+            .ok_or(DocError::Missing(self.path.clone()))?;
+        let lock_path = self.path.with_file_name(crate::LOCK_NAME.as_str());
+        let mut tmp =
+            NamedTempFile::with_prefix_in(format!(".{}", crate::MANIFEST_NAME.as_str()), dir)?;
+        let mut tmp_lock =
+            NamedTempFile::with_prefix_in(format!(".{}", crate::LOCK_NAME.as_str()), dir)?;
+        tmp.write_all(self.doc.as_mut().to_string().as_bytes())?;
+        tmp_lock.write_all(toml_edit::ser::to_string_pretty(&self.lock)?.as_bytes())?;
+        tmp.persist(&self.path)?;
+        tmp_lock.persist(lock_path)?;
+        Ok(())
+    }
+
+    /// Function to add a user requested atom uri to the manifest and lock files, ensuring they
+    /// remain in sync.
+    pub fn add_uri(&mut self, uri: Uri, key: Option<Name>) -> Result<(), DocError> {
+        use crate::lock::Dep;
+
+        let tag = uri.tag();
+        let maybe_version = uri.version();
+        let url = uri.url();
+
+        let req = if let Some(v) = maybe_version {
+            v
+        } else {
+            &VersionReq::STAR
+        };
+
+        let key = if let Some(key) = key {
+            key
+        } else {
+            tag.to_owned()
+        };
+
+        if let Some(url) = url {
+            let mut atom: AtomReq = AtomReq::new(
+                req.to_owned(),
+                url.to_owned(),
+                (&key != tag).then(|| tag.to_owned()),
+            );
+            let lock_entry = atom.resolve(&key).map_err(Box::new)?;
+
+            if maybe_version.is_none() {
+                let version = VersionReq::parse(lock_entry.version.to_string().as_str())?;
+                atom.set_version(version);
+            };
+
+            self.doc.write_atom_dep(key.as_str(), &atom)?;
+            if self
+                .lock
+                .deps
+                .as_mut()
+                .insert(key.to_owned(), Dep::Atom(lock_entry))
+                .is_some()
+            {
+                tracing::warn!("updating lock entry for `{}`", key);
+            }
+        } else {
+            // search locally for atom tag
+            todo!()
+        }
+
+        Ok(())
+    }
 }
