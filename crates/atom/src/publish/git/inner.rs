@@ -6,14 +6,16 @@ use gix::actor::Signature;
 use gix::diff::object::Commit as AtomCommit;
 use gix::object::tree::Entry;
 use gix::objs::WriteTo;
-use gix::objs::tree::Entry as AtomEntry;
-use gix::worktree::object::Tree as AtomTree;
+use gix::protocol::transport::client::Transport;
 use gix::{ObjectId, Reference};
+use tracing_indicatif::span_ext::IndicatifSpanExt;
 
 use super::{AtomContext, AtomRef, GitContext, GitResult, RefKind};
 use crate::core::AtomPaths;
 use crate::publish::error::git::Error;
-use crate::publish::{ATOM, ATOM_FORMAT_VERSION, ATOM_MANIFEST, ATOM_ORIGIN, EMPTY_SIG};
+use crate::publish::{
+    ATOM_FORMAT_VERSION, ATOM_MANIFEST, ATOM_ORIGIN, ATOM_REFS, EMPTY_SIG, META_REFS,
+};
 use crate::store::git;
 use crate::{Atom, AtomId, Manifest};
 impl<'a> GitContext<'a> {
@@ -29,16 +31,14 @@ impl<'a> GitContext<'a> {
     }
 
     /// Compute the [`ObjectId`] of the given proto-object in memory
-    fn compute_hash(&self, obj: &dyn WriteTo) -> GitResult<ObjectId> {
-        use gix::objs;
-
+    fn _compute_hash(&self, obj: &dyn WriteTo) -> GitResult<ObjectId> {
         let mut buf = Vec::with_capacity(obj.size() as usize);
 
         obj.write_to(&mut buf)?;
 
-        let oid = objs::compute_hash(self.repo.object_hash(), obj.kind(), buf.as_ref());
+        let oid = gix::objs::compute_hash(self.repo.object_hash(), obj.kind(), buf.as_ref());
 
-        Ok(oid)
+        Ok(oid?)
     }
 
     /// Helper function to write an object to the repository
@@ -53,62 +53,68 @@ impl<'a> GitContext<'a> {
     /// This function will return an error if the call to
     /// [`gix::object::tree::Tree::lookup_entry`] fails.
     pub fn tree_search(&self, path: &Path) -> GitResult<Option<Entry<'a>>> {
-        let mut buf = self.buf.borrow_mut();
         let search = path.components().map(|c| c.as_os_str().as_bytes());
-        Ok(self.tree.clone().lookup_entry(search, &mut buf)?)
+        Ok(self.tree.clone().lookup_entry(search)?)
     }
 
     pub(super) fn find_and_verify_atom(
         &self,
         path: &Path,
     ) -> GitResult<(FoundAtom, AtomPaths<PathBuf>)> {
-        use smallvec::smallvec;
         let paths = AtomPaths::new(path);
         let entry = self
             .tree_search(paths.spec())?
             .ok_or(Error::NotAnAtom(path.into()))?;
 
-        if !entry.mode().is_blob() {
+        if !entry.mode().is_blob() || !paths.spec().starts_with(paths.content()) {
             return Err(Error::NotAnAtom(path.into()));
         }
 
-        let lock = self
-            .tree_search(paths.lock())?
-            .and_then(|e| e.mode().is_blob().then_some(e));
+        if paths.content().to_str() == Some("") {
+            return Err(Error::NoRootAtom);
+        }
 
         let content = self
             .tree_search(paths.content())?
-            .and_then(|e| e.mode().is_tree().then_some(e));
+            .and_then(|e| e.mode().is_tree().then_some(e))
+            .ok_or(Error::NotAnAtom(path.into()))?
+            .detach();
+
+        let tree_id = content.oid;
+        let spec_id = entry.id().detach();
 
         self.verify_manifest(&entry.object()?, paths.spec())
             .and_then(|spec| {
-                let id = AtomId::compute(&self.commit, spec.id.clone())?;
+                let id = AtomId::construct(&self.commit, spec.tag.clone()).map_err(Box::new)?;
                 if self.root != *id.root() {
                     return Err(Error::InconsistentRoot {
                         remote: self.root,
                         atom: *id.root(),
                     });
                 };
-                let entries = match (lock, content) {
-                    (None, None) => smallvec![entry],
-                    (None, Some(content)) => smallvec![entry, content],
-                    (Some(lock), None) => smallvec![entry, lock],
-                    (Some(lock), Some(content)) => smallvec![entry, content, lock],
-                };
-                Ok((FoundAtom { spec, id, entries }, paths))
+                Ok((
+                    FoundAtom {
+                        spec,
+                        id,
+                        tree_id,
+                        spec_id,
+                    },
+                    paths,
+                ))
             })
+    }
+
+    /// return a mutable reference to the transport
+    pub fn transport(&mut self) -> &mut Box<dyn Transport + Send> {
+        &mut self.transport
     }
 }
 
 use semver::Version;
 
 impl<'a> AtomRef<'a> {
-    fn new(kind: RefKind, prefix: &'a str, version: &'a Version) -> Self {
-        AtomRef {
-            prefix,
-            kind,
-            version,
-        }
+    fn new(tag: String, kind: RefKind, version: &'a Version) -> Self {
+        AtomRef { tag, kind, version }
     }
 }
 
@@ -117,83 +123,64 @@ use std::fmt;
 impl<'a> fmt::Display for AtomRef<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.kind {
-            RefKind::Content => write!(f, "{}/{}/{}", self.prefix, self.version, ATOM),
-            RefKind::Origin => write!(f, "{}/{}/{}", self.prefix, self.version, ATOM_ORIGIN),
-            RefKind::Spec => write!(f, "{}/{}/{}", self.prefix, self.version, ATOM_MANIFEST),
+            RefKind::Content => {
+                write!(f, "{}/{}/{}", ATOM_REFS.as_str(), self.tag, self.version)
+            },
+            RefKind::Origin => write!(
+                f,
+                "{}/{}/{}/{}",
+                META_REFS.as_str(),
+                self.tag,
+                self.version,
+                ATOM_ORIGIN
+            ),
+            RefKind::Spec => write!(
+                f,
+                "{}/{}/{}/{}",
+                META_REFS.as_str(),
+                self.tag,
+                self.version,
+                ATOM_MANIFEST
+            ),
         }
     }
 }
 
-use super::AtomEntries;
-use crate::publish::MaybeSkipped;
-
 impl<'a> AtomContext<'a> {
-    fn refs(&self, kind: RefKind) -> AtomRef {
-        AtomRef::new(kind, &self.ref_prefix, &self.atom.spec.version)
-    }
-
-    fn ref_exists(&self, tree: &AtomTree, atom_ref: &AtomRef) -> bool {
-        let id = self.git.compute_hash(tree);
-        if let Ok(id) = id {
-            self.git.repo.find_tree(id).is_ok()
-                && self.git.repo.find_reference(&atom_ref.to_string()).is_ok()
-        } else {
-            false
-        }
-    }
-
-    /// Method to write the atom tree object
-    pub(super) fn write_atom_tree(
-        &self,
-        entries: &AtomEntries,
-    ) -> GitResult<MaybeSkipped<AtomTreeId>> {
-        use {Err as Skipped, Ok as Wrote};
-
-        let mut entries: Vec<_> = entries.iter().map(atom_entry).collect();
-
-        //git expects tree entries to be sorted
-        if entries.len() > 1 {
-            entries.sort_unstable();
-        }
-
-        let tree = AtomTree { entries };
-
-        if self.ref_exists(&tree, &self.refs(RefKind::Content)) {
-            return Ok(Skipped(self.atom.spec.id.clone()));
-        }
-
-        let id = self.git.write_object(tree)?;
-        Ok(Wrote(AtomTreeId(id)))
+    pub(super) fn refs(&self, kind: RefKind) -> AtomRef<'_> {
+        AtomRef::new(
+            self.atom.id.tag().to_string(),
+            kind,
+            &self.atom.spec.version,
+        )
     }
 
     /// Method to write atom commits
-    pub(super) fn write_atom_commit(&self, AtomTreeId(id): AtomTreeId) -> GitResult<CommittedAtom> {
+    pub(super) fn write_atom_commit(&self, tree: ObjectId) -> GitResult<CommittedAtom> {
         let sig = Signature {
             email: EMPTY_SIG.into(),
             name: EMPTY_SIG.into(),
             time: gix::date::Time {
                 seconds: 0,
                 offset: 0,
-                sign: gix::date::time::Sign::Plus,
             },
         };
         let commit = AtomCommit {
-            tree: id,
-            parents: smallvec::smallvec![],
+            tree,
+            parents: vec![].into(),
             author: sig.clone(),
             committer: sig,
             encoding: None,
-            message: format!("{}: {}", self.atom.spec.id, self.atom.spec.version).into(),
+            message: format!("{}: {}", self.atom.spec.tag, self.atom.spec.version).into(),
             extra_headers: [
                 (ATOM_ORIGIN.into(), self.git.commit.id.to_string().into()),
                 (
                     "path".into(),
                     self.paths
                         .content()
-                        .parent()
-                        .unwrap_or(Path::new("/"))
-                        .to_string_lossy()
-                        .to_string()
+                        .to_str()
+                        .and_then(|s| if s.is_empty() { None } else { Some(s) })
+                        .unwrap_or("/")
                         .into(),
                 ),
                 ("format".into(), ATOM_FORMAT_VERSION.into()),
@@ -218,12 +205,12 @@ fn write_ref<'a>(
     let AtomContext { atom, git, .. } = atom;
 
     Ok(git.repo.reference(
-        format!("refs/{atom_ref}"),
+        atom_ref.to_string(),
         id,
         PreviousValue::MustNotExist,
         format!(
             "publish: {}: {}-{}",
-            atom.spec.id, atom.spec.version, atom_ref
+            atom.spec.tag, atom.spec.version, atom_ref
         ),
     )?)
 }
@@ -231,24 +218,11 @@ use super::{CommittedAtom, FoundAtom};
 
 impl<'a> CommittedAtom {
     /// Method to write references for the committed atom
-    pub(super) fn write_refs(&'a self, atom: &'a AtomContext) -> GitResult<AtomReferences> {
+    pub(super) fn write_refs(&'a self, atom: &'a AtomContext) -> GitResult<AtomReferences<'a>> {
         let Self { id, .. } = self;
 
         // filter out the content tree
-        let mut entries: Vec<_> = atom
-            .atom
-            .entries
-            .clone()
-            .into_iter()
-            .filter_map(|e| e.mode().is_blob().then_some(atom_entry(&e)))
-            .collect();
-
-        if entries.len() > 1 {
-            entries.sort_unstable();
-        }
-
-        let spec_tree = AtomTree { entries };
-        let spec = atom.git.repo.write_object(spec_tree)?.detach();
+        let spec = atom.atom.spec_id;
         let src = atom.git.commit.id;
 
         Ok(AtomReferences {
@@ -259,7 +233,7 @@ impl<'a> CommittedAtom {
     }
 }
 
-use super::{AtomReferences, AtomTreeId, GitContent};
+use super::{AtomReferences, GitContent};
 
 impl<'a> AtomReferences<'a> {
     /// Publish atom's to the specified git remote
@@ -270,11 +244,24 @@ impl<'a> AtomReferences<'a> {
         let remote = atom.git.remote_str.to_owned();
         let mut tasks = atom.git.push_tasks.borrow_mut();
 
+        tracing::info!(
+            message = "pushing",
+            atom = %atom.atom.id.tag(),
+            remote = %remote
+        );
         for r in [&self.content, &self.spec, &self.origin] {
             let r = r.name().as_bstr().to_string();
             let remote = remote.clone();
+            let parent = tracing::Span::current();
+            let progress = atom.git.progress.clone();
             let task = async move {
+                let _guard = parent.enter();
+                let span = tracing::info_span!("push", msg = %r, %remote);
+                crate::log::set_sub_task(&span, &format!("🚀 push: {}", r));
+                let _enter = span.enter();
                 let result = git::run_git_command(&["push", &remote, format!("{r}:{r}").as_str()])?;
+
+                progress.pb_inc(1);
 
                 Ok(result)
             };
@@ -286,7 +273,6 @@ impl<'a> AtomReferences<'a> {
             content: self.content.detach(),
             origin: self.origin.detach(),
             path: atom.paths.spec().to_path_buf(),
-            ref_prefix: atom.ref_prefix.clone(),
         }
     }
 }
@@ -299,15 +285,6 @@ where
 {
     let mut reader = obj.data.as_slice();
     Ok(f(&mut reader)?)
-}
-
-/// Helper function to create an atom entry from found entries
-fn atom_entry(entry: &Entry) -> AtomEntry {
-    AtomEntry {
-        mode: entry.mode(),
-        filename: entry.filename().into(),
-        oid: entry.object_id(),
-    }
 }
 
 impl CommittedAtom {

@@ -1,4 +1,3 @@
-#[cfg(feature = "git")]
 mod git;
 
 use std::path::PathBuf;
@@ -26,16 +25,14 @@ pub(in super::super) struct PublishArgs {
 #[derive(Parser, Debug)]
 struct StoreArgs {
     #[command(flatten)]
-    #[cfg(feature = "git")]
     git: git::GitArgs,
 }
 
 use publish::Stats;
 pub(super) async fn run(store: Detected, args: PublishArgs) -> Result<Stats, PublishError> {
-    #[cfg_attr(not(feature = "stores"), allow(unused_mut))]
     let mut stats = Stats::default();
+    #[allow(clippy::single_match)]
     match store {
-        #[cfg(feature = "git")]
         Detected::Git(repo) => {
             use atom::publish::{Content, error};
             use {Err as Skipped, Ok as Published};
@@ -46,16 +43,17 @@ pub(super) async fn run(store: Detected, args: PublishArgs) -> Result<Stats, Pub
                     Ok(Published(atom)) => {
                         stats.published += 1;
                         let Content::Git(content) = atom.content();
+                        let name = content.content().name.clone();
                         tracing::info!(
-                            atom.id = %atom.id().id(),
+                            atom.tag = %atom.id().tag(),
                             path = %content.path().display(),
-                            "Atom successfully published"
+                            r#ref = %name,
+                            "success"
                         );
-                        tracing::debug!("published under: {}", content.ref_prefix());
                     },
-                    Ok(Skipped(id)) => {
+                    Ok(Skipped(tag)) => {
                         stats.skipped += 1;
-                        tracing::info!(atom.id = %id, "Skipping existing atom")
+                        tracing::info!(atom.tag = %tag, "Skipping existing atom")
                     },
                     Err(e) => {
                         stats.failed += 1;

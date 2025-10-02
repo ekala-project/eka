@@ -1,20 +1,94 @@
 //! # Atom Publishing
 //!
-//! This module provides the types and logic necessary to efficienctly publish Atoms
-//! to a store implementation. Currently, only a Git store is implemented, but future
-//! work will likely include more alternate backends, e.g. an S3 bucket.
+//! This module provides the types and logic necessary to efficiently publish atoms
+//! to store implementations. The publishing system is designed to be safe, atomic,
+//! and provide detailed feedback about the publishing process.
+//!
+//! ## Architecture
+//!
+//! The publishing system is built around two main traits:
+//!
+//! - [`Builder`] - Constructs and validates publishers before publishing
+//! - [`Publish`] - Handles the actual publishing of atoms to stores
+//!
+//! ## Publishing Process
+//!
+//! 1. **Validation** - All atoms in the workspace are validated for consistency
+//! 2. **Deduplication** - Duplicate atoms are detected and skipped
+//! 3. **Publishing** - Valid atoms are published to the target store
+//! 4. **Reporting** - Detailed statistics and results are provided
+//!
+//! ## Key Types
+//!
+//! - [`Record`] - Contains the result of publishing a single atom
+//! - [`Stats`] - Aggregated statistics for a publishing operation
+//! - [`PublishOutcome`] - Result type for individual atom publishing attempts
+//! - [`Content`] - Backend-specific content information
+//!
+//! ## Current Backends
+//!
+//! - **Git** - Publishes atoms as Git objects in repositories (when `git` feature is enabled)
+//!
+//! ## Future Backends
+//!
+//! The architecture is designed to support additional backends:
+//! - **HTTP/HTTPS** - REST APIs for atom storage
+//! - **S3-compatible** - Cloud storage backends
+//! - **IPFS** - Distributed storage networks
+//!
+//! ## Safety Features
+//!
+//! - **Atomic operations** - Failed publishes don't leave partial state
+//! - **Duplicate detection** - Prevents accidental overwrites
+//! - **Comprehensive validation** - Ensures atom consistency before publishing
+//! - **Detailed error reporting** - Clear feedback on what succeeded or failed
+//!
+//! ## Example Usage
+//!
+//! ```rust,no_run
+//! use std::path::PathBuf;
+//!
+//! use atom::publish::git::GitPublisher;
+//! use atom::publish::{Builder, Publish, Stats};
+//! use atom::store::QueryVersion;
+//! use atom::store::git::Root;
+//!
+//! let repo = gix::open(".")?;
+//! // Create a publisher for a Git repository
+//! let progress_span = tracing::info_span!("test");
+//! let publisher = GitPublisher::new(&repo, "origin", "main", &progress_span)?;
+//!
+//! // Build and validate the publisher
+//! let (valid_atoms, publisher) = publisher.build()?;
+//!
+//! // query upstream store for remote atom refs to compare against
+//! let remote = publisher.remote();
+//! let remote_atoms = remote.remote_atoms(None);
+//!
+//! // Publish all atoms
+//! let results = publisher.publish(vec![PathBuf::from("/path/to/atom")], remote_atoms);
+//!
+//! // Check results
+//! let stats = Stats::default();
+//! for result in results {
+//!     match result {
+//!         Ok(outcome) => todo!(), // e.g. log `outcome`
+//!         Err(e) => println!("Failed: {:?}", e),
+//!     }
+//! }
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
 pub mod error;
-#[cfg(feature = "git")]
+
 pub mod git;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-#[cfg(feature = "git")]
 use git::GitContent;
 
 use crate::AtomId;
-use crate::id::Id;
+use crate::id::AtomTag;
 
 /// The results of Atom publishing, for reporting to the user.
 pub struct Record<R> {
@@ -35,18 +109,17 @@ pub struct Stats {
 
 /// A Result is used over an Option here mainly so we can report which
 /// Atom was skipped, but it does not represent a true failure condition
-type MaybeSkipped<T> = Result<T, Id>;
+type MaybeSkipped<T> = Result<T, AtomTag>;
 
 /// A Record that signifies whether an Atom was published or safetly skipped.
 type PublishOutcome<R> = MaybeSkipped<Record<R>>;
 
 /// A [`HashMap`] containing all valid Atoms in the current store.
-type ValidAtoms = HashMap<Id, PathBuf>;
+type ValidAtoms = HashMap<AtomTag, PathBuf>;
 
 /// Contains the content pertinent to a specific implementation for reporting results
 /// to the user.
 pub enum Content {
-    #[cfg(feature = "git")]
     /// Content specific to the Git implementation.
     Git(GitContent),
 }
@@ -64,7 +137,7 @@ pub trait Builder<'a, R> {
     ///
     /// This function must be called before `Publish::publish` to ensure that there are
     /// no duplicates, as this is the only way to construct an implementation.
-    fn build(&self) -> Result<(ValidAtoms, Self::Publisher), Self::Error>;
+    fn build(self) -> Result<(ValidAtoms, Self::Publisher), Self::Error>;
 }
 
 trait StateValidator<R> {
@@ -90,6 +163,8 @@ mod private {
 pub trait Publish<R>: private::Sealed {
     /// The error type returned by the publisher.
     type Error;
+    /// The type representing the machine-readable identity for a specific version of an atom.
+    type Id;
 
     /// Publishes Atoms.
     ///
@@ -105,7 +180,11 @@ pub trait Publish<R>: private::Sealed {
     /// Returns a vector of results types, where the outter result represents whether an Atom has
     /// failed, and the inner result determines whether an Atom was safely skipped, e.g. because it
     /// already exists.
-    fn publish<C>(&self, paths: C) -> Vec<Result<PublishOutcome<R>, Self::Error>>
+    fn publish<C>(
+        &self,
+        paths: C,
+        remotes: HashMap<AtomTag, (semver::Version, Self::Id)>,
+    ) -> Vec<Result<PublishOutcome<R>, Self::Error>>
     where
         C: IntoIterator<Item = PathBuf>;
 
@@ -119,7 +198,11 @@ pub trait Publish<R>: private::Sealed {
     ///
     /// - The function will return an error ([`Self::Error`]) if the Atom could not be published for
     ///   any reason, e.g. invalid manifests.
-    fn publish_atom<P: AsRef<Path>>(&self, path: P) -> Result<PublishOutcome<R>, Self::Error>;
+    fn publish_atom<P: AsRef<Path>>(
+        &self,
+        path: P,
+        remotes: &HashMap<AtomTag, (semver::Version, Self::Id)>,
+    ) -> Result<PublishOutcome<R>, Self::Error>;
 }
 
 impl<R> Record<R> {
@@ -134,9 +217,18 @@ impl<R> Record<R> {
     }
 }
 
+use std::sync::LazyLock;
+
 const EMPTY_SIG: &str = "";
-const ATOM: &str = "atom";
-const ATOM_FORMAT_VERSION: &str = "1";
-const ATOM_REF_TOP_LEVEL: &str = "atoms";
-const ATOM_MANIFEST: &str = "spec";
-const ATOM_ORIGIN: &str = "src";
+const STORE_ROOT: &str = "eka";
+const ATOM_FORMAT_VERSION: &str = "pre1.0";
+const ATOM_REF: &str = "atoms";
+const ATOM_MANIFEST: &str = "manifest";
+const ATOM_META_REF: &str = "meta";
+const ATOM_ORIGIN: &str = "origin";
+static REF_ROOT: LazyLock<String> = LazyLock::new(|| format!("refs/{}", STORE_ROOT));
+/// the default location where atom refs are stored
+pub static ATOM_REFS: LazyLock<String> =
+    LazyLock::new(|| format!("{}/{}", REF_ROOT.as_str(), ATOM_REF));
+static META_REFS: LazyLock<String> =
+    LazyLock::new(|| format!("{}/{}", REF_ROOT.as_str(), ATOM_META_REF));

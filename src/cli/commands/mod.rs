@@ -1,5 +1,8 @@
+mod add;
 mod init;
+mod new;
 mod publish;
+mod resolve;
 
 use clap::Subcommand;
 
@@ -26,6 +29,24 @@ pub(super) enum Commands {
     /// fit for publishing atoms to a remote location.
     #[command(verbatim_doc_comment)]
     Init(init::Args),
+    /// Resolve dependencies for the specified atom(s).
+    ///
+    /// This command will resolve and lock each dependency for the given
+    /// atom(s) into a well structured lock file format.
+    #[command(verbatim_doc_comment)]
+    Resolve(resolve::Args),
+    /// Add dependencies from a given atom uri to the manifest.
+    ///
+    /// This command takes atom uri or pin spec and updates the
+    /// manifest and lock with the result.
+    #[command(verbatim_doc_comment)]
+    Add(add::Args),
+    /// Create a new atom at the specified path.
+    ///
+    /// This command takes a path anywhere on the file-system and creates
+    /// a new bare atom there.
+    #[command(verbatim_doc_comment)]
+    New(new::Args),
 }
 
 pub async fn run(args: Args) -> anyhow::Result<()> {
@@ -34,8 +55,10 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
         Commands::Publish(args) => {
             publish::run(store.await?, args).await?;
         },
-
         Commands::Init(args) => init::run(store.await?, args)?,
+        Commands::Resolve(args) => resolve::run(store.await?, args)?,
+        Commands::New(args) => new::run(args)?,
+        Commands::Add(args) => add::run(args)?,
     }
     Ok(())
 }

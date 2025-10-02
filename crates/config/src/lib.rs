@@ -4,7 +4,6 @@ use std::sync::LazyLock;
 use etcetera::BaseStrategy;
 use figment::providers::{Env, Format, Toml};
 use figment::{Figment, Metadata, Provider};
-#[cfg(feature = "git")]
 use gix::ThreadSafeRepository;
 use serde::{Deserialize, Serialize};
 
@@ -33,7 +32,7 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn aliases(&self) -> &Aliases {
+    pub fn aliases(&self) -> &Aliases<'_> {
         &self.aliases
     }
 }
@@ -54,8 +53,8 @@ impl Default for Config {
 }
 
 impl Config {
-    pub fn from<T: Provider>(provider: T) -> Result<Config, figment::Error> {
-        Figment::from(provider).extract()
+    pub fn from<T: Provider>(provider: T) -> Result<Config, Box<figment::Error>> {
+        Figment::from(provider).extract().map_err(Box::new)
     }
 
     pub fn figment() -> Figment {
@@ -66,7 +65,6 @@ impl Config {
             fig = fig.admerge(Toml::file(config));
         }
 
-        #[cfg(feature = "git")]
         if let Ok(r) = ThreadSafeRepository::discover(".") {
             let repo_config = r.git_dir().join("info/eka.toml");
             fig = fig.admerge(Toml::file(repo_config));

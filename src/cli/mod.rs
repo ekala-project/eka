@@ -1,4 +1,3 @@
-#![cfg_attr(not(feature = "stores"), allow(unused_variables))]
 mod commands;
 pub mod logging;
 mod store;

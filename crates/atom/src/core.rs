@@ -1,19 +1,25 @@
-use std::borrow::Cow;
+//! # Atom Core Types
+//!
+//! This module contains the fundamental types that represent atoms and their
+//! file system structure. These types form the foundation of the atom format
+//! and are used throughout the crate.
+
 use std::path::Path;
 
 use semver::Version;
 use serde::{Deserialize, Serialize};
 
-use super::id::Id;
+use super::id::AtomTag;
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 /// Represents the deserialized form of an Atom, directly constructed from the TOML manifest.
 ///
 /// This struct contains the basic metadata of an Atom but lacks the context-specific
 /// [`crate::AtomId`], which must be constructed separately.
+#[serde(deny_unknown_fields)]
 pub struct Atom {
     /// The verified, human-readable Unicode identifier for the Atom.
-    pub id: Id,
+    pub tag: AtomTag,
 
     /// The version of the Atom.
     pub version: Version,
@@ -24,57 +30,73 @@ pub struct Atom {
 }
 
 #[derive(Debug)]
+/// Represents the file system paths associated with an atom.
+///
+/// This struct manages the relationship between an atom's manifest file
+/// (the "spec") and its content directory. It handles the logic for determining
+/// these paths based on whether we're given a manifest file or a content directory.
 pub(crate) struct AtomPaths<P>
 where
     P: AsRef<Path>,
 {
+    /// Path to the atom's manifest file (atom.toml)
     spec: P,
+    /// Path to the atom's content directory
     content: P,
-    lock: P,
 }
 
-const LOCK: &str = "lock";
 use std::path::PathBuf;
 impl AtomPaths<PathBuf> {
+    /// Creates a new `AtomPaths` instance from a given path.
+    ///
+    /// If the path points to a manifest file (named `atom.toml`), then:
+    /// - `spec` is set to that file path
+    /// - `content` is set to the parent directory
+    ///
+    /// If the path points to a directory, then:
+    /// - `spec` is set to `path/atom.toml`
+    /// - `content` is set to the provided path
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Either a path to a manifest file or content directory
+    ///
+    /// # Returns
+    ///
+    /// An `AtomPaths` instance with the appropriate spec and content paths.
     pub(crate) fn new<P: AsRef<Path>>(path: P) -> Self {
-        let name = path.as_ref().with_extension("");
-        let name = name
+        let path = path.as_ref();
+        let name = path
             .file_name()
-            .unwrap_or(path.as_ref().as_os_str())
+            .unwrap_or(path.as_os_str())
             .to_string_lossy();
 
-        let atom_name: Cow<str>;
-        let content_name: Cow<str>;
-
-        if name.ends_with('@') {
-            atom_name = name;
-            let mut name = atom_name.to_string();
-            name.pop();
-            content_name = name.into();
+        if name == crate::MANIFEST_NAME.as_str() {
+            AtomPaths {
+                spec: path.into(),
+                content: path.parent().unwrap_or(Path::new("")).into(),
+            }
         } else {
-            atom_name = format!("{name}@").into();
-            content_name = name;
-        };
-
-        let content = path.as_ref().with_file_name(content_name.as_ref());
-        AtomPaths {
-            spec: path
-                .as_ref()
-                .with_file_name(atom_name.as_ref())
-                .with_extension(crate::TOML),
-            content: content.clone(),
-            lock: content.with_extension(LOCK),
+            let spec = path.join(crate::MANIFEST_NAME.as_str());
+            AtomPaths {
+                spec: spec.clone(),
+                content: path.into(),
+            }
         }
     }
 
-    pub fn lock(&self) -> &Path {
-        self.lock.as_ref()
-    }
-
+    /// Returns the path to the atom's manifest file.
+    ///
+    /// This is the `atom.toml` file that contains the atom's metadata
+    /// and dependency specifications.
     pub fn spec(&self) -> &Path {
         self.spec.as_ref()
     }
 
+    /// Returns the path to the atom's content directory.
+    ///
+    /// This directory contains the actual source code or files that
+    /// make up the atom's content.
     pub fn content(&self) -> &Path {
         self.content.as_ref()
     }

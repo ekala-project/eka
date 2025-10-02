@@ -12,12 +12,15 @@ use std::sync::OnceLock;
 
 use bstr::BStr;
 use gix::discover::upwards::Options;
+use gix::protocol::handshake::Ref;
+use gix::protocol::transport::client::Transport;
 use gix::sec::Trust;
 use gix::sec::trust::Mapping;
 use gix::{Commit, ObjectId, ThreadSafeRepository};
 use thiserror::Error as ThisError;
 
-use crate::id::CalculateRoot;
+use crate::id::Origin;
+use crate::store::QueryVersion;
 
 /// An error encountered during initialization or other git store operations.
 #[derive(ThisError, Debug)]
@@ -25,6 +28,9 @@ pub enum Error {
     /// No git ref found.
     #[error("No ref named `{0}` found for remote `{1}`")]
     NoRef(String, String),
+    /// No remote url configured
+    #[error("No `{0}` url configured for remote `{1}`")]
+    NoUrl(String, String),
     /// This git repository does not have a working directory.
     #[error("Repository does not have a working directory")]
     NoWorkDir,
@@ -34,6 +40,9 @@ pub enum Error {
     /// The calculated root does not match what was reported by the remote.
     #[error("The calculated root does not match the reported one")]
     RootInconsistent,
+    /// The requested version is not contained on the remote.
+    #[error("The version requested does not exist on the remote")]
+    NoMatchingVersion,
     /// A transparent wrapper for a [`gix::revision::walk::Error`]
     #[error(transparent)]
     WalkFailure(#[from] gix::revision::walk::Error),
@@ -64,6 +73,27 @@ pub enum Error {
     /// A transparent wrapper for a [`Box<gix::reference::edit::Error>`]
     #[error(transparent)]
     WriteRef(#[from] Box<gix::reference::edit::Error>),
+    /// A transparent wrapper for a [`gix::protocol::transport::client::connect::Error`]
+    #[error(transparent)]
+    Connection(#[from] gix::protocol::transport::client::connect::Error),
+    /// A transparent wrapper for a [`gix::config::credential_helpers::Error`]
+    #[error(transparent)]
+    Creds(#[from] gix::config::credential_helpers::Error),
+    /// A transparent wrapper for a [`gix::config::file::init::from_paths::Error`]
+    #[error(transparent)]
+    File(#[from] gix::config::file::init::from_paths::Error),
+    /// A transparent wrapper for a [`gix::protocol::handshake::Error`]
+    #[error(transparent)]
+    Handshake(#[from] Box<gix::protocol::handshake::Error>),
+    /// A transparent wrapper for a [`gix::refspec::parse::Error`]
+    #[error(transparent)]
+    Refspec(#[from] gix::refspec::parse::Error),
+    /// A transparent wrapper for a [`gix::refspec::parse::Error`]
+    #[error(transparent)]
+    Refmap(#[from] gix::protocol::fetch::refmap::init::Error),
+    /// A transparent wrapper for a [`gix::refspec::parse::Error`]
+    #[error(transparent)]
+    UrlParse(#[from] gix::url::parse::Error),
 }
 
 impl Error {
@@ -116,10 +146,7 @@ pub fn run_git_command(args: &[&str]) -> io::Result<Vec<u8>> {
     if output.status.success() {
         Ok(output.stdout)
     } else {
-        Err(io::Error::new(
-            io::ErrorKind::Other,
-            String::from_utf8_lossy(&output.stderr),
-        ))
+        Err(io::Error::other(String::from_utf8_lossy(&output.stderr)))
     }
 }
 
@@ -158,21 +185,23 @@ impl Deref for Root {
     }
 }
 
-impl<'a> CalculateRoot<Root> for Commit<'a> {
+type AtomQuery = (AtomTag, Version, ObjectId);
+impl Origin<Root> for std::vec::IntoIter<AtomQuery> {
     type Error = Error;
 
-    fn calculate_root(&self) -> Result<Root, Self::Error> {
-        use gix::traverse::commit::simple::{CommitTimeOrder, Sorting};
-        // FIXME: we rely on a custom crate patch to search the commit graph
-        // with a bias for older commits. The default gix behavior is the opposite
-        // starting with bias for newer commits.
-        //
-        // it is based on the more general concept of an OldestFirst traversal
-        // introduce by @nrdxp upstream: https://github.com/Byron/gitoxide/pull/1610
-        //
-        // However, that work tracks main and the goal of this patch is to remain
-        // as minimal as possible on top of a release tag, for easier maintenance
-        // assuming it may take a while to merge upstream.
+    fn calculate_origin(&self) -> Result<Root, Self::Error> {
+        let root = <gix::Url as QueryVersion<_, _, _, _>>::process_root(self.to_owned())
+            .ok_or(Error::RootNotFound)?;
+        Ok(Root(root))
+    }
+}
+
+impl<'a> Origin<Root> for Commit<'a> {
+    type Error = Error;
+
+    fn calculate_origin(&self) -> Result<Root, Self::Error> {
+        use gix::revision::walk::Sorting;
+        use gix::traverse::commit::simple::CommitTimeOrder;
         let mut walk = self
             .ancestors()
             .use_commit_graph(true)
@@ -204,7 +233,7 @@ impl NormalizeStorePath for Repository {
         use path_clean::PathClean;
         let path = path.as_ref();
 
-        let rel_repo_root = self.work_dir().ok_or(Error::NoWorkDir)?;
+        let rel_repo_root = self.workdir().ok_or(Error::NoWorkDir)?;
         let repo_root = fs::canonicalize(rel_repo_root)?;
         let current = self.current_dir();
         let rel = current.join(path).clean();
@@ -267,28 +296,47 @@ impl<'repo> EkalaRemote for gix::Remote<'repo> {
     }
 }
 
-const V1_ROOT: &str = "refs/tags/ekala/root/v1";
+pub(super) const V1_ROOT: &str = "refs/tags/ekala/root/v1";
+const V1_ROOT_SEMVER: &str = "1.0.0";
+
+fn to_id(r: Ref) -> ObjectId {
+    let (_, t, p) = r.unpack();
+    // unwrap can't fail here as at least one of these is guaranteed Some
+    p.or(t).map(ToOwned::to_owned).unwrap()
+}
 
 use super::Init;
-impl<'repo> Init<Root, ObjectId> for gix::Remote<'repo> {
+impl<'repo> Init<Root, Ref, Box<dyn Transport + Send>> for gix::Remote<'repo> {
     type Error = Error;
 
     /// Determines if this remote is a valid Ekala store by pulling HEAD and the root
     /// tag, ensuring the latter is actually the root of HEAD, returning the root.
-    fn ekala_root(&self) -> Result<Root, Self::Error> {
-        use crate::id::CalculateRoot;
+    #[tracing::instrument(skip(transport))]
+    fn ekala_root(
+        &self,
+        transport: Option<&mut Box<dyn Transport + Send>>,
+    ) -> Result<Root, Self::Error> {
+        use crate::id::Origin;
+
+        let span = tracing::Span::current();
+        crate::log::set_sub_task(&span, "💪 ensuring consistency with remote");
 
         let repo = self.repo();
-        self.get_refs(["HEAD", V1_ROOT]).map(|i| {
+        self.get_refs(["HEAD", V1_ROOT], transport).map(|i| {
             let mut i = i.into_iter();
-            let root_for = |i: &mut dyn Iterator<Item = ObjectId>| {
+            let root_for = |i: &mut dyn Iterator<Item = Ref>| {
                 i.next()
                     .ok_or(Error::NoRef(V1_ROOT.to_owned(), self.symbol().to_owned()))
-                    .and_then(|id| Ok(repo.find_commit(id).map_err(Box::new)?))
+                    .and_then(|r| {
+                        let id = to_id(r);
+                        Ok(repo.find_commit(id).map_err(Box::new)?)
+                    })
                     .and_then(|c| {
-                        (c.parent_ids().count() != 0)
-                            .then(|| c.calculate_root().map(|r| *r))
-                            .unwrap_or(Ok(c.id))
+                        if c.parent_ids().count() != 0 {
+                            c.calculate_origin().map(|r| *r)
+                        } else {
+                            Ok(c.id)
+                        }
                     })
             };
 
@@ -303,20 +351,23 @@ impl<'repo> Init<Root, ObjectId> for gix::Remote<'repo> {
     }
 
     /// Sync with the given remote and get the most up to date HEAD according to it.
-    fn sync(&self) -> Result<ObjectId, Error> {
-        self.get_ref("HEAD")
+    fn sync(&self, transport: Option<&mut Box<dyn Transport + Send>>) -> Result<Ref, Error> {
+        self.get_ref("HEAD", transport)
     }
 
     /// Initialize the repository by calculating the root, according to the latest HEAD.
-    fn ekala_init(&self) -> Result<(), Error> {
+    fn ekala_init(&self, transport: Option<&mut Box<dyn Transport + Send>>) -> Result<(), Error> {
         use gix::refs::transaction::PreviousValue;
 
-        use crate::CalculateRoot;
+        use crate::Origin;
 
         let name = self.try_symbol()?;
-        let head = self.sync()?;
+        let head = to_id(self.sync(transport)?);
         let repo = self.repo();
-        let root = *repo.find_commit(head).map_err(Box::new)?.calculate_root()?;
+        let root = *repo
+            .find_commit(head)
+            .map_err(Box::new)?
+            .calculate_origin()?;
 
         let root_ref = repo
             .reference(V1_ROOT, root, PreviousValue::MustNotExist, "init: root")
@@ -357,29 +408,183 @@ fn setup_line_renderer(
     )
 }
 
-impl<'repo> super::QueryStore<ObjectId> for gix::Remote<'repo> {
+impl super::QueryStore<Ref, Box<dyn Transport + Send>> for gix::Url {
     type Error = Error;
 
-    /// returns the git object ids for the given references
+    /// Efficiently queries git references from a remote repository URL.
+    ///
+    /// This implementation performs a lightweight network operation that only retrieves
+    /// reference information (branch/tag names and their commit IDs) without downloading
+    /// the actual repository objects. This makes it ideal for scenarios where you need
+    /// to check reference existence or get commit IDs without the overhead of a full
+    /// repository fetch.
+    ///
+    /// ## Network Behavior
+    /// - **Lightweight**: Only queries reference metadata, not repository content
+    /// - **Fast**: Minimal network overhead compared to full fetch operations
+    /// - **Efficient**: Suitable for checking reference existence and getting commit IDs
+    ///
+    /// ## Use Cases
+    /// - Checking if specific branches or tags exist on a remote
+    /// - Getting commit IDs for references without downloading objects
+    /// - Lightweight remote repository inspection
+    ///
+    /// ## Performance
+    /// This is significantly faster than the [`gix::Remote`] implementation since it
+    /// avoids downloading actual git objects, making it appropriate for read-only
+    /// reference queries.
     fn get_refs<Spec>(
         &self,
-        references: impl IntoIterator<Item = Spec>,
-    ) -> Result<impl IntoIterator<Item = gix::ObjectId>, Self::Error>
+        targets: impl IntoIterator<Item = Spec>,
+        transport: Option<&mut Box<dyn Transport + Send>>,
+    ) -> std::result::Result<
+        impl std::iter::IntoIterator<Item = Ref>,
+        <Self as super::QueryStore<Ref, Box<dyn Transport + Send>>>::Error,
+    >
     where
         Spec: AsRef<BStr>,
     {
-        use std::collections::HashSet;
+        use gix::open::permissions::Environment;
+        use gix::refspec::RefSpec;
+        use gix::sec::Permission;
+
+        let transport = if let Some(transport) = transport {
+            transport
+        } else {
+            &mut self.get_transport()?
+        };
+
+        let config = gix::config::File::from_globals()?;
+        let (mut cascade, _, prompt_opts) = gix::config::credential_helpers(
+            self.to_owned(),
+            &config,
+            true,
+            gix::config::section::is_trusted,
+            Environment {
+                xdg_config_home: Permission::Allow,
+                home: Permission::Allow,
+                http_transport: Permission::Allow,
+                identity: Permission::Allow,
+                objects: Permission::Allow,
+                git_prefix: Permission::Allow,
+                ssh_prefix: Permission::Allow,
+            },
+            false,
+        )?;
+
+        let authenticate = Box::new(move |action| cascade.invoke(action, prompt_opts.clone()));
+
+        let mut handshake = gix::protocol::fetch::handshake(
+            &mut *transport,
+            authenticate,
+            Vec::new(),
+            &mut prodash::progress::Discard,
+        )
+        .map_err(Box::new)?;
+
+        use gix::refspec::parse::Operation;
+        let refs: Vec<_> = targets
+            .into_iter()
+            .map(|t| gix::refspec::parse(t.as_ref(), Operation::Fetch).map(RefSpec::from))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        use gix::protocol::fetch::refmap::init::Options as RefOptions;
+        use gix::protocol::fetch::{Context, RefMap};
+
+        let context = Context {
+            handshake: &mut handshake,
+            transport,
+            user_agent: ("agent", Some(gix::env::agent().into())),
+            trace_packetlines: true,
+        };
+
+        let refmap = RefMap::new(
+            prodash::progress::Discard,
+            refs.as_slice(),
+            context,
+            RefOptions::default(),
+        )?;
+        Ok(refmap.remote_refs)
+    }
+
+    fn get_transport(&self) -> Result<Box<dyn Transport + Send>, Self::Error> {
+        use gix::protocol::transport::client::connect::Options;
+        let transport = gix::protocol::transport::connect(self.to_owned(), Options::default())?;
+        Ok(Box::new(transport))
+    }
+
+    fn get_ref<Spec>(
+        &self,
+        target: Spec,
+        transport: Option<&mut Box<dyn Transport + Send>>,
+    ) -> Result<Ref, Self::Error>
+    where
+        Spec: AsRef<BStr>,
+    {
+        let name = target.as_ref().to_string();
+        self.get_refs(Some(target), transport).and_then(|r| {
+            r.into_iter()
+                .next()
+                .ok_or(Error::NoRef(name, self.to_string()))
+        })
+    }
+}
+
+impl<'repo> super::QueryStore<Ref, Box<dyn Transport + Send>> for gix::Remote<'repo> {
+    type Error = Error;
+
+    /// Performs a full git fetch operation to retrieve references and repository data.
+    ///
+    /// This implementation executes a complete git fetch operation, which downloads
+    /// both reference information and the actual repository objects (commits, trees,
+    /// blobs) from the remote. This provides full access to the repository content
+    /// but is significantly more expensive than the URL-based implementation.
+    ///
+    /// ## Network Behavior
+    /// - **Heavyweight**: Performs a full git fetch operation, downloading all objects
+    /// - **Complete**: Provides access to the entire repository state after fetching
+    /// - **Expensive**: Higher network usage and longer execution time
+    ///
+    /// ## Use Cases
+    /// - When you need to access repository content after fetching references
+    /// - When working with local repositories that need to sync with remotes
+    /// - When you require the complete repository state, not just reference metadata
+    ///
+    /// ## Performance
+    /// This implementation is slower and uses more network bandwidth than the
+    /// [`gix::Url`] implementation because it downloads actual git objects.
+    /// Use it only when you need access to repository content beyond reference metadata.
+    ///
+    /// ## Progress Reporting
+    /// The fetch operation includes progress reporting for sync and initialization phases.
+    /// Progress is displayed when the log level is set above WARN.
+    fn get_refs<Spec>(
+        &self,
+        references: impl IntoIterator<Item = Spec>,
+        transport: Option<&mut Box<dyn Transport + Send>>,
+    ) -> std::result::Result<
+        impl IntoIterator<Item = Ref>,
+        <Self as super::QueryStore<Ref, Box<dyn Transport + Send>>>::Error,
+    >
+    where
+        Spec: AsRef<BStr>,
+    {
         use std::sync::atomic::AtomicBool;
 
-        use gix::progress::tree::Root;
+        use gix::progress::prodash::tree::Root;
         use gix::remote::Direction;
         use gix::remote::fetch::Tags;
         use gix::remote::ref_map::Options;
+        use tracing::level_filters::LevelFilter;
 
         let tree = Root::new();
         let sync_progress = tree.add_child("sync");
         let init_progress = tree.add_child("init");
-        let handle = setup_line_renderer(&tree);
+        let _ = if LevelFilter::current() > LevelFilter::WARN {
+            Some(setup_line_renderer(&tree))
+        } else {
+            None
+        };
 
         let mut remote = self.clone().with_fetch_tags(Tags::None);
 
@@ -387,48 +592,90 @@ impl<'repo> super::QueryStore<ObjectId> for gix::Remote<'repo> {
             .replace_refspecs(references, Direction::Fetch)
             .map_err(Box::new)?;
 
-        let requested: HashSet<_> = remote
-            .refspecs(Direction::Fetch)
-            .iter()
-            .filter_map(|r| r.to_ref().source().map(ToOwned::to_owned))
-            .collect();
+        let transport = if let Some(transport) = transport {
+            transport
+        } else {
+            &mut remote.get_transport()?
+        };
 
-        let client = remote.connect(Direction::Fetch).map_err(Box::new)?;
-        let sync = client
+        let client = remote.to_connection_with_transport(transport);
+
+        let query = client
             .prepare_fetch(sync_progress, Options::default())
             .map_err(Box::new)?;
 
-        let outcome = sync
+        let outcome = query
+            .with_write_packed_refs_only(true)
             .receive(init_progress, &AtomicBool::new(false))
             .map_err(Box::new)?;
 
-        handle.shutdown_and_wait();
-
-        let refs = outcome.ref_map.remote_refs;
-
-        refs.iter()
-            .filter_map(|r| {
-                let (name, target, peeled) = r.unpack();
-                requested.get(name)?;
-                Some(
-                    peeled
-                        .or(target)
-                        .map(ToOwned::to_owned)
-                        .ok_or_else(|| Error::NoRef(name.to_string(), self.symbol().to_owned())),
-                )
-            })
-            .collect::<Result<HashSet<_>, _>>()
+        Ok(outcome.ref_map.remote_refs)
     }
 
-    fn get_ref<Spec>(&self, target: Spec) -> Result<ObjectId, Self::Error>
+    fn get_transport(&self) -> Result<Box<dyn Transport + Send>, Self::Error> {
+        use gix::remote::Direction;
+        let url = self
+            .url(Direction::Fetch)
+            .ok_or_else(|| Error::NoUrl("fetch".to_string(), self.symbol().to_string()))?;
+        url.get_transport()
+    }
+
+    fn get_ref<Spec>(
+        &self,
+        target: Spec,
+        transport: Option<&mut Box<dyn Transport + Send>>,
+    ) -> Result<Ref, Self::Error>
     where
         Spec: AsRef<BStr>,
     {
         let name = target.as_ref().to_string();
-        self.get_refs(Some(target)).and_then(|r| {
+        self.get_refs(Some(target), transport).and_then(|r| {
             r.into_iter()
                 .next()
                 .ok_or(Error::NoRef(name, self.symbol().to_owned()))
         })
     }
 }
+
+use semver::Version;
+
+use crate::AtomTag;
+impl super::UnpackRef<ObjectId> for Ref {
+    fn unpack_atom_ref(&self) -> Option<super::UnpackedRef<ObjectId>> {
+        let maybe_root = self.find_root_ref();
+        if let Some(root) = maybe_root {
+            return Some((
+                AtomTag::root_tag(),
+                Version::parse(V1_ROOT_SEMVER).ok()?,
+                root,
+            ));
+        }
+        let (n, t, p) = self.unpack();
+        let mut path = PathBuf::from(n.to_string());
+        let v_str = path.file_name()?.to_str()?;
+        let version = Version::parse(v_str).ok()?;
+        path.pop();
+        let a_str = path.file_name()?.to_str()?;
+        let tag = AtomTag::try_from(a_str).ok()?;
+        let id = p.or(t).map(ToOwned::to_owned)?;
+
+        Some((tag, version, id))
+    }
+
+    fn find_root_ref(&self) -> Option<ObjectId> {
+        if let Ref::Direct {
+            full_ref_name: name,
+            object: id,
+        } = self
+        {
+            if name == V1_ROOT {
+                return Some(id.to_owned());
+            }
+        }
+        None
+    }
+}
+
+type Refs = Vec<super::UnpackedRef<ObjectId>>;
+impl QueryVersion<Ref, ObjectId, Refs, Box<dyn Transport + Send>> for gix::Url {}
+impl<'repo> QueryVersion<Ref, ObjectId, Refs, Box<dyn Transport + Send>> for gix::Remote<'repo> {}

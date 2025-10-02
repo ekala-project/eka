@@ -12,46 +12,42 @@ opt-level     = 3
 strip         = true
 
 [dependencies]
+
 anyhow.workspace             = true
 clap.workspace               = true
-serde.workspace              = true
-serde_json.workspace         = true
+semver.workspace             = true
+tempfile.workspace           = true
 thiserror.workspace          = true
 tokio.workspace              = true
+toml_edit.workspace          = true
 tracing.workspace            = true
 tracing-appender.workspace   = true
-tracing-error.workspace      = true
+tracing-indicatif.workspace  = true
 tracing-subscriber.workspace = true
 
 atom = { path = "crates/atom" }
-gix  = { workspace = true, optional = true }
+gix  = { workspace = true }
 
 [workspace.dependencies]
-anyhow           = "^1"
-serde_json       = "^1"
-tempfile         = "^3.13"
-thiserror        = "^1"
-tracing          = "^0.1"
-tracing-appender = "^0.2"
-tracing-error    = "^0.2"
+anyhow            = "^1"
+tempfile          = "^3.13"
+thiserror         = "^1"
+tracing           = "^0.1"
+tracing-appender  = "^0.2"
+tracing-indicatif = "^0.3"
 
-clap = { version = "^4", features = ["derive"] }
-insta = { version = "^1", features = ["yaml"] }
-prodash = { version = "^29", features = [
-  "render-line",
-  "render-line-crossterm",
-  "render-line-autoconfigure",
-] }
-semver = { version = "^1", features = ["serde"] }
-serde = { version = "^1", features = ["derive"] }
-tokio = { version = "^1", features = ["full"] }
-toml_edit = { version = "^0.22", features = ["serde"] }
+clap               = { version = "^4", features = ["derive"] }
+insta              = { version = "^1", features = ["yaml"] }
+semver             = { version = "^1", features = ["serde"] }
+serde              = { version = "^1", features = ["derive"] }
+tokio              = { version = "^1", features = ["full"] }
+toml_edit          = { version = "^0.22", features = ["serde", "parse"] }
 tracing-subscriber = { version = "^0.3", features = ["env-filter", "json"] }
-url = { version = "^2", features = ["serde"] }
+url                = { version = "^2", features = ["serde"] }
 
-gix = { version = "^0.66", default-features = false, features = [
+
+gix = { version = "^0.73", default-features = false, features = [
   "blocking-http-transport-reqwest-rust-tls",
-  "progress-tree",
   "max-performance-safe",
   # FIXME: investigating fix for inappropriate tracing behavior upstream:
   # https://github.com/Byron/gitoxide/issues/1615
@@ -59,12 +55,8 @@ gix = { version = "^0.66", default-features = false, features = [
   "blob-diff",
   "revision",
 ] }
-
-[features]
-default = ["stores"]
-git     = ["gix", "atom/git"]
-stores  = ["git"]
-
-[patch.crates-io]
-gix     = { git = "https://github.com/nrdxp/gitoxide", tag = "gix-v0.66.0-eka" }
-gix-url = { git = "https://github.com/nrdxp/gitoxide", tag = "gix-v0.66.0-eka" }
+prodash = { version = "30.0.1", features = [
+  "render-line",
+  "render-line-crossterm",
+  "render-line-autoconfigure",
+] }

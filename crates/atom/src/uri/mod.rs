@@ -1,35 +1,104 @@
 //! # Atom URI Format
 //!
-//! An Atom URI of the form:
+//! This module provides comprehensive parsing and handling of Atom URIs, which are
+//! used to reference atoms from various sources including Git repositories, local
+//! paths, and external URLs.
+//!
+//! ## URI Format
+//!
+//! Atom URIs follow this general format:
 //! ```text
 //! [scheme://][alias:][url-fragment::]atom-id[@version]
 //! ```
 //!
-//! An `alias` is a user configurable URL shortener that must at least contain an FQDN or host,
-//! and as much of the url path as desirable. Aliases can be specified in the eka configuration
-//! file for the CLI program. See the Atom configuration crate for further detail.
+//! ### Components
 //!
-//! ## Examples
-//! * `gh:owner/repo::my-atom` where `hub` is `github.com`
-//! * `work:repo::my-atom` where `work` is `github.com/my-work-org`
-//! * `repo::my-atom@^1` where `repo` is `example.com/some/repo`
+//! - **scheme** - Optional protocol (e.g., `https://`, `ssh://`, `file://`)
+//! - **alias** - Optional user-configurable URL shortener (e.g., `gh` for GitHub)
+//! - **url-fragment** - Optional path within the repository
+//! - **atom-id** - Required atom identifier (Unicode string)
+//! - **version** - Optional version requirement (e.g., `@1.0.0`, `@^1.0`)
+//!
+//! ## Key Types
+//!
+//! - [`Uri`] - The main parsed URI structure
+//! - [`AliasedUrl`] - URL with optional alias resolution
+//! - [`UriError`] - Errors that can occur during URI parsing
+//!
+//! ## Alias System
+//!
+//! Aliases provide a convenient way to shorten common URLs. They are configured
+//! in the Eka configuration file and can reference full URLs or other aliases.
+//!
+//! ### Alias Examples
+//! - `gh:owner/repo::my-atom` → `https://github.com/owner/repo::my-atom`
+//! - `work:repo::my-atom` → `https://github.com/my-work-org/repo::my-atom`
+//! - `local::my-atom` → `file:///path/to/repo::my-atom`
+//!
+//! ## URI Examples
+//!
+//! ```rust,no_run
+//! use atom::uri::Uri;
+//!
+//! // Simple atom reference
+//! let uri: Uri = "my-atom".parse().unwrap();
+//! assert_eq!(uri.tag().to_string(), "my-atom");
+//!
+//! // Atom with version
+//! let uri: Uri = "my-atom@^1.0.0".parse().unwrap();
+//! assert_eq!(uri.tag().to_string(), "my-atom");
+//!
+//! // GitHub reference with alias
+//! let uri: Uri = "gh:user/repo::my-atom".parse().unwrap();
+//! assert_eq!(uri.url().unwrap().host().unwrap(), "github.com");
+//!
+//! // Direct URL reference
+//! let uri: Uri = "https://github.com/user/repo::my-atom".parse().unwrap();
+//! assert_eq!(uri.url().unwrap().host().unwrap(), "github.com");
+//!
+//! // Local file reference
+//! let uri: Uri = "file:///path/to/repo::my-atom".parse().unwrap();
+//! assert_eq!(uri.url().unwrap().scheme, "file".into());
+//! ```
+//!
+//! ## Error Handling
+//!
+//! The URI parser provides detailed error messages for common issues:
+//! - Invalid atom IDs (wrong characters, too long, etc.)
+//! - Unknown aliases
+//! - Malformed URLs
+//! - Invalid version specifications
+//! - Missing required components
 #[cfg(test)]
 mod tests;
 
 use std::collections::HashMap;
-use std::ops::Deref;
+use std::fmt::Display;
+use std::ops::{Deref, Not};
 use std::str::FromStr;
 
+use gix::url as gix_url;
 use gix_url::Url;
 use semver::VersionReq;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use super::id::Id;
+use super::id::AtomTag;
 use crate::id::Error;
 
 #[derive(Debug)]
 struct Aliases(&'static HashMap<&'static str, &'static str>);
+
+/// Represents either an atom URI or an aliased URL component
+///
+/// When built through the `FromStr` implementation, aliases are resolved.
+#[derive(Debug, Clone)]
+pub enum UriOrUrl {
+    /// Atom URI variant
+    Atom(Uri),
+    /// URL variant
+    Pin(AliasedUrl),
+}
 
 /// Represents the parsed components of an Atom URI.
 ///
@@ -39,7 +108,7 @@ pub struct Uri {
     /// The URL to the repository containing the Atom.
     url: Option<Url>,
     /// The Atom's ID.
-    id: Id,
+    tag: AtomTag,
     /// The requested Atom version.
     version: Option<VersionReq>,
 }
@@ -50,6 +119,58 @@ struct Ref<'a> {
     #[cfg_attr(test, serde(borrow))]
     url: UrlRef<'a>,
     atom: AtomRef<'a>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Default)]
+#[cfg_attr(test, derive(Serialize, Deserialize))]
+/// a url potentially containing an alias
+pub struct AliasedUrl {
+    url: Url,
+    r#ref: Option<String>,
+}
+
+impl Display for AliasedUrl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let AliasedUrl { url, r#ref } = self;
+        if let Some(r) = r#ref {
+            if r.is_empty() {
+                url.fmt(f)
+            } else {
+                write!(f, "{}^^{}", url, r)
+            }
+        } else {
+            url.fmt(f)
+        }
+    }
+}
+
+impl FromStr for AliasedUrl {
+    type Err = UriError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let (r, url) = match split_carot(s) {
+            Ok((s, Some(u))) => (s, u),
+            Ok((s, None)) => ("", s),
+            _ => return Err(UriError::NoUrl),
+        };
+
+        let url = UrlRef::from(url);
+        let u = url.to_url();
+        let r#ref = r.is_empty().not().then_some(r.to_string());
+        if let Some(url) = u {
+            Ok(AliasedUrl { url, r#ref })
+        } else {
+            Err(UriError::NoUrl)
+        }
+    }
+}
+
+impl TryFrom<&str> for AliasedUrl {
+    type Error = UriError;
+
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
+        FromStr::from_str(s)
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
@@ -68,8 +189,8 @@ struct UrlRef<'a> {
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[cfg_attr(test, derive(Serialize, Deserialize))]
 struct AtomRef<'a> {
-    /// The path to the specific Atom within the repository.
-    id: Option<&'a str>,
+    /// The specific Atom within the repository.
+    tag: Option<&'a str>,
     /// The version of the Atom, if specified.
     version: Option<&'a str>,
 }
@@ -81,7 +202,7 @@ use nom::combinator::{all_consuming, map, not, opt, peek, rest, verify};
 use nom::sequence::{separated_pair, tuple};
 use nom::{IResult, ParseTo};
 
-fn parse(input: &str) -> Ref {
+fn parse(input: &str) -> Ref<'_> {
     let (rest, url) = match url(input) {
         Ok(s) => s,
         Err(_) => (input, None),
@@ -96,7 +217,7 @@ fn parse(input: &str) -> Ref {
         url.user,
         url.pass = url.pass.map(|_| "<redacted>"),
         url.frag,
-        atom.id,
+        atom.tag,
         atom.version,
         "{}",
         input
@@ -167,7 +288,7 @@ fn first_path(input: &str) -> IResult<&str, (&str, &str)> {
 
 type UrlPrefix<'a> = (Option<&'a str>, Option<&'a str>, Option<&'a str>);
 
-fn parse_url(url: &str) -> IResult<&str, UrlPrefix> {
+fn parse_url(url: &str) -> IResult<&str, UrlPrefix<'_>> {
     let (rest, (scheme, user_pass)) = tuple((scheme, split_at))(url)?;
 
     let (user, pass) = match user_pass {
@@ -206,6 +327,10 @@ fn split_at(input: &str) -> IResult<&str, Option<&str>> {
     opt_split(input, "@")
 }
 
+fn split_carot(input: &str) -> IResult<&str, Option<&str>> {
+    opt_split(input, "^^")
+}
+
 fn split_colon(input: &str) -> IResult<&str, Option<&str>> {
     opt_split(input, ":")
 }
@@ -230,9 +355,9 @@ impl<'a> From<&'a str> for Ref<'a> {
 /// A error encountered when constructing the concrete types from an Atom URI
 #[derive(Error, Debug)]
 pub enum UriError {
-    /// An alias uses the same validation logic as the Unicode Atom identifier.
+    /// Malformed atom tag.
     #[error(transparent)]
-    AliasValidation(#[from] Error),
+    BadTag(#[from] Error),
     /// The version requested is not valid.
     #[error(transparent)]
     InvalidVersionReq(#[from] semver::Error),
@@ -299,13 +424,13 @@ impl<'a> From<&'a str> for UrlRef<'a> {
 
 impl<'a> From<&'a str> for AtomRef<'a> {
     fn from(s: &'a str) -> Self {
-        let (id, version) = match split_at(s) {
+        let (tag, version) = match split_at(s) {
             Ok((rest, Some(atom))) => (Some(atom), not_empty(rest)),
             Ok((rest, None)) => (not_empty(rest), None),
             _ => (None, None),
         };
 
-        AtomRef { id, version }
+        AtomRef { tag, version }
     }
 }
 
@@ -386,7 +511,7 @@ impl<'a> UrlRef<'a> {
             ?resolved
         );
 
-        let alternate_form = scheme == Scheme::File || scheme == Scheme::Ssh;
+        let alternate_form = scheme == Scheme::File;
         let port = if scheme == Scheme::Ssh {
             tracing::warn!(
                 port,
@@ -415,14 +540,14 @@ impl<'a> UrlRef<'a> {
 }
 
 impl<'a> AtomRef<'a> {
-    fn render(&self) -> Result<(Id, Option<VersionReq>), UriError> {
-        let id = Id::try_from(self.id.ok_or(UriError::NoAtom)?)?;
+    fn render(&self) -> Result<(AtomTag, Option<VersionReq>), UriError> {
+        let tag = AtomTag::try_from(self.tag.ok_or(UriError::NoAtom)?)?;
         let version = if let Some(v) = self.version {
             VersionReq::parse(v)?.into()
         } else {
             None
         };
-        Ok((id, version))
+        Ok((tag, version))
     }
 }
 
@@ -438,7 +563,11 @@ impl<'a> TryFrom<Ref<'a>> for Uri {
 
         tracing::trace!(?url, %id, ?version);
 
-        Ok(Uri { url, id, version })
+        Ok(Uri {
+            url,
+            tag: id,
+            version,
+        })
     }
 }
 
@@ -470,7 +599,7 @@ impl<'a> TryFrom<&'a str> for Uri {
     }
 }
 
-impl std::fmt::Display for Uri {
+impl Display for Uri {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let url = self
             .url
@@ -482,7 +611,13 @@ impl std::fmt::Display for Uri {
             .as_ref()
             .map(|v| format!("@{v}"))
             .unwrap_or_default();
-        write!(f, "{}::{}{}", &url.trim_end_matches('/'), self.id, &version)
+        write!(
+            f,
+            "{}::{}{}",
+            &url.trim_end_matches('/'),
+            self.tag,
+            &version
+        )
     }
 }
 
@@ -495,13 +630,40 @@ impl Uri {
 
     #[must_use]
     /// Returns the Atom identifier parsed from the URI.
-    pub fn id(&self) -> &Id {
-        &self.id
+    pub fn tag(&self) -> &AtomTag {
+        &self.tag
     }
 
     #[must_use]
     /// Returns the Atom version parsed from the URI.
     pub fn version(&self) -> Option<&VersionReq> {
         self.version.as_ref()
+    }
+}
+
+impl Display for UriOrUrl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            UriOrUrl::Atom(uri) => uri.fmt(f),
+            UriOrUrl::Pin(url) => url.fmt(f),
+        }
+    }
+}
+
+impl FromStr for UriOrUrl {
+    type Err = UriError;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s.parse::<Uri>() {
+            Ok(uri) => return Ok(UriOrUrl::Atom(uri)),
+            Err(e @ UriError::BadTag(_)) => {
+                if s.contains("::") {
+                    return Err(e);
+                }
+            },
+            Err(e @ UriError::InvalidVersionReq(_)) => return Err(e),
+            Err(_) => (),
+        }
+        s.parse::<AliasedUrl>().map(UriOrUrl::Pin)
     }
 }

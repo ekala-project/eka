@@ -12,22 +12,28 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
 
+env:
+  NIX_PATH: nixpkgs=https://github.com/NixOS/nixpkgs/archive/nixos-unstable.tar.gz
+
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
       - name: Install Nix
-        uses: nixbuild/nix-quick-install-action@v28
+        uses: nixbuild/nix-quick-install-action@v34
       - name: Setup Cache
-        uses: DeterminateSystems/magic-nix-cache-action@v8
-      - uses: Swatinem/rust-cache@v2
+        uses: DeterminateSystems/magic-nix-cache-action@v13
+      - uses: Swatinem/rust-cache@v2.8.1
       - name: Eval Devshell
         run: nix-instantiate shell.nix --add-root shell
       - name: Check Format
         run: nix-shell shell --run "treefmt --ci"
       - name: Lint
-        run: nix-shell shell --run "cargo clippy -- -D warnings && cargo clippy --no-default-features -- -D warnings"
+        run: nix-shell shell --run "cargo clippy -- -D warnings"
       - name: Run Tests
-        run: nix-shell shell --run "cargo test --all && cargo test --all --no-default-features"
+        run: nix-shell shell --run "cargo test --all"
