@@ -77,7 +77,7 @@
 //! let normalized = repo.normalize("path/to/atom")?;
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
-#[cfg(feature = "git")]
+
 pub mod git;
 use std::path::{Path, PathBuf};
 
@@ -275,14 +275,10 @@ where
     ) -> Result<<C as IntoIterator>::IntoIter, <Self as QueryStore<Ref, T>>::Error> {
         let r = format!("{}/*", crate::ATOM_REFS.as_str());
         let a = format!("{}:{}", r, r);
-        #[cfg(feature = "git")]
+
         let ro = format!("{}:{}", git::V1_ROOT, git::V1_ROOT);
 
-        let query = [
-            a.as_str(),
-            #[cfg(feature = "git")]
-            ro.as_str(),
-        ];
+        let query = [a.as_str(), ro.as_str()];
         let refs = self.get_refs(&query, transport)?;
         let atoms = Self::process_atoms(refs);
         Ok(atoms)
@@ -299,7 +295,6 @@ where
             .max_by_key(|(ref version, _)| version.to_owned())
     }
 
-    #[cfg(feature = "git")]
     /// find the root commit of the remote repo
     fn process_root(mut atoms: <C as IntoIterator>::IntoIter) -> Option<Id> {
         atoms.find_map(|(n, _, id)| (n.is_root()).then_some(id))

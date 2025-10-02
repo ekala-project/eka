@@ -79,13 +79,12 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 pub mod error;
-#[cfg(feature = "git")]
+
 pub mod git;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-#[cfg(feature = "git")]
 use git::GitContent;
 
 use crate::AtomId;
@@ -121,7 +120,6 @@ type ValidAtoms = HashMap<AtomTag, PathBuf>;
 /// Contains the content pertinent to a specific implementation for reporting results
 /// to the user.
 pub enum Content {
-    #[cfg(feature = "git")]
     /// Content specific to the Git implementation.
     Git(GitContent),
 }

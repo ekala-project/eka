@@ -1,20 +1,16 @@
-#[cfg(feature = "git")]
 use atom::store::git;
-#[cfg(feature = "git")]
 use gix::ThreadSafeRepository;
 use thiserror::Error;
 
 #[non_exhaustive]
 #[derive(Clone, Debug)]
 pub(super) enum Detected {
-    #[cfg(feature = "git")]
     Git(&'static ThreadSafeRepository),
     #[allow(dead_code)]
     None,
 }
 
 pub(super) async fn detect() -> Result<Detected, Error> {
-    #[cfg(feature = "git")]
     if let Ok(Some(repo)) = git::repo() {
         use std::fs;
         let git_dir = fs::canonicalize(repo.path())
@@ -36,7 +32,7 @@ pub(super) async fn detect() -> Result<Detected, Error> {
 pub(crate) enum Error {
     #[error("No supported repository found in this directory or its parents")]
     FailedDetection,
-    #[cfg(feature = "git")]
+
     #[error(transparent)]
     Discover(#[from] Box<gix::discover::Error>),
 }

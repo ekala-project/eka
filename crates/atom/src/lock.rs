@@ -57,10 +57,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-#[cfg(feature = "git")]
-use gix::ObjectId;
-#[cfg(feature = "git")]
-use gix::url as gix_url;
+use gix::{ObjectId, url as gix_url};
 use nix_compat::nixhash::NixHash;
 use semver::Version;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -121,10 +118,8 @@ pub enum AtomLocation {
     Path(PathBuf),
 }
 
-#[cfg(feature = "git")]
 use crate::AtomId;
 use crate::id::Name;
-#[cfg(feature = "git")]
 use crate::store::git::Root;
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
 /// Represents a locked atom dependency, referencing a verifiable repository slice.
@@ -361,7 +356,6 @@ impl<'de> Deserialize<'de> for WrappedNixHash {
     }
 }
 
-#[cfg(feature = "git")]
 impl From<ObjectId> for LockDigest {
     fn from(id: ObjectId) -> Self {
         match id {
@@ -399,7 +393,6 @@ mod serde_base32 {
     }
 }
 
-#[cfg(feature = "git")]
 impl From<AtomId<Root>> for LockDigest {
     fn from(value: AtomId<Root>) -> Self {
         use crate::Compute;
@@ -567,7 +560,7 @@ impl AtomReq {
             // the `AtomId`, to remain unambiguous?
             key.to_owned()
         };
-        let (version, oid) = <gix::Url as QueryVersion<_, _, _, _>>::process_highest_match(
+        let (version, oid) = <gix_url::Url as QueryVersion<_, _, _, _>>::process_highest_match(
             atoms.clone(),
             &tag,
             self.version(),
@@ -580,7 +573,7 @@ impl AtomReq {
             tag: tag.to_owned(),
             name,
             version,
-            location: if let gix::url::Scheme::File = url.scheme {
+            location: if let gix_url::Scheme::File = url.scheme {
                 AtomLocation::Path(url.path.to_string().into())
             } else {
                 AtomLocation::Url(url.to_owned())

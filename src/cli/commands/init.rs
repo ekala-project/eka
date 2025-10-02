@@ -6,11 +6,9 @@ use crate::cli::store::Detected;
 #[group(id = "init_args")]
 pub struct Args {
     #[command(flatten)]
-    #[cfg(feature = "git")]
     git: git::Args,
 }
 
-#[cfg(feature = "git")]
 mod git {
     use atom::store::git;
     use clap::Parser;
@@ -25,8 +23,8 @@ mod git {
 }
 
 pub(super) fn run(store: Detected, args: Args) -> anyhow::Result<()> {
+    #[allow(clippy::single_match)]
     match store {
-        #[cfg(feature = "git")]
         Detected::Git(repo) => {
             use atom::store::Init;
             let repo = repo.to_thread_local();

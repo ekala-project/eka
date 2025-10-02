@@ -32,13 +32,11 @@ impl<'a> GitContext<'a> {
 
     /// Compute the [`ObjectId`] of the given proto-object in memory
     fn _compute_hash(&self, obj: &dyn WriteTo) -> GitResult<ObjectId> {
-        use gix::objs;
-
         let mut buf = Vec::with_capacity(obj.size() as usize);
 
         obj.write_to(&mut buf)?;
 
-        let oid = objs::compute_hash(self.repo.object_hash(), obj.kind(), buf.as_ref());
+        let oid = gix::objs::compute_hash(self.repo.object_hash(), obj.kind(), buf.as_ref());
 
         Ok(oid?)
     }

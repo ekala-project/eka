@@ -1,4 +1,3 @@
-#[cfg(feature = "git")]
 mod git;
 
 use std::ffi::OsStr;
@@ -34,7 +33,6 @@ pub struct Args {
 #[derive(Parser, Debug)]
 struct StoreArgs {
     #[command(flatten)]
-    #[cfg(feature = "git")]
     git: git::GitArgs,
 }
 
@@ -58,7 +56,6 @@ pub(super) fn run(args: Args) -> Result<()> {
     let owned_path = path.to_owned();
     lock.sanitize(&manifest);
 
-    #[cfg(feature = "git")]
     git::run(&mut doc, &mut lock, args)?;
 
     // create tmpfile for atomic writes

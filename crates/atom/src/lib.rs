@@ -65,7 +65,6 @@
 //! - **Comprehensive error handling** with detailed error types
 //! - **Efficient caching** for remote operations
 #![deny(missing_docs)]
-#![cfg_attr(not(feature = "git"), allow(dead_code))]
 
 mod core;
 pub mod id;

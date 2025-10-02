@@ -34,6 +34,6 @@ jobs:
       - name: Check Format
         run: nix-shell shell --run "treefmt --ci"
       - name: Lint
-        run: nix-shell shell --run "cargo clippy -- -D warnings && cargo clippy --no-default-features -- -D warnings"
+        run: nix-shell shell --run "cargo clippy -- -D warnings"
       - name: Run Tests
-        run: nix-shell shell --run "cargo test --all && cargo test --all-targets --all --no-default-features"
+        run: nix-shell shell --run "cargo test --all"

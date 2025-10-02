@@ -4,7 +4,6 @@ use std::sync::LazyLock;
 use etcetera::BaseStrategy;
 use figment::providers::{Env, Format, Toml};
 use figment::{Figment, Metadata, Provider};
-#[cfg(feature = "git")]
 use gix::ThreadSafeRepository;
 use serde::{Deserialize, Serialize};
 
@@ -66,7 +65,6 @@ impl Config {
             fig = fig.admerge(Toml::file(config));
         }
 
-        #[cfg(feature = "git")]
         if let Ok(r) = ThreadSafeRepository::discover(".") {
             let repo_config = r.git_dir().join("info/eka.toml");
             fig = fig.admerge(Toml::file(repo_config));

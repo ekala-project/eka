@@ -6,13 +6,11 @@ use thiserror::Error;
 #[derive(Error, Debug)]
 /// The error representing a failure during publishing for any store implementation.
 pub enum PublishError {
-    #[cfg(feature = "git")]
     /// A transparent wrapper for a [`GitError`].
     #[error(transparent)]
     Git(#[from] git::Error),
 }
 
-#[cfg(feature = "git")]
 pub mod git {
     //! # Git Publishing Errors
     use std::path::PathBuf;
@@ -96,7 +94,6 @@ pub mod git {
         Duplicates,
     }
 
-    #[cfg(feature = "git")]
     impl Error {
         const INCONSISTENT_ROOT_SUGGESTION: &str =
             "You may need to reinitalize the remote if the issue persists";

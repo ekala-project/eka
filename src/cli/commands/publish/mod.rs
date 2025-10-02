@@ -1,4 +1,3 @@
-#[cfg(feature = "git")]
 mod git;
 
 use std::path::PathBuf;
@@ -26,16 +25,14 @@ pub(in super::super) struct PublishArgs {
 #[derive(Parser, Debug)]
 struct StoreArgs {
     #[command(flatten)]
-    #[cfg(feature = "git")]
     git: git::GitArgs,
 }
 
 use publish::Stats;
 pub(super) async fn run(store: Detected, args: PublishArgs) -> Result<Stats, PublishError> {
-    #[cfg_attr(not(feature = "stores"), allow(unused_mut))]
     let mut stats = Stats::default();
+    #[allow(clippy::single_match)]
     match store {
-        #[cfg(feature = "git")]
         Detected::Git(repo) => {
             use atom::publish::{Content, error};
             use {Err as Skipped, Ok as Published};

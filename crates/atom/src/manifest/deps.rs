@@ -51,7 +51,6 @@ use std::marker::PhantomData;
 use std::path::PathBuf;
 
 use bstr::ByteSlice;
-#[cfg(feature = "git")]
 use gix::url as gix_url;
 use semver::VersionReq;
 use serde::de::DeserializeOwned;

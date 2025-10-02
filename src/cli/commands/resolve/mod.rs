@@ -3,7 +3,6 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::Parser;
 
-#[cfg(feature = "git")]
 mod git;
 
 use crate::cli::store::Detected;
@@ -26,7 +25,6 @@ pub struct Args {
 #[derive(Parser, Debug)]
 struct StoreArgs {
     #[command(flatten)]
-    #[cfg(feature = "git")]
     git: git::GitArgs,
 }
 

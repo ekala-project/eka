@@ -26,7 +26,7 @@ tracing-indicatif.workspace  = true
 tracing-subscriber.workspace = true
 
 atom = { path = "crates/atom" }
-gix  = { workspace = true, optional = true }
+gix  = { workspace = true }
 
 [workspace.dependencies]
 anyhow            = "^1"
@@ -60,8 +60,3 @@ prodash = { version = "30.0.1", features = [
   "render-line-crossterm",
   "render-line-autoconfigure",
 ] }
-
-[features]
-default = ["stores"]
-git     = ["gix", "atom/git"]
-stores  = ["git"]

@@ -9,8 +9,4 @@ etcetera = "^0.8"
 serde.workspace = true
 
 figment = { version = "^0.10", features = ["env", "toml"] }
-gix     = { workspace = true, default-features = false, optional = true }
-
-[features]
-default = []
-git     = ["dep:gix"]
+gix     = { workspace = true, default-features = false }
