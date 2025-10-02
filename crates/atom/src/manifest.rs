@@ -99,7 +99,7 @@ pub struct Manifest {
     pub atom: Atom,
     /// The dependencies of the Atom.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub deps: HashMap<Name, deps::Dependency>,
+    pub(crate) deps: HashMap<Name, deps::Dependency>,
 }
 
 impl Manifest {
@@ -122,7 +122,7 @@ impl Manifest {
     ///
     /// This function will return an error if the content is invalid
     /// TOML, or if the \[atom] key is missing.
-    pub fn get_atom(content: &str) -> AtomResult<Atom> {
+    pub(crate) fn get_atom(content: &str) -> AtomResult<Atom> {
         let doc = content.parse::<DocumentMut>()?;
 
         if let Some(v) = doc.get("atom").map(ToString::to_string) {

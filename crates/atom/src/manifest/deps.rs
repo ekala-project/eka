@@ -62,6 +62,21 @@ use crate::id::AtomTag;
 use crate::{Lockfile, Manifest};
 
 /// A Writer struct to ensure modifications to the manifest and lock stay in sync
+/// # Example
+///
+/// ```rust,no_run
+/// use std::path::Path;
+///
+/// use atom::id::Name;
+/// use atom::manifest::deps::ManifestWriter;
+/// use atom::uri::Uri;
+///
+/// let mut writer = ManifestWriter::new(Path::new("/path/to/atom.toml")).unwrap();
+/// let uri = "my-atom@^1.0.0".parse::<Uri>().unwrap();
+/// let key = "my-atom".parse::<Name>().unwrap();
+/// writer.add_uri(uri, Some(key)).unwrap();
+/// writer.write_atomic().unwrap();
+/// ```
 pub struct ManifestWriter {
     path: PathBuf,
     doc: TypedDocument<Manifest>,
@@ -100,12 +115,13 @@ pub enum Dependency {
 /// Represents a locked atom dependency, referencing a verifiable repository slice.
 #[serde(deny_unknown_fields)]
 pub struct AtomReq {
-    /// The tag of the atom (if the toml key is different)
+    /// The tag of the atom, used if the dependency name in the manifest
+    /// differs from the atom's actual tag.
     #[serde(skip_serializing_if = "Option::is_none")]
     tag: Option<AtomTag>,
-    /// The semantic version request specification of the atom.
+    /// The semantic version requirement for the atom (e.g., "^1.0.0").
     version: VersionReq,
-    /// The location of the atom, whether local or remote.
+    /// The Git URL or local path where the atom's repository can be found.
     #[serde(serialize_with = "serialize_url", deserialize_with = "deserialize_url")]
     store: gix_url::Url,
 }
@@ -137,9 +153,9 @@ pub enum DirectPin {
 #[serde(deny_unknown_fields)]
 /// Represents a simple pin, with an optional unpack field.
 pub struct Pin {
-    /// The url of the pin.
+    /// The URL of the pinned resource.
     pub pin: Url,
-    /// Whether or not to unpack the pin.
+    /// If `true`, the resource will be unpacked after fetching.
     #[serde(skip_serializing_if = "not")]
     pub unpack: bool,
 }
@@ -150,10 +166,10 @@ pub struct Pin {
 ///
 /// This struct is used when a dependency is pinned directly to a Git repository.
 pub struct GitPin {
-    /// The URL of the source.
+    /// The URL of the Git repository.
     pub repo: Url,
-    /// The strategy used to fetch the resource, by version (resolving version tags), or by
-    /// straight ref
+    /// The fetching strategy, either by a specific ref (branch, tag, commit)
+    /// or by resolving a semantic version tag.
     #[serde(flatten)]
     pub fetch: GitStrat,
 }
@@ -176,9 +192,10 @@ pub enum GitStrat {
 /// This struct is used when a dependency is sourced from another atom,
 /// enabling composition of complex systems from simpler atom components.
 pub struct IndirectPin {
-    /// The atom id to reference a pin from.
+    /// The tag of the atom from which to source the dependency.
     pub from: AtomTag,
-    /// The name of the dependency to acquire from the atom (same as it's name if not present).
+    /// The name of the dependency to acquire from the source atom. If `None`,
+    /// it defaults to the name of the current dependency.
     ///
     /// This field is omitted from serialization if None.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -193,12 +210,14 @@ pub struct IndirectPin {
 /// dependencies from other atoms).
 #[serde(deny_unknown_fields)]
 pub struct PinReq {
-    /// The relative path within the source (for Nix imports).
+    /// An optional relative path within the fetched source, useful for Nix imports
+    /// or accessing a subdirectory within an archive.
     ///
     /// This field is omitted from serialization if None.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<PathBuf>,
-    /// The type of pin, either direct or indirect.
+    /// The kind of pin, which can be a direct URL, a Git repository, or an
+    /// indirect reference to a dependency from another atom.
     ///
     /// This field is flattened in the TOML serialization.
     #[serde(flatten)]
@@ -209,7 +228,7 @@ pub struct PinReq {
 /// Represents a dependency which is fetched at build time as an FOD.
 #[serde(deny_unknown_fields)]
 pub struct SrcReq {
-    /// The URL of the source.
+    /// The URL from which to fetch the build-time source.
     pub src: Url,
 }
 

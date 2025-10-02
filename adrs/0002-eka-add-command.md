@@ -2,271 +2,129 @@
 
 ## Status
 
-Proposed
+Accepted
 
 ## Context
 
-The `eka add` command needs to add dependencies to an Atom's manifest while ensuring the dependency exists remotely. This requires checking remote resources efficiently without downloading content, supporting both Atom URIs and legacy pin URLs, and updating the manifest TOML file. The command should integrate cleanly with the existing atom crate for reusability and follow established patterns for error handling and user experience.
+The `eka add` command adds `atom` dependencies to a project's manifest and updates the lockfile. It performs a full dependency resolution to ensure that the specified dependency exists and that all constraints are met before modifying `atom.toml` and `atom.lock`.
+
+This ADR documents the final implementation, which focuses exclusively on resolving `atom` dependencies. The strategy for handling `pin` dependencies has been re-evaluated and will be addressed in a future ADR.
 
 ## Decision
 
-### 1. Core Library Functions in Atom Crate
+The `add` command's functionality is orchestrated by the `ManifestWriter` struct, which manages atomic updates to both the manifest and the lockfile. The core logic resides in the `atom` crate, promoting separation of concerns between the CLI and the core library.
 
-**Remote Existence Checking** (new module: `crates/atom/src/remote.rs`):
+### 1. Manifest and Lockfile Management
 
-```rust
-pub async fn check_atom_exists(
-    url: &Url,
-    tag: &AtomTag,
-    version: Option<&VersionReq>
-) -> Result<bool, RemoteError>
-
-pub async fn check_pin_exists(
-    url: &Url,
-    refspec: Option<&str>
-) -> Result<bool, RemoteError>
-```
-
-**Manifest Update Utilities** (extend `crates/atom/src/manifest.rs`):
+The `ManifestWriter` (defined in `crates/atom/src/manifest/deps.rs`) is the central component for managing file I/O. It ensures that any changes to the `atom.toml` manifest and the `atom.lock` lockfile are written atomically, preventing corruption.
 
 ```rust
-impl Manifest {
-    pub fn add_atom_dependency(
-        &mut self,
-        uri: &Uri
-    ) -> Result<(), ManifestError>
+// in crates/atom/src/manifest/deps.rs
+pub struct ManifestWriter {
+    // ...
+}
 
-    pub fn add_pin_dependency(
-        &mut self,
-        url: &AliasedUrl,
-        refspec: Option<&str>
-    ) -> Result<(), ManifestError>
+impl ManifestWriter {
+    pub fn new(path: &Path) -> Result<Self, DocError>
+    pub fn add_uri(&mut self, uri: Uri, key: Option<Name>) -> Result<(), DocError>
+    pub fn write_atomic(&mut self) -> Result<(), DocError>
 }
 ```
 
-**File I/O Utilities** (new module: `crates/atom/src/manifest/io.rs`):
+Error handling is localized within the modules where errors can occur, rather than being centralized in a single `error.rs` file.
 
-```rust
-pub struct ManifestManager {
-    pub fn load(path: &Path) -> Result<Manifest, ManifestError>
-    pub fn save_atomic(manifest: &Manifest, path: &Path) -> Result<(), ManifestError>
-}
-```
+### 2. Manifest and Lockfile Synchronization Strategy
 
-### 2. CLI Integration Design
+A critical design goal of the `add` command is to guarantee that the `atom.toml` manifest and the `atom.lock` lockfile are always consistent. This is enforced by the `ManifestWriter` struct, which acts as a gatekeeper, ensuring that the files cannot be loaded or modified independently.
 
-**Command Structure** (`src/cli/commands/add/mod.rs`):
+The synchronization process is initiated immediately upon the instantiation of `ManifestWriter::new`, before any modifications can be made. The algorithm is as follows:
 
-```rust
-#[derive(Parser)]
-pub struct Args {
-    /// The atom URI or pin URL to add as a dependency
-    dependency: String,
-    /// The path to the atom to modify (defaults to current directory)
-    #[arg(short, long, default_value = ".")]
-    path: PathBuf,
-    /// Git refspec for pin dependencies (branch, tag, or commit)
-    #[arg(long)]
-    r#ref: Option<String>,
-    /// Target remote for local atom refs
-    #[arg(long, short = 't')]
-    remote: Option<String>,
-}
-```
+1.  **Typed Loading**: The `atom.toml` manifest is loaded into a `TypedDocument<Manifest>`. This internal struct couples the raw TOML document (`toml_edit::DocumentMut`), which preserves formatting, with the strongly-typed `Manifest` struct. This ensures that the in-memory representation is always a valid reflection of the file's content.
+
+2.  **Sanitization**: The `Lockfile::sanitize` method is called. Its purpose is to remove any stale entries from the lockfile that no longer correspond to a dependency in the manifest. This handles cases where a dependency has been manually removed from `atom.toml`.
+
+3.  **Synchronization**: The `Lockfile::synchronize` method is then called to align the lockfile with the manifest's requirements. This involves two main checks:
+    - **New Dependencies**: If a dependency exists in the manifest but not in the lockfile, it is resolved (`AtomReq::resolve`), and the resulting `AtomDep` is added to the lockfile.
+    - **Out-of-Sync Dependencies**: If a dependency exists in both files, the system checks if the locked version in `atom.lock` still satisfies the version requirement in `atom.toml`. If it does not (e.g., the requirement was changed from `^1.0` to `^2.0`), the dependency is re-resolved, and the lockfile entry is updated with the new version.
+
+This proactive synchronization on every load guarantees that the system always operates on a consistent state, preventing data drift and ensuring the reliability of the dependency resolution process.
+
+### 3. Dependency Resolution and Locking
+
+The `add` command's primary responsibility is to trigger a full dependency resolution and locking process. This is a significant departure from the original plan of a simple remote existence check.
 
 **Execution Flow**:
 
-1. Parse dependency string into `Uri` or `AliasedUrl`
-2. Load existing manifest from `atom.toml`
-3. Check remote existence using atom crate functions
-4. Add dependency to manifest
-5. Save updated manifest atomically
-6. Display success/failure feedback
+1.  **Initialization**: The `ManifestWriter` is instantiated with the path to the project, loading the existing `atom.toml` and `atom.lock` files.
+2.  **Add Dependency**: The `ManifestWriter::add_uri` method is called with the new dependency.
+3.  **Resolution**: Inside `add_uri`, the `AtomReq::resolve` method (from `crates/atom/src/lock.rs`) is invoked. This function queries the remote Git repository (`store`) to find the highest matching version for the given `tag` and version requirement. A successful resolution confirms the atom's existence and provides the exact commit hash (`rev`) and atom ID.
+4.  **Lockfile Update**: The resolved dependency, now an `AtomDep` struct, is added to the `Lockfile` instance managed by the `ManifestWriter`.
+5.  **Manifest Update**: The new dependency is added to the `atom.toml` document.
+6.  **Atomic Write**: The `ManifestWriter::write_atomic` method is called to save both the updated manifest and lockfile to disk.
 
-### 3. Remote Checking Strategy
+This process ensures that a dependency is only added to the manifest if it can be successfully resolved and locked.
 
-**For Atom Dependencies**:
+### 4. Data Structures
 
-- Use `gix` functionality to query `refs/atoms/{id}/*` patterns
-- Support version requirements by checking multiple refs
-- Cache results locally with TTL (1 hour?)
+The implementation uses more detailed data structures than originally proposed to accurately model dependencies.
 
-**For Pin Dependencies**:
+**Dependency Specification (`crates/atom/src/manifest/deps.rs`)**:
 
-- **Git pins**: Use similar git ref checking as atoms
-- **HTTP pins**: Use HEAD request to check resource existence
-  - Send `HEAD /path HTTP/1.1` with minimal headers
-  - Accept 2xx status codes as success
-  - Handle redirects appropriately
-  - Timeout after 10 seconds
+- `Dependency`: An enum that can represent different types of dependencies (`Atom`, `Pin`, `Src`).
+- `AtomReq`: A struct representing a request for an atom dependency in the manifest. It includes:
+  - `tag`: The optional, unique identifier of the atom.
+  - `version`: The semantic version requirement.
+  - `store`: The Git URL or local path of the atom's repository.
 
-**Implementation Details**:
+**Lockfile Structure (`crates/atom/src/lock.rs`)**:
 
-```rust
-// HTTP HEAD request for pin checking
-let client = reqwest::Client::builder()
-    .timeout(Duration::from_secs(10))
-    .build()?;
+The lockfile is fully implemented and is a critical part of the `add` command's operation.
 
-let response = client.head(url).send().await?;
-let exists = response.status().is_success();
-```
+- `Lockfile`: The root structure of the `atom.lock` file, containing a map of all resolved dependencies.
+- `Dep`: An enum representing a locked dependency, which can be an `Atom`, `Pin`, etc.
+- `AtomDep`: A struct representing a locked atom dependency. It contains the resolved information:
+  - `tag`: The unique identifier of the atom.
+  - `version`: The exact resolved `Version`.
+  - `location`: The `AtomLocation` (URL or path).
+  - `rev`: The resolved Git commit hash (`LockDigest`).
+  - `id`: The cryptographic identity of the atom (`LockDigest`).
 
-### 4. Error Handling and User Feedback
+### 5. Pin Dependency Resolution
 
-**Error Types** (new module: `crates/atom/src/error.rs`):
-
-```rust
-#[derive(Error, Debug)]
-pub enum AddError {
-    #[error("Remote resource not found: {0}")]
-    RemoteNotFound(String),
-    #[error("Network error: {0}")]
-    Network(#[from] reqwest::Error),
-    #[error("Git operation failed: {0}")]
-    Git(#[from] gix::Error),
-    #[error("Manifest error: {0}")]
-    Manifest(#[from] ManifestError),
-    #[error("I/O error: {0}")]
-    Io(#[from] std::io::Error),
-}
-```
-
-**User Feedback Strategy**:
-
-- Progress indicators for network operations
-- Clear success messages: `"Added {dependency} to atom.toml"`
-- Descriptive error messages with actionable suggestions
-- Implement verbose logging (`-v`) for debugging information
-- Exit codes: 0 for success, 1 for user errors, 2 for system errors?
-
-### 5. Manifest Update Strategy
-
-**TOML Structure Updates**:
-
-```toml
-[deps.atoms]
-"atom-id" = { version = "^1.0", url = "https://..." }
-
-[deps.pins]
-"pin-name" = { url = "https://...", ref = "main" }
-```
-
-**Update Process**:
-
-1. Parse existing `atom.toml` efficiently using `toml_edit` facilities
-2. Ensure existence remotely, and add new dependency to appropriate section
-3. Handle conflicts (duplicate names/IDs)
-4. Serialize back to TOML with consistent formatting
-5. Write atomically to prevent corruption
-
-**Conflict Resolution**:
-
-- For atoms: Error on duplicate IDs with suggestion to update version
-- For pins: Error on duplicate names with suggestion to use `--name` flag to give a unique name
-
-### 6. Lock File Integration
-
-**Current Phase**: Stub implementation that validates dependency can be resolved
-**Future Phase**: Full resolution and lock file updates
-
-```rust
-// Stub for current implementation
-pub async fn validate_dependency_for_lock(
-    uri: &Uri
-) -> Result<(), LockError> {
-    // Check remote existence
-    // Validate URI format
-    // Return Ok(()) if dependency is resolvable
-    todo!("Implement when resolution logic is ready")
-}
-```
-
-### 7. Testing Strategy
-
-**Unit Tests**:
-
-- Test remote checking functions with mock servers
-- Test manifest update logic with various scenarios
-- Test error conditions and edge cases
-
-**Integration Tests**:
-
-- End-to-end test with real git repositories
-- Test HTTP pin checking with test servers
-- Test manifest file I/O operations
-
-**Test Utilities**:
-
-```rust
-// Mock remote server for testing
-async fn mock_git_server() -> MockServer {
-    // Setup mock responses for ls-remote
-}
-
-// Test helper for temporary manifests
-fn with_temp_manifest<F>(content: &str, f: F) -> Result<()>
-where F: FnOnce(&Path) -> Result<()>
-```
+The implementation strategy for `pin` dependencies has been restructured and will be detailed in a future ADR. The focus of the current implementation is solely on `atom` dependency resolution.
 
 ## Consequences
 
 **Pros**:
 
-- Clean separation of concerns between CLI and library code
-- Reusable remote checking functionality for future commands
-- Robust error handling with actionable feedback
-- Atomic file operations prevent corruption
-- Efficient remote operations minimize network overhead
+- **Correctness**: The system ensures that only resolvable dependencies are added to the manifest.
+- **Atomicity**: The use of `ManifestWriter` prevents corruption by ensuring that the manifest and lockfile are always consistent.
+- **Clear Separation of Concerns**: The core logic is contained within the `atom` crate, making it reusable and independent of the CLI.
 
 **Cons**:
 
-- Caching adds complexity but improves performance
-- Initial lock file integration is stubbed (acceptable for current phase)
-
-**Risks**:
-
-- Network timeouts may frustrate users (mitigated with progress indicators)
-- Large ref lists may slow git operations (mitigated with targeted queries)
-
-**Alternatives Considered**:
-
-- Single crate implementation: Rejected due to lack of reusability
-- Always download content: Rejected due to inefficiency
-- No remote checking: Rejected due to poor user experience
-- Complex CLI flags: Rejected in favor of URI-based configuration
-
-## Implementation Plan
-
-1. **Phase 1**: Core library functions in atom crate
-2. **Phase 2**: CLI command implementation
-3. **Phase 3**: Error handling and user feedback
-4. **Phase 4**: Testing and documentation
-5. **Phase 5**: Lock file integration (future)
+- **Increased Complexity**: The full resolution process is more complex than the originally proposed remote check, however it was always the intended end goal.
 
 ## References
 
 - ADR 0001: Lock Generation in Eka CLI
-- Existing atom crate documentation
-- gix crate documentation: https://docs.rs/gix
-- reqwest crate documentation: https://docs.rs/reqwest
+- `gix` crate documentation: https://docs.rs/gix
 
 ```mermaid
 flowchart TD
-    A[Parse CLI Args] --> B{Atom or Pin?}
-    B -->|Atom| C[Parse URI]
-    B -->|Pin| D[Parse URL]
-    C --> E[Check Remote Existence]
-    D --> E
-    E --> F{Manifest Exists?}
-    F -->|No| G[Create New Manifest]
-    F -->|Yes| H[Load Existing Manifest]
-    G --> I[Add Dependency]
-    H --> I
-    I --> J[Save Manifest Atomically]
-    J --> K[Display Success/Error]
-    K --> L[Exit]
+    A[Parse CLI Args] --> B[Instantiate ManifestWriter]
+    B --> C[Load atom.toml & atom.lock]
+    C --> D[Call add_uri with new dependency]
+    D --> E[AtomReq::resolve]
+    E --> F{Resolution Successful?}
+    F -->|Yes| G[Update Lockfile & Manifest in memory]
+    G --> H[Call write_atomic]
+    H --> I[Save atom.toml & atom.lock]
+    I --> J[Display Success]
+    F -->|No| K[Display Error]
+    J --> L[Exit]
+    K --> L
 
     style E fill:#e1f5fe
-    style J fill:#c8e6c9
+    style H fill:#c8e6c9
 ```

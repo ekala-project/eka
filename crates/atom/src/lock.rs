@@ -73,7 +73,7 @@ use crate::store::QueryVersion;
 
 /// A wrapper around NixHash to provide custom serialization behavior.
 #[derive(Debug, PartialEq, PartialOrd, Eq, Clone, Serialize)]
-pub struct WrappedNixHash(pub NixHash);
+pub(crate) struct WrappedNixHash(pub NixHash);
 
 /// Represents different types of Git commit hashes.
 ///
@@ -158,7 +158,7 @@ pub struct PinDep {
     /// The URL of the source.
     pub url: Url,
     /// The hash for integrity verification (e.g., sha256).
-    pub hash: WrappedNixHash,
+    hash: WrappedNixHash,
     /// The relative path within the source (for Nix imports).
     ///
     /// This field is omitted from serialization if None.
@@ -198,7 +198,7 @@ pub struct PinTarDep {
     /// The URL to the tarball.
     pub url: Url,
     /// The hash of the tarball.
-    pub hash: WrappedNixHash,
+    hash: WrappedNixHash,
     /// The relative path within the extracted archive.
     ///
     /// This field is omitted from serialization if None.
@@ -288,13 +288,14 @@ pub struct BuildSrc {
     /// The URL to fetch the source.
     pub url: Url,
     /// The hash for verification.
-    pub hash: WrappedNixHash,
+    hash: WrappedNixHash,
 }
 
-/// A wrapper type holding our dependencies in a BTreeMap for efficient lookup by key for trivial
-/// comparison to the manifest and consistent ordering, for consistent and minimal diffs.
+/// A wrapper for `BTreeMap` that ensures consistent ordering for serialization
+/// and minimal diffs in the lockfile. It maps dependency names to their locked
+/// representations.
 #[derive(Debug, PartialEq, Eq)]
-pub struct DepMap<Deps>(BTreeMap<Name, Deps>);
+pub(crate) struct DepMap<Deps>(BTreeMap<Name, Deps>);
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 /// The root structure for the lockfile, containing resolved dependencies and sources.
@@ -315,7 +316,7 @@ pub struct Lockfile {
     /// This field contains all the resolved dependencies with their exact
     /// versions and revisions. It is omitted from serialization if None or empty.
     #[serde(default, skip_serializing_if = "DepMap::is_empty")]
-    pub deps: DepMap<Dep>,
+    pub(crate) deps: DepMap<Dep>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -486,18 +487,19 @@ impl<T> Default for DepMap<T> {
 }
 
 impl Lockfile {
-    /// Retain only those entries which are present in the manifest, maintaining the manifest file
-    /// as the single source of truth.
-    pub fn sanitize(&mut self, manifest: &Manifest) {
+    /// Removes any dependencies from the lockfile that are no longer present in the
+    /// manifest, ensuring the lockfile only contains entries that are still relevant.
+    pub(crate) fn sanitize(&mut self, manifest: &Manifest) {
         self.deps
             .as_mut()
             .retain(|k, _| manifest.deps.contains_key(k));
         self.synchronize(manifest);
     }
 
-    /// For any key found in the manifest but not in the lock, resolve it, for every other key,
-    /// ensure the version specs still align with the remote.
-    pub fn synchronize(&mut self, manifest: &Manifest) {
+    /// Updates the lockfile to match the dependencies specified in the manifest.
+    /// It resolves any new dependencies, updates existing ones if their version
+    /// requirements have changed, and ensures the lockfile is fully consistent.
+    pub(crate) fn synchronize(&mut self, manifest: &Manifest) {
         for (k, v) in manifest.deps.iter() {
             if !self.deps.as_ref().contains_key(k) {
                 match v {
@@ -539,16 +541,20 @@ impl Lockfile {
 }
 
 impl AtomReq {
-    /// Here it is assumed that, if the AtomTag has a value for it's tag field, that the passed key
-    /// will diverge from it, as the manifest only encodes the tag if the TOML key != tag.
+    /// Resolves an `AtomReq` to a fully specified `AtomDep` by querying the
+    /// remote Git repository to find the highest matching version and its
+    /// corresponding commit hash.
     ///
-    /// Failure condition: if the passed key diverges from the atom's intended tag, and the tag
-    /// field is `None`, then the resulting atom will be incorrectly tagged with the keys name,
-    /// likely resulting in a resolution failure, or resolving the wrong dependency.
+    /// # Arguments
     ///
-    /// For this reason, we only call this function in a context where the key and tag are both
-    /// known and can be compared.
-    pub fn resolve(&self, key: &AtomTag) -> Result<AtomDep, crate::store::git::Error> {
+    /// * `key` - The name of the dependency as specified in the manifest, which may differ from the
+    ///   atom's tag.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing the resolved `AtomDep` or a `git::Error` if
+    /// resolution fails.
+    pub(crate) fn resolve(&self, key: &AtomTag) -> Result<AtomDep, crate::store::git::Error> {
         let url = self.store();
 
         let atoms = url.get_atoms(None)?;
