@@ -1,4 +1,5 @@
 mod git;
+pub(super) mod init;
 
 use std::path::PathBuf;
 
@@ -15,17 +16,29 @@ pub(in super::super) struct PublishArgs {
     #[arg(long, short, conflicts_with = "path")]
     recursive: bool,
 
+    /// Initialize the Ekala store.
+    ///
+    /// This command initializes the repository for use as an Ekala store
+    /// fit for publishing atoms to a remote location.
+    #[arg(
+        long,
+        conflicts_with = "path",
+        conflicts_with = "recursive",
+        verbatim_doc_comment
+    )]
+    pub(super) init: bool,
+
     /// Path(s) to the atom(s) to publish
     #[arg(required_unless_present = "recursive")]
     path: Vec<PathBuf>,
     #[command(flatten)]
-    store: StoreArgs,
+    pub(super) store: StoreArgs,
 }
 
 #[derive(Parser, Debug)]
-struct StoreArgs {
+pub(super) struct StoreArgs {
     #[command(flatten)]
-    git: git::GitArgs,
+    pub(super) git: git::GitArgs,
 }
 
 use publish::Stats;
