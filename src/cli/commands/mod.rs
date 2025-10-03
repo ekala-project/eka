@@ -1,5 +1,4 @@
 mod add;
-mod init;
 mod new;
 mod publish;
 mod resolve;
@@ -23,12 +22,6 @@ pub(super) enum Commands {
     /// future support of alternative storage backends as well.
     #[command(verbatim_doc_comment)]
     Publish(publish::PublishArgs),
-    /// Initialize the Ekala store.
-    ///
-    /// This command initializes the repository for use as an Ekala store
-    /// fit for publishing atoms to a remote location.
-    #[command(verbatim_doc_comment)]
-    Init(init::Args),
     /// Resolve dependencies for the specified atom(s).
     ///
     /// This command will resolve and lock each dependency for the given
@@ -53,9 +46,12 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
     let store = store::detect();
     match args.command {
         Commands::Publish(args) => {
-            publish::run(store.await?, args).await?;
+            if args.init {
+                publish::init::run(store.await?, args.store)?;
+            } else {
+                publish::run(store.await?, args).await?;
+            }
         },
-        Commands::Init(args) => init::run(store.await?, args)?,
         Commands::Resolve(args) => resolve::run(store.await?, args)?,
         Commands::New(args) => new::run(args)?,
         Commands::Add(args) => add::run(args)?,
