@@ -7,7 +7,7 @@ This living document outlines the development roadmap for `eka`, `atom-nix`, and
 ### Core Atom Format & Publishing
 
 - [x] **Atom Format:** Implement the core data structure for atoms. A detached (from history) reference pointing to only relevant (to the atom) underlying git objects.
-- [x] **Git-Native Publishing:** Atoms are published directly to a git repository, leveraging git's object model for storage and transport.
+- [x] **Git-Native Publishing:** Atoms are published directly to a git repository, leveraging git's object model for storage and transport, as detailed in [ADR #4](adrs/0004-publish-command.md).
   - [x] **Source History Integrity:** All atoms must derive from a common root commit (the first commit in the repository), ensuring a single, verifiable source of truth for an entire project's dependency graph. This root commit's hash is used as a global identifier for the atom set.
   - [x] **Cryptographically Secure & Content-Addressed IDs:** Implement unique atom IDs derived from their declared Unicode tags and a key from the repository's root commit. This allows for unambiguous, cryptographically secure tracking of atoms across projects and ensures that changing a tag correctly changes the atom's identity.
   - [x] **Temporal Conflict Resolution:** Enforce that no two atoms within the same commit (the same point in history) can share the same tag, preventing namespace collisions.
@@ -18,9 +18,9 @@ This living document outlines the development roadmap for `eka`, `atom-nix`, and
 ### Configuration & Dependency Management
 
 - [x] **Configuration:** Implement parsing for a basic `eka.toml` configuration file.
-- [x] **Atom URIs & Aliases:** Implement a user-friendly URI scheme for referencing atoms, with support for aliases in the configuration file for both atom URIs and legacy URLs.
-- [x] **`eka add` Command:** Implement the `eka add` command for adding dependencies.
-  - [x] **Manifest & Lock File Synchronization:** Ensure atomic updates to the manifest (`eka.toml`) and lock file (`eka.lock`) to maintain consistency.
+- [x] **Atom URIs & Aliases:** Implement a user-friendly URI scheme for referencing atoms, with support for aliases in the configuration file for both atom URIs and legacy URLs, as detailed in [ADR #5](adrs/0005-uri-format.md).
+- [x] **`eka add` Command:** Implement the `eka add` command for adding dependencies, as detailed in [ADR #2](adrs/0002-eka-add-command.md).
+  - [x] **Manifest & Lock File Synchronization:** Ensure atomic updates to the manifest (`eka.toml`) and lock file (`eka.lock`) to maintain consistency, as detailed in [ADR #1](adrs/0001-lock-generation.md) and its [addendum](adrs/0001-lock-generation-addendum.md).
   - [x] **Semantic Version Resolution:** Implement semver-based resolution by querying git references on the remote. The highest matching version is resolved and the exact version, revision hash, and cryptographic ID are recorded in the lock file.
 - [ ] **`eka add` Legacy Support:** Finalize support for locking legacy pin-style dependencies (e.g., Nix flakes URLs) to facilitate interoperability, as outlined in [ADR #3](adrs/0003-pure-rust-pin-dependencies.md).
 - [ ] **`eka resolve` Command:** Implement a command to synchronize the lock file with the manifest without adding new dependencies.
