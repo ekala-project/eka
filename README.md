@@ -79,7 +79,8 @@ eka add gh:owner/repo^^some-branch
 
 For a detailed breakdown of the development plan, please see the full [ROADMAP.md](./ROADMAP.md).
 
-The architecture of Eka is guided by a series of Architectural Decision Records (ADRs). To learn more about the technical details, please refer to the [ADRs](./adrs).
+The architecture of Eka is guided by a series of Architectural Decision Records (ADRs). To learn more about the technical details, please refer to the [ADRs](./adrs). The atom's crate docs are also available at [docs.eka.rs][crate].
 
 [eos]: https://github.com/ekala-project/eos-gateway
 [atom-nix]: https://github.com/ekala-project/atom
+[crate]: https://docs.eka.rs/atom
