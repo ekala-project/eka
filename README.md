@@ -59,7 +59,11 @@ Then, you can publish atoms from your current `HEAD` or a specified revision:
 eka publish .
 ```
 
-<!-- Placeholder for asciinema demo of eka publish -->
+<p align="center">
+<a href="https://asciinema.org/a/uIcIOlELOVaPn15ICS2ZEH2CQ">
+    <img src="https://asciinema.org/a/uIcIOlELOVaPn15ICS2ZEH2CQ.svg" alt="Publish Demo" height="256">
+  </a>
+</p>
 
 ### `eka add`: Adding and Locking Dependencies
 
@@ -73,7 +77,11 @@ eka add gh:owner/repo::my-atom@^1
 eka add gh:owner/repo^^some-branch
 ```
 
-<!-- Placeholder for asciinema demo of eka add -->
+<p align="center">
+  <a href="https://asciinema.org/a/qk7oNQIpDH0nsR0EsnRWsS7YQ">
+    <img src="https://asciinema.org/a/qk7oNQIpDH0nsR0EsnRWsS7YQ.svg" alt="Add Demo" height="256">
+  </a>
+</p>
 
 ## Development
 
