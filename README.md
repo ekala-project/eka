@@ -13,7 +13,7 @@ This work is centered on four core components, which will eventually be unified 
 
 ## Design Goals
 
-- **Disciplined:** Eka focuses on its area of expertise: providing a fast, intuitive interface for managing dependencies. It maintains a clean separation of concerns, delegating the heavy lifting of evaluation and building to a dedicated scheduler (Eos).
+- **Disciplined:** Eka focuses on its area of expertise: providing a fast, intuitive interface for managing dependencies with no external binary dependencies. It maintains a clean separation of concerns, delegating the heavy lifting of evaluation and building to a dedicated scheduler (Eos).
 - **Fast:** The dependency management commands in `eka` are designed to be exceptionally fast, operating primarily on static metadata. Querying, resolving, and locking atoms are near-instantaneous operations.
 - **Conceptually High-Level:** Developers care about packages, versions, security, and reproducibility, not the nitty-gritty of Nix derivations. Eka provides an interface that speaks to developers at their level of concern, while still providing a powerful gateway to the guarantees that Nix and the Atom Format provide.
 
