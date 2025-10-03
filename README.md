@@ -1,90 +1,85 @@
-# Eka CLI
+# Eka: A Foundational Frontend for a Better Nix Experience
 
-> ⚠️ Warning: Eka is in early experimental stages. Features are unstable and subject to change.
+> ⚠️ **Warning:** Eka is in early experimental stages. Features are unstable and subject to change.
 
-Eka is envisioned as a next-generation functional evaluation frontend for the Ekala development platform, aiming to offer a seamless, extensible, and powerful interface for managing complex software projects.
+This repository currently contains `eka`, a next-generation frontend for the [Ekala Project's](https://github.com/ekala-project) Nix-based infrastructure. Unlike the vast majority of existing Nix tooling, `eka` is not a wrapper around the `nix` CLI. It is a fundamentally new, native tool designed to provide a more efficient, approachable, and decentralized development experience.
 
-## A Reasonable Interface
+This work is centered on four core components, which will eventually be unified into a single monorepo:
 
-CLI interactions with Nix builds (e.g. nix-shell) can halt for undecidable periods before even starting to build. In contrast, commands like `cargo build` operate on static, committable information, allowing them to begin work immediately.
+- **Eka:** A user-facing CLI that provides a reasonable, statically-determinable interface for managing dependencies and builds.
+- **[Atom-Nix][atom-nix]:** A Nix module system for evaluating atoms.
+- **Atom Format:** A verifiable, versioned, and git-native format for publishing source code, designed for decentralized distribution and end-to-end integrity.
+- **Eos (Future):** A planned distributed, content-addressed build scheduler that will eventually power Eka's evaluation backend.
 
-To bridge this gap, Eka's working design incorporates:
+## Design Goals
 
-1. A statically determinable interface
-2. Integration with advanced build schedulers ([Eos][eos])
-3. An extensible, schema-driven plugin system
-4. The Atom format: Verifiable, versioned repository slices
+- **Disciplined:** Eka focuses on its area of expertise: providing a fast, intuitive interface for managing dependencies. It maintains a clean separation of concerns, delegating the heavy lifting of evaluation and building to a dedicated scheduler (Eos).
+- **Fast:** The dependency management commands in `eka` are designed to be exceptionally fast, operating primarily on static metadata. Querying, resolving, and locking atoms are near-instantaneous operations.
+- **Conceptually High-Level:** Developers care about packages, versions, security, and reproducibility, not the nitty-gritty of Nix derivations. Eka provides an interface that speaks to developers at their level of concern, while still providing a powerful gateway to the guarantees that Nix and the Atom Format provide.
 
-## The Atom URI
+## Core Concepts
 
-In order to provide a polished and simple UI, atom's have a convenient URI format which naturally help address them.
+### The Atom Format: Verifiable, Versioned Repository Slices
 
-Conceptually, an atom URI is just a URL with a configurable shortener mechanism (aliases), sane defaults to help elide the scheme in many scenarios, and a custom extension at the end to address atoms unambiguously; abstractly expressed as:
+Atoms are the fundamental building block of the Ekala ecosystem. An atom is a cryptographically secure, content-addressed, and uniquely identifiable slice of a Git repository. This is achieved through a git-native publishing model that eliminates the need for a central registry.
 
+**Key Features:**
+
+- **Repository Identity:** Every repository of atoms has a unique identity derived from its root commit.
+- **Git-Native Publishing:** Atoms are published as new, lightweight references to pre-existing Git objects, with no copying of source files.
+- **Temporal Conflict Resolution:** The system enforces that no two atoms in the same commit can share the same `atom.tag`, guaranteeing a unique cryptographic ID.
+- **Efficient Version Discovery:** Atom versions are published to a queryable, decentralized index of Git references.
+
+### The Atom URI: A User-Friendly Addressing Scheme
+
+Atoms and other dependencies are addressed using a convenient URI format that supports aliases, scheme inference, and a special syntax for pinned dependencies. A critical design decision is that aliases are a **user interface-only concern**; they are fully expanded before being written to the manifest, ensuring that your project is always portable and reproducible.
+
+### Manifest and Lockfile
+
+Eka uses a standard `atom.toml` manifest and `atom.lock` lockfile to manage dependencies, similar to Cargo or npm.
+
+- **`atom.toml`:** A declarative manifest where you define your project's dependencies, including both atoms and pinned legacy dependencies.
+- **`atom.lock`:** A fully resolved lockfile that captures the exact versions and cryptographic hashes of all dependencies, ensuring that your builds are completely reproducible.
+
+## Getting Started
+
+### `eka publish`: Publishing Atoms
+
+The `eka publish` command implements the in-source publishing strategy for atoms. Before publishing to a new remote for the first time, you must initialize it.
+
+```bash
+# Initialize the repository on a remote (only needs to be done once per remote).
+eka publish --init --remote origin
 ```
-[scheme://][[user[:pass]@][url-alias:][url-fragment::]atom-tag[@version]
+
+Then, you can publish atoms from your current `HEAD` or a specified revision:
+
+```bash
+# Publish an atom from the current directory
+eka publish .
 ```
 
-### Concrete Examples
+<!-- Placeholder for asciinema demo of eka publish -->
 
-Below are some examples of atom URIs, with the URL portion expanded to demonstrate the alias functionality. Aliases are user settable via the `eka.toml` file, and some convenient defaults (`gh -> github.com`) are built in.
+### `eka add`: Adding and Locking Dependencies
 
-Atom's, themselves, are abstracted to a flat namespace within the store, regardless of its physical location. To demonstrate this, in the following examples, say we have an atom manifest in the git repo at `foo/bar/my@.toml` which species the `atom.tag` in the TOML as `my-atom`:
+The `eka add` command adds a new dependency to your `atom.toml` manifest and updates the `atom.lock` file.
 
-- `gh:owner/repo::my-atom@^1 -> https://github.com/owner/repo`
-  - the `@^1` is a semantic version request
-- `gl:owner/repo::my-atom -> https://gitlab.com/owner/repo`
-  - no version (`@`) means fetch the latest
-- `org:repo::my-atom@0.1.0 -> https://github.com/work-org/repo`
-  - assuming the user sets `org = "gh:work-org"` in the `eka.toml`. Notice that users can refer to other aliases in the config to "compose" them.
-- `git@gh:owner/repo::my-atom -> ssh://git@github.com:owner/repo`
-  - a URL with a user specification defaults to ssh
-- `git:pass@gh:owner/repo::my-atom -> https://git:pass@github.com/owner/repo`
-  - a user:pass combo defaults to https
-- `http://gh:owner/repo::my-atom -> http://github.com/owner/repo`
-  - it is possible to explicate the scheme where necessary, but the heuristics try to make this uncommon
+```bash
+# Add an atom dependency
+eka add gh:owner/repo::my-atom@^1
 
-## Usage
-
-Currently, Eka provides the `publish` subcommand:
-
-```
-eka publish [OPTIONS] [PATH]...
+# Add a pinned Git dependency
+eka add gh:owner/repo^^some-branch
 ```
 
-This command implements an in-source publishing strategy for Atoms. It creates snapshots separate from the main repository history, enabling efficient, path-based versioning without a separate registry. This lays the groundwork for future decentralized resolution to a standard lock format _a la_ `eka resolve`.
+<!-- Placeholder for asciinema demo of eka add -->
 
-For more detailed usage, run `eka help`.
+## Development
 
-_No more half-measures, no more compromises, and please, no more wrappers..._
+For a detailed breakdown of the development plan, please see the full [ROADMAP.md](./ROADMAP.md).
 
-## Provisional Road Map
-
-Eka is still fairly early in development, however, the foundation piece, the git atom store format is more or less complete. The following is an outline of the steps along the path toward a relatively stable first cut of eka (will be expanded as we go):
-
-- [x] define atom format
-  - [x] implement git atom store
-  - [ ] implement s3 atom store
-  - [ ] ... decide on other atom storage mechanisms for 1.0
-- [x] define & implement atom URI format
-- [ ] integrate eka with atom modules
-  - [x] implement the [atom](https://github.com/ekala-project/atom) module system
-  - [ ] define a clean interface between the Nix module system for atom's and eka
-    - [ ] work out an EEP to define the Atom manifest API (WIP)
-- [ ] implement atom dependencies
-  - [ ] `resolve` subcommand to generate a lock file
-  - [ ] implement "shallow" dependency resolution algorithm (locking direct deps only)
-  - [ ] implement "deep" dependency resolution using an SAT solver (e.g. resolvo crate)
-- [ ] implement eka plugins
-  - [ ] define cross-language plugin interface
-  - [ ] allow plugins to extend the atom manifest in a principled (type-safe) manner
-- [ ] implement cli subcommands
-  - [x] publish subcommand (for git stores)
-  - [ ] init subcommand
-    - [x] git store initialization
-    - [ ] user friendly initilization flow
-    - [ ] init other atom stores (dependent on store implementation)
-  - [ ] `list` subcommand
-  - [ ] add more here as they are decided
+The architecture of Eka is guided by a series of Architectural Decision Records (ADRs). To learn more about the technical details, please refer to the [ADRs](./adrs).
 
 [eos]: https://github.com/ekala-project/eos-gateway
+[atom-nix]: https://github.com/ekala-project/atom
