@@ -77,8 +77,7 @@ use std::fmt::Display;
 use std::ops::{Deref, Not};
 use std::str::FromStr;
 
-use gix::url as gix_url;
-use gix_url::Url;
+use gix::Url;
 use semver::VersionReq;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -129,6 +128,18 @@ pub struct AliasedUrl {
     r#ref: Option<String>,
 }
 
+impl AliasedUrl {
+    /// get a reference to the underlying URL.
+    pub fn url(&self) -> &Url {
+        &self.url
+    }
+
+    /// get a reference to the optional git ref.
+    pub fn r#ref(&self) -> Option<&String> {
+        self.r#ref.as_ref()
+    }
+}
+
 impl Display for AliasedUrl {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let AliasedUrl { url, r#ref } = self;
@@ -148,15 +159,15 @@ impl FromStr for AliasedUrl {
     type Err = UriError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let (r, url) = match split_carot(s) {
-            Ok((s, Some(u))) => (s, u),
-            Ok((s, None)) => ("", s),
-            _ => return Err(UriError::NoUrl),
-        };
-
-        let url = UrlRef::from(url);
+        let mut r#ref = None;
+        let mut url = gix::url::parse(s.into())?;
+        if let Some((f, r)) = url.path.to_string().split_once('@') {
+            r#ref = Some(r.into());
+            url.path = f.into();
+        }
+        let url = url.to_string();
+        let url = UrlRef::from(url.as_str());
         let u = url.to_url();
-        let r#ref = r.is_empty().not().then_some(r.to_string());
         if let Some(url) = u {
             Ok(AliasedUrl { url, r#ref })
         } else {
@@ -327,10 +338,6 @@ fn split_at(input: &str) -> IResult<&str, Option<&str>> {
     opt_split(input, "@")
 }
 
-fn split_carot(input: &str) -> IResult<&str, Option<&str>> {
-    opt_split(input, "^^")
-}
-
 fn split_colon(input: &str) -> IResult<&str, Option<&str>> {
     opt_split(input, ":")
 }
@@ -363,7 +370,7 @@ pub enum UriError {
     InvalidVersionReq(#[from] semver::Error),
     /// The Url did not parse correctly.
     #[error(transparent)]
-    UrlParse(#[from] gix_url::parse::Error),
+    UrlParse(#[from] gix::url::parse::Error),
     /// There is no alias in the configuration matching the one given in the URI.
     #[error("The passed alias does not exist: {0}")]
     NoAlias(String),
@@ -445,7 +452,7 @@ impl<'a> UrlRef<'a> {
     }
 
     fn to_url(&self) -> Option<Url> {
-        use gix_url::Scheme;
+        use gix::url::Scheme;
 
         let (frag, resolved) = self.render_alias().unwrap_or((self.frag?, None));
 
@@ -654,16 +661,10 @@ impl FromStr for UriOrUrl {
     type Err = UriError;
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        match s.parse::<Uri>() {
-            Ok(uri) => return Ok(UriOrUrl::Atom(uri)),
-            Err(e @ UriError::BadTag(_)) => {
-                if s.contains("::") {
-                    return Err(e);
-                }
-            },
-            Err(e @ UriError::InvalidVersionReq(_)) => return Err(e),
-            Err(_) => (),
+        if s.contains("::") {
+            s.parse::<Uri>().map(UriOrUrl::Atom)
+        } else {
+            s.parse::<AliasedUrl>().map(UriOrUrl::Pin)
         }
-        s.parse::<AliasedUrl>().map(UriOrUrl::Pin)
     }
 }
