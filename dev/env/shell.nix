@@ -16,6 +16,7 @@ pkgs.mkShell.override { stdenv = pkgs.clangStdenv; } {
       atom.fenix.default.rustfmt
       toolchain
       mold
+      protobuf
       cargo-insta
       cargo-shear
     ]

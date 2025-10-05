@@ -68,7 +68,7 @@ mod test;
 
 use crate::Manifest;
 use crate::id::AtomTag;
-use crate::manifest::deps::AtomReq;
+use crate::manifest::deps::{AtomReq, Dependency, PinReq};
 use crate::store::QueryVersion;
 
 /// A wrapper around NixHash to provide custom serialization behavior.
@@ -221,12 +221,12 @@ pub struct FromDep {
     ///
     /// This field is omitted from serialization if None.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub get: Option<String>,
-    /// The relative path for the sourced item (for Nix imports).
+    pub set: Option<String>,
+    /// The relative path for the sourced item (if you want to change the imported path).
     ///
     /// This field is omitted from serialization if None.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub path: Option<PathBuf>,
+    pub import: Option<PathBuf>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -263,9 +263,9 @@ pub enum Dep {
     PinTar(PinTarDep),
     /// A cross-atom source reference variant.
     ///
-    /// Represents a dependency that is sourced from another atom, enabling
+    /// Represents a pin dependency that is sourced from another atom, enabling
     /// composition of complex systems from simpler atom components.
-    #[serde(rename = "from")]
+    #[serde(rename = "pin+from")]
     From(FromDep),
     /// A reference to a build source.
     ///
@@ -554,7 +554,7 @@ impl AtomReq {
     ///
     /// A `Result` containing the resolved `AtomDep` or a `git::Error` if
     /// resolution fails.
-    pub(crate) fn resolve(&self, key: &AtomTag) -> Result<AtomDep, crate::store::git::Error> {
+    pub(crate) fn resolve(&self, key: &Name) -> Result<AtomDep, crate::store::git::Error> {
         let url = self.store();
 
         let atoms = url.get_atoms(None)?;
@@ -589,5 +589,82 @@ impl AtomReq {
             },
             id: id.into(),
         })
+    }
+}
+
+impl Dependency {
+    pub(crate) async fn resolve(&self, key: &Name) -> Result<Dep, crate::store::git::Error> {
+        use crate::manifest::deps::{DirectPin, PinType};
+        match self {
+            Dependency::Atom(atom_req) => Ok(Dep::Atom(atom_req.resolve(key)?)),
+            Dependency::Pin(pin_req) => match &pin_req.kind {
+                PinType::Direct(direct_pin) => match direct_pin {
+                    DirectPin::Straight(pin) => Ok(Dep::Pin(pin.resolve(key).await?)),
+                    DirectPin::Tarball(tar_pin) => todo!(),
+                    DirectPin::Git(git_pin) => todo!(),
+                },
+                PinType::Indirect(indirect_pin) => Ok(Dep::From(FromDep {
+                    name: key.to_owned(),
+                    from: indirect_pin.from.to_owned(),
+                    set: indirect_pin.set.to_owned(),
+                    import: pin_req.import.to_owned(),
+                })),
+            },
+            Dependency::Src(src_req) => todo!(),
+        }
+    }
+}
+
+use crate::manifest::deps::Pin;
+impl Pin {
+    async fn resolve(&self, key: &Name) -> Result<PinDep, crate::store::git::Error> {
+        use snix_castore::{blobservice, directoryservice};
+        use snix_glue::fetchers::{Fetch, Fetcher};
+        use snix_store::nar::SimpleRenderer;
+        use snix_store::pathinfoservice;
+        let cache_root = config::CONFIG.cache.root_dir.to_owned();
+
+        let blob_service_url = format!("objectstore+file://{}", cache_root.join("blobs").display());
+        let dir_service_url = format!("redb://{}", cache_root.join("dirs.redb").display());
+        let path_service_url = format!("redb://{}", cache_root.join("paths.redb").display());
+        let blob_service = blobservice::from_addr(&blob_service_url).await.unwrap();
+        let directory_service = directoryservice::from_addr(&dir_service_url).await.unwrap();
+        let path_info_service = pathinfoservice::from_addr(&path_service_url, None)
+            .await
+            .unwrap();
+        let nar_calculation_service =
+            SimpleRenderer::new(blob_service.clone(), directory_service.clone());
+
+        let fetcher = Fetcher::new(
+            blob_service,
+            directory_service,
+            path_info_service,
+            nar_calculation_service,
+            Vec::new(),
+        );
+
+        let fetch_args = Fetch::URL {
+            url: self.pin.clone(),
+            exp_hash: None,
+        };
+
+        let result = fetcher
+            .ingest_and_persist(key.as_str(), fetch_args)
+            .await
+            .unwrap();
+
+        Ok(todo!())
+        // match fetcher.ingest_and_persist(key.as_str(), fetch_args).await {
+        //     Ok((_store_path, _node, nix_hash, _metadata)) => Ok(PinDep {
+        //         name: key.to_owned(),
+        //         url: self.url.to_owned(),
+        //         hash: WrappedNixHash(nix_hash),
+        //         path: self.path.to_owned(),
+        //     }),
+        //     Err(e) => {
+        //         tracing::warn!(message = "failed to resolve pin dependency", key = %key, error =
+        // ?e);         Err(crate::store::git::Error::Other(e.to_string()))
+        //     },
+        // }
     }
 }

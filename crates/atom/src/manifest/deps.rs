@@ -145,6 +145,8 @@ pub enum PinType {
 pub enum DirectPin {
     /// A simple pin, with an optional unpack field.
     Straight(Pin),
+    /// A pin pointing to a tarball which will be unpacked before hashing.
+    Tarball(TarPin),
     /// A git pin, with a ref or version.
     Git(GitPin),
 }
@@ -155,9 +157,14 @@ pub enum DirectPin {
 pub struct Pin {
     /// The URL of the pinned resource.
     pub pin: Url,
-    /// If `true`, the resource will be unpacked after fetching.
-    #[serde(skip_serializing_if = "not")]
-    pub unpack: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+#[serde(deny_unknown_fields)]
+/// Represents a simple pin, with an optional unpack field.
+pub struct TarPin {
+    /// The URL of the tarball resource.
+    pub tar: Url,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -210,18 +217,24 @@ pub struct IndirectPin {
 /// dependencies from other atoms).
 #[serde(deny_unknown_fields)]
 pub struct PinReq {
-    /// An optional relative path within the fetched source, useful for Nix imports
-    /// or accessing a subdirectory within an archive.
+    /// An optional relative path within the fetched source, used to import Nix expressions; the
+    /// precise behavior of which depends on whether or not the pin is a flake.
     ///
     /// This field is omitted from serialization if None.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub path: Option<PathBuf>,
+    pub import: Option<PathBuf>,
     /// The kind of pin, which can be a direct URL, a Git repository, or an
     /// indirect reference to a dependency from another atom.
     ///
     /// This field is flattened in the TOML serialization.
     #[serde(flatten)]
     pub kind: PinType,
+    /// A bool representing whether the pin represents a Nix flake, changing the behavior of the
+    /// `import` field, if so.
+    ///
+    /// This field is omitted from serialization if false.
+    #[serde(skip_serializing_if = "not")]
+    pub flake: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
