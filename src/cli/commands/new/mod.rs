@@ -6,7 +6,7 @@ use clap::Parser;
 use semver::Version;
 
 #[derive(Parser, Debug)]
-#[command(arg_required_else_help = true)]
+#[command(arg_required_else_help = true, next_help_heading = "New Options")]
 pub struct Args {
     /// The path to create the new atom in.
     path: PathBuf,

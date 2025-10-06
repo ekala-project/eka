@@ -11,13 +11,12 @@ pub use logging::init_global_subscriber;
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 pub struct Args {
-    #[arg(short = 'C', value_name = "DIR", global = true, verbatim_doc_comment, value_parser = validate_path)]
-
     /// Change the current working directory
     ///
     /// If specified, changes the current working directory to the given
     /// path before executing any commands. This affects all file system
     /// operations performed by the program.
+    #[arg(short = 'C', value_name = "DIR", global = true, value_parser = validate_path)]
     working_directory: Option<PathBuf>,
 
     #[command(flatten)]
@@ -33,36 +32,42 @@ pub struct LogArgs {
     /// Set the level of verbosity
     ///
     /// This flag can be used multiple times to increase verbosity:
-    ///   -v    for INFO level
-    ///   -vv   for DEBUG level
-    ///   -vvv  for TRACE level
+    /// 1. -v    for DEBUG level
+    /// 2. -vv   for TRACE level
     ///
-    /// If not specified, defaults to WARN level.
+    /// If not specified, defaults to INFO level.
     ///
-    /// Alternatively, set the `RUST_LOG` environment variable
-    /// (e.g., `RUST_LOG=info`), which takes precedence over this flag.
+    /// Alternatively, set the `RUST_LOG` environment variable (e.g., `RUST_LOG=info`), which takes
+    /// precedence over this flag.
     ///
-    /// Note: This flag is silently ignored when `--quiet` is also set.
+    /// **Note**: This flag is silently ignored when `--quiet` is also set.
     #[arg(
         short,
         long,
         action = clap::ArgAction::Count,
         global = true,
         help = "Increase logging verbosity",
-        verbatim_doc_comment
     )]
     verbosity: u8,
 
-    /// Suppress all output except errors
+    /// Suppress verbosity (*takes precedent*)
     ///
-    /// This flag overrides any verbosity settings and sets the log
-    /// level to ERROR. It takes precedence over both the `--verbosity`
-    // flag and the `RUST_LOG` environment variable.
+    /// This flag can be used multiple times to decrease verbosity:
+    /// 1. -q    for WARN level
+    /// 2. -qq   for ERROR level
     ///
-    /// Use this flag when you want minimal output from the application,
-    /// typically in non-interactive or automated environments.
-    #[arg(short, long, global = true, verbatim_doc_comment)]
-    quiet: bool,
+    /// This flag *overrides* any verbosity settings. It takes precedence over both the
+    /// `--verbosity` flag and the `RUST_LOG` environment variable.
+    ///
+    /// Use this flag when you want minimal output from the application, typically in
+    /// non-interactive or automated environments.
+    #[arg(
+        short,
+        long,
+        action = clap::ArgAction::Count,
+        global = true,
+    )]
+    quiet: u8,
 }
 
 fn validate_path(path: &str) -> Result<PathBuf, std::io::Error> {

@@ -10,7 +10,7 @@ use clap::Parser;
 use crate::cli::store::Detected;
 
 #[derive(Parser, Debug)]
-#[command(arg_required_else_help = true)]
+#[command(arg_required_else_help = true, next_help_heading = "Publish Options")]
 pub(in super::super) struct PublishArgs {
     /// Publish all the atoms in and under the current working directory
     #[arg(long, short, conflicts_with = "path")]
@@ -20,16 +20,11 @@ pub(in super::super) struct PublishArgs {
     ///
     /// This command initializes the repository for use as an Ekala store
     /// fit for publishing atoms to a remote location.
-    #[arg(
-        long,
-        conflicts_with = "path",
-        conflicts_with = "recursive",
-        verbatim_doc_comment
-    )]
+    #[arg(long, conflicts_with_all = ["path", "recursive"])]
     pub(super) init: bool,
 
     /// Path(s) to the atom(s) to publish
-    #[arg(required_unless_present = "recursive")]
+    #[arg(required_unless_present_any = ["recursive", "init"])]
     path: Vec<PathBuf>,
     #[command(flatten)]
     pub(super) store: StoreArgs,

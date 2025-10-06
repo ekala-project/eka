@@ -25,7 +25,6 @@ url.workspace               = true
 
 config     = { path = "../config" }
 gix        = { workspace = true, default-features = false, features = ["serde"] }
-gix-url    = { version = "^0.27", features = ["serde"] }
 hex        = { version = "^0.4", features = ["serde"] }
 nix-compat = { git = "https://github.com/nrdxp/snix", branch = "canon", features = ["serde"] }
 snix-store = { git = "https://github.com/nrdxp/snix", branch = "canon", default-features = false, features = ["fuse"]}
