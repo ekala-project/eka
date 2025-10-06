@@ -1,6 +1,6 @@
 ---
 source: crates/atom/src/uri/tests/mod.rs
-assertion_line: 46
+assertion_line: 47
 expression: results?
 ---
 [
@@ -356,6 +356,25 @@ expression: results?
                 ],
             },
         ),
+    },
+    Uri {
+        url: Some(
+            Url {
+                scheme: Https,
+                user: None,
+                password: None,
+                host: Some(
+                    "github.com",
+                ),
+                serialize_alternative_form: false,
+                port: None,
+                path: "/nixos/nixpkgs/foo/bar",
+            },
+        ),
+        tag: AtomTag(
+            "baz",
+        ),
+        version: None,
     },
     Uri {
         url: Some(
