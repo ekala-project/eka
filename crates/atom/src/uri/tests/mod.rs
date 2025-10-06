@@ -27,11 +27,11 @@ const ALIASES: &[&str] = &[
 ];
 
 const ALIASED_URLS: &[&str] = &[
-    "gh:foo/bar^^master",
-    "bb^^refs/heads/my-work",
+    "gh:foo/bar@master",
+    "bb@refs/heads/my-work",
     "https://gl:bar/baz",
-    "pkgs^^main",
-    "git@gh:owner/repo^^master",
+    "pkgs@main",
+    "git@gh:owner/repo@master",
 ];
 
 #[test]

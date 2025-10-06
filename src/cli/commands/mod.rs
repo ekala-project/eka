@@ -50,7 +50,7 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
         },
         Commands::Resolve(args) => resolve::run(store.await?, args)?,
         Commands::New(args) => new::run(args)?,
-        Commands::Add(args) => add::run(args)?,
+        Commands::Add(args) => add::run(args).await?,
     }
     Ok(())
 }

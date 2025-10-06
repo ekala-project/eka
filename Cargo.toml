@@ -15,6 +15,7 @@ strip         = true
 
 anyhow.workspace             = true
 clap.workspace               = true
+gix.workspace                = true
 semver.workspace             = true
 tempfile.workspace           = true
 thiserror.workspace          = true
@@ -25,8 +26,7 @@ tracing-appender.workspace   = true
 tracing-indicatif.workspace  = true
 tracing-subscriber.workspace = true
 
-atom = { path = "crates/atom" }
-gix  = { workspace = true }
+atom.path = "crates/atom"
 
 [workspace.dependencies]
 anyhow            = "^1"
@@ -36,14 +36,18 @@ tracing           = "^0.1"
 tracing-appender  = "^0.2"
 tracing-indicatif = "^0.3"
 
-clap               = { version = "^4", features = ["derive", "wrap_help", "unstable-markdown"] }
-insta              = { version = "^1", features = ["yaml"] }
-semver             = { version = "^1", features = ["serde"] }
-serde              = { version = "^1", features = ["derive"] }
-tokio              = { version = "^1", features = ["full"] }
-toml_edit          = { version = "^0.22", features = ["serde", "parse"] }
+clap = { version = "^4", features = [
+  "derive",
+  "wrap_help",
+  "unstable-markdown",
+] }
+insta = { version = "^1", features = ["yaml"] }
+semver = { version = "^1", features = ["serde"] }
+serde = { version = "^1", features = ["derive"] }
+tokio = { version = "^1", features = ["full"] }
+toml_edit = { version = "^0.22", features = ["serde", "parse"] }
 tracing-subscriber = { version = "^0.3", features = ["env-filter", "json"] }
-url                = { version = "^2", features = ["serde"] }
+url = { version = "^2", features = ["serde"] }
 
 
 gix = { version = "^0.73", default-features = false, features = [

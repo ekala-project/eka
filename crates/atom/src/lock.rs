@@ -57,10 +57,14 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use gix::{ObjectId, url as gix_url};
+use gix::ObjectId;
 use nix_compat::nixhash::NixHash;
 use semver::Version;
 use serde::{Deserialize, Deserializer, Serialize};
+use snix_castore::blobservice::BlobService;
+use snix_castore::directoryservice::DirectoryService;
+use snix_store::nar::SimpleRenderer;
+use snix_store::pathinfoservice::PathInfoService;
 use url::Url;
 
 #[cfg(test)]
@@ -68,7 +72,7 @@ mod test;
 
 use crate::Manifest;
 use crate::id::AtomTag;
-use crate::manifest::deps::{AtomReq, Dependency, PinReq};
+use crate::manifest::deps::{AtomReq, Dependency, DirectPin, GitPin};
 use crate::store::QueryVersion;
 
 /// A wrapper around NixHash to provide custom serialization behavior.
@@ -81,17 +85,18 @@ pub(crate) struct WrappedNixHash(pub NixHash);
 /// as untagged values in TOML for maximum compatibility.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Eq)]
 #[serde(untagged)]
-pub enum LockDigest {
+pub enum GitDigest {
     /// A SHA-1 commit hash.
     #[serde(rename = "sha1")]
     Sha1(#[serde(with = "hex")] [u8; 20]),
     /// A SHA-256 commit hash.
     #[serde(rename = "sha256")]
     Sha256(#[serde(with = "hex")] [u8; 32]),
-    /// A BLAKE-3 digest.
-    #[serde(rename = "id")]
-    Blake3(#[serde(with = "serde_base32")] [u8; 32]),
 }
+
+/// Represents the BLAKE-3 digest of an atom id
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Eq)]
+struct AtomDigest(#[serde(with = "serde_base32")] [u8; 32]);
 
 use crate::manifest::deps::{deserialize_url, serialize_url};
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Eq)]
@@ -109,7 +114,7 @@ pub enum AtomLocation {
         serialize_with = "serialize_url",
         deserialize_with = "deserialize_url"
     )]
-    Url(gix_url::Url),
+    Url(gix::url::Url),
     /// A relative path within the repository where the atom is located.
     ///
     /// When this variant is used, the atom is located at the specified path
@@ -141,9 +146,9 @@ pub struct AtomDep {
     #[serde(flatten)]
     pub location: AtomLocation,
     /// The resolved Git revision (commit hash) for verification.
-    pub rev: LockDigest,
+    pub rev: GitDigest,
     /// than cryptographic identity of the atom.
-    pub id: LockDigest,
+    id: AtomDigest,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -159,11 +164,6 @@ pub struct PinDep {
     pub url: Url,
     /// The hash for integrity verification (e.g., sha256).
     hash: WrappedNixHash,
-    /// The relative path within the source (for Nix imports).
-    ///
-    /// This field is omitted from serialization if None.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub path: Option<PathBuf>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -176,14 +176,9 @@ pub struct PinGitDep {
     /// The name of the pinned Git source.
     pub name: Name,
     /// The Git repository URL.
-    pub url: Url,
+    pub url: gix::Url,
     /// The resolved revision (commit hash).
-    pub rev: LockDigest,
-    /// The relative path within the repo.
-    ///
-    /// This field is omitted from serialization if None.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub path: Option<PathBuf>,
+    pub rev: GitDigest,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -199,11 +194,6 @@ pub struct PinTarDep {
     pub url: Url,
     /// The hash of the tarball.
     hash: WrappedNixHash,
-    /// The relative path within the extracted archive.
-    ///
-    /// This field is omitted from serialization if None.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub path: Option<PathBuf>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -216,17 +206,7 @@ pub struct FromDep {
     /// The name of the sourced dependency.
     pub name: Name,
     /// The atom ID from which to source.
-    pub from: AtomTag,
-    /// The name of the dependency to acquire from the 'from' atom (defaults to `name`).
-    ///
-    /// This field is omitted from serialization if None.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub set: Option<String>,
-    /// The relative path for the sourced item (if you want to change the imported path).
-    ///
-    /// This field is omitted from serialization if None.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub import: Option<PathBuf>,
+    from: AtomDigest,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -357,10 +337,10 @@ impl<'de> Deserialize<'de> for WrappedNixHash {
     }
 }
 
-impl From<ObjectId> for LockDigest {
+impl From<ObjectId> for GitDigest {
     fn from(id: ObjectId) -> Self {
         match id {
-            ObjectId::Sha1(bytes) => LockDigest::Sha1(bytes),
+            ObjectId::Sha1(bytes) => GitDigest::Sha1(bytes),
         }
     }
 }
@@ -394,11 +374,11 @@ mod serde_base32 {
     }
 }
 
-impl From<AtomId<Root>> for LockDigest {
+impl From<AtomId<Root>> for AtomDigest {
     fn from(value: AtomId<Root>) -> Self {
         use crate::Compute;
 
-        LockDigest::Blake3(*value.compute_hash())
+        Self(*value.compute_hash())
     }
 }
 
@@ -566,7 +546,7 @@ impl AtomReq {
             // the `AtomId`, to remain unambiguous?
             key.to_owned()
         };
-        let (version, oid) = <gix_url::Url as QueryVersion<_, _, _, _>>::process_highest_match(
+        let (version, oid) = <gix::url::Url as QueryVersion<_, _, _, _>>::process_highest_match(
             atoms.clone(),
             &tag,
             self.version(),
@@ -579,47 +559,56 @@ impl AtomReq {
             tag: tag.to_owned(),
             name,
             version,
-            location: if let gix_url::Scheme::File = url.scheme {
+            location: if let gix::url::Scheme::File = url.scheme {
                 AtomLocation::Path(url.path.to_string().into())
             } else {
                 AtomLocation::Url(url.to_owned())
             },
             rev: match oid {
-                ObjectId::Sha1(bytes) => LockDigest::Sha1(bytes),
+                ObjectId::Sha1(bytes) => GitDigest::Sha1(bytes),
             },
             id: id.into(),
         })
     }
 }
 
-impl Dependency {
-    pub(crate) async fn resolve(&self, key: &Name) -> Result<Dep, crate::store::git::Error> {
-        use crate::manifest::deps::{DirectPin, PinType};
-        match self {
-            Dependency::Atom(atom_req) => Ok(Dep::Atom(atom_req.resolve(key)?)),
-            Dependency::Pin(pin_req) => match &pin_req.kind {
-                PinType::Direct(direct_pin) => match direct_pin {
-                    DirectPin::Straight(pin) => Ok(Dep::Pin(pin.resolve(key).await?)),
-                    DirectPin::Tarball(tar_pin) => todo!(),
-                    DirectPin::Git(git_pin) => todo!(),
-                },
-                PinType::Indirect(indirect_pin) => Ok(Dep::From(FromDep {
-                    name: key.to_owned(),
-                    from: indirect_pin.from.to_owned(),
-                    set: indirect_pin.set.to_owned(),
-                    import: pin_req.import.to_owned(),
-                })),
-            },
-            Dependency::Src(src_req) => todo!(),
-        }
-    }
-}
+use std::sync::Arc;
 
-use crate::manifest::deps::Pin;
-impl Pin {
-    async fn resolve(&self, key: &Name) -> Result<PinDep, crate::store::git::Error> {
+use snix_glue::fetchers::Fetcher;
+
+type PinFetcher = Fetcher<
+    Arc<dyn BlobService>,
+    Arc<dyn DirectoryService>,
+    Arc<dyn PathInfoService>,
+    SimpleRenderer<Arc<dyn BlobService>, Arc<dyn DirectoryService>>,
+>;
+
+impl Dependency {
+    // Do we need this actually?
+    // pub(crate) async fn resolve(&self, key: Option<&Name>) -> Result<Dep, BoxError> {
+    //     use crate::manifest::deps::{DirectPin, PinType};
+    //     let fetcher = Dependency::get_fetcher();
+    //     match self {
+    //         Dependency::Atom(atom_req) => Ok(Dep::Atom(atom_req.resolve(key)?)),
+    //         Dependency::Pin(pin_req) => match &pin_req.kind {
+    //             PinType::Direct(direct_pin) => {
+    //                 let (_, dep) = direct_pin.resolve(key, import).await?;
+    //                 Ok(dep)
+    //             },
+    //             PinType::Indirect(indirect_pin) => Ok(Dep::From(FromDep {
+    //                 name: key.to_owned(),
+    //                 from: indirect_pin.from.to_owned(),
+    //                 set: indirect_pin.set.to_owned(),
+    //                 import: pin_req.import.to_owned(),
+    //             })),
+    //         },
+    //         Dependency::Src(_src_req) => todo!(),
+    //     }
+    // }
+
+    pub(crate) async fn get_fetcher() -> Result<PinFetcher, BoxError> {
         use snix_castore::{blobservice, directoryservice};
-        use snix_glue::fetchers::{Fetch, Fetcher};
+        use snix_glue::fetchers::Fetcher;
         use snix_store::nar::SimpleRenderer;
         use snix_store::pathinfoservice;
         let cache_root = config::CONFIG.cache.root_dir.to_owned();
@@ -627,44 +616,145 @@ impl Pin {
         let blob_service_url = format!("objectstore+file://{}", cache_root.join("blobs").display());
         let dir_service_url = format!("redb://{}", cache_root.join("dirs.redb").display());
         let path_service_url = format!("redb://{}", cache_root.join("paths.redb").display());
-        let blob_service = blobservice::from_addr(&blob_service_url).await.unwrap();
-        let directory_service = directoryservice::from_addr(&dir_service_url).await.unwrap();
-        let path_info_service = pathinfoservice::from_addr(&path_service_url, None)
-            .await
-            .unwrap();
+        let blob_service = blobservice::from_addr(&blob_service_url).await?;
+        let directory_service = directoryservice::from_addr(&dir_service_url).await?;
+        let path_info_service = pathinfoservice::from_addr(&path_service_url, None).await?;
         let nar_calculation_service =
             SimpleRenderer::new(blob_service.clone(), directory_service.clone());
 
-        let fetcher = Fetcher::new(
+        Ok(Fetcher::new(
             blob_service,
             directory_service,
             path_info_service,
             nar_calculation_service,
             Vec::new(),
-        );
+            Some(cache_root.join("fetcher.redb")),
+        ))
+    }
+}
 
-        let fetch_args = Fetch::URL {
-            url: self.pin.clone(),
-            exp_hash: None,
+pub(crate) type BoxError = Box<dyn std::error::Error + Send + Sync>;
+
+enum Urls<'a> {
+    Url(&'a Url),
+    Git(&'a gix::Url),
+}
+
+fn get_url_filename(url: &Urls) -> String {
+    match url {
+        Urls::Url(url) => {
+            if url.path() == "/" {
+                url.host_str().unwrap_or("source").to_string()
+            } else {
+                let s = if let Some(mut s) = url.path_segments() {
+                    s.next_back()
+                        .map(|s| {
+                            if let Some((file, _ext)) = s.split_once('.') {
+                                file
+                            } else {
+                                s
+                            }
+                        })
+                        .unwrap_or(url.path())
+                } else {
+                    url.path()
+                };
+                s.to_string()
+            }
+        },
+        Urls::Git(url) => {
+            if url.path_is_root() {
+                url.host().unwrap_or("source").to_string()
+            } else {
+                let path = url.path.to_string();
+                let p = PathBuf::from(path.as_str());
+                p.file_stem()
+                    .and_then(|x| x.to_str().map(ToOwned::to_owned))
+                    .unwrap_or(path)
+            }
+        },
+    }
+}
+
+impl DirectPin {
+    pub(crate) async fn resolve(&self, key: Option<&Name>) -> Result<(Name, Dep), BoxError> {
+        use snix_glue::fetchers::Fetch;
+
+        let url = match self {
+            DirectPin::Straight(pin) => Urls::Url(&pin.pin),
+            DirectPin::Tarball(tar_pin) => Urls::Url(&tar_pin.tar),
+            DirectPin::Git(git_pin) => Urls::Git(&git_pin.repo),
         };
 
-        let result = fetcher
-            .ingest_and_persist(key.as_str(), fetch_args)
-            .await
-            .unwrap();
+        let key = if let Some(key) = key {
+            key
+        } else {
+            &Name::try_from(get_url_filename(&url))?
+        };
 
-        Ok(todo!())
-        // match fetcher.ingest_and_persist(key.as_str(), fetch_args).await {
-        //     Ok((_store_path, _node, nix_hash, _metadata)) => Ok(PinDep {
-        //         name: key.to_owned(),
-        //         url: self.url.to_owned(),
-        //         hash: WrappedNixHash(nix_hash),
-        //         path: self.path.to_owned(),
-        //     }),
-        //     Err(e) => {
-        //         tracing::warn!(message = "failed to resolve pin dependency", key = %key, error =
-        // ?e);         Err(crate::store::git::Error::Other(e.to_string()))
-        //     },
-        // }
+        let fetch_args = match self {
+            DirectPin::Straight(pin) => Fetch::URL {
+                url: pin.pin.clone(),
+                exp_hash: None,
+            },
+            DirectPin::Tarball(tar_pin) => Fetch::Tarball {
+                url: tar_pin.tar.to_owned(),
+                exp_nar_sha256: None,
+            },
+            DirectPin::Git(git_pin) => {
+                return Ok((key.to_owned(), Dep::PinGit(git_pin.resolve(key).await?)));
+            },
+        };
+
+        let fetcher = Dependency::get_fetcher();
+
+        let (_, _, hash, _) = fetcher.await?.ingest_and_persist(key, fetch_args).await?;
+
+        match self {
+            DirectPin::Straight(pin) => Ok((
+                key.to_owned(),
+                Dep::Pin(PinDep {
+                    name: key.to_owned(),
+                    url: pin.pin.to_owned(),
+                    hash: WrappedNixHash(hash),
+                }),
+            )),
+            DirectPin::Tarball(tar_pin) => Ok((
+                key.to_owned(),
+                Dep::PinTar(PinTarDep {
+                    name: key.to_owned(),
+                    url: tar_pin.tar.to_owned(),
+                    hash: WrappedNixHash(hash),
+                }),
+            )),
+            // we have already returned in the previous match
+            DirectPin::Git(_) => unreachable!(),
+        }
+    }
+}
+
+impl GitPin {
+    async fn resolve(&self, key: &Name) -> Result<PinGitDep, BoxError> {
+        use crate::manifest::deps::GitStrat;
+        use crate::store::QueryStore;
+
+        let r = match &self.fetch {
+            GitStrat::Ref(r) => self.repo.get_ref(format!("{}:{}", r, r).as_str(), None)?,
+            GitStrat::Version(_version_req) => {
+                let query = "refs/tags/v*";
+                let _refs = self.repo.get_refs([query], None)?;
+                // TODO: finish version matching
+                todo!()
+            },
+        };
+
+        use gix::ObjectId;
+        let ObjectId::Sha1(id) = crate::store::git::to_id(r);
+
+        Ok(PinGitDep {
+            name: key.to_owned(),
+            url: self.repo.to_owned(),
+            rev: GitDigest::Sha1(id),
+        })
     }
 }

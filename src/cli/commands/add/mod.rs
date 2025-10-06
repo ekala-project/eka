@@ -44,6 +44,13 @@ enum PinCommand {
 pub struct PinArgs {
     /// The pinned URL to add as a dependency.
     url: AliasedUrl,
+    /// Optional path to call `import` inside of the pinned resource. If not specified, the root of
+    /// of the pin is assumed. The actual strategy for calling import depends on the libary being
+    /// invoked. This flag is ignored for single file inputs (since their is no other path to
+    /// import).
+    import_path: Option<PathBuf>,
+    /// Whether the pin should be imported as a Nix flake.
+    flake: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -52,11 +59,13 @@ struct StoreArgs {
     git: git::GitArgs,
 }
 
-pub(super) fn run(args: Args) -> Result<()> {
+pub(super) async fn run(args: Args) -> Result<()> {
     let mut writer = atom::ManifestWriter::new(&args.path)?;
 
     if let Some(PinCommand::Pin(pin_args)) = args.pin {
-        writer.add_url(pin_args.url, args.key)?;
+        writer
+            .add_url(pin_args.url, args.key, pin_args.import_path, pin_args.flake)
+            .await?;
     } else {
         writer.add_uri(args.uri.unwrap(), args.key)?;
     }

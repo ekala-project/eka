@@ -23,13 +23,19 @@ tracing.workspace           = true
 tracing-indicatif.workspace = true
 url.workspace               = true
 
-config     = { path = "../config" }
-gix        = { workspace = true, default-features = false, features = ["serde"] }
-hex        = { version = "^0.4", features = ["serde"] }
-nix-compat = { git = "https://github.com/nrdxp/snix", branch = "canon", features = ["serde"] }
-snix-store = { git = "https://github.com/nrdxp/snix", branch = "canon", default-features = false, features = ["fuse"]}
-snix-castore = { git = "https://github.com/nrdxp/snix", branch = "canon", default-features = false, features = ["fuse"]}
+config = { path = "../config" }
+gix = { workspace = true, default-features = false, features = ["serde"] }
+hex = { version = "^0.4", features = ["serde"] }
+nix-compat = { git = "https://github.com/nrdxp/snix", branch = "canon", features = [
+  "serde",
+] }
+snix-castore = { git = "https://github.com/nrdxp/snix", branch = "canon", default-features = false, features = [
+  "fuse",
+] }
 snix-glue = { git = "https://github.com/nrdxp/snix", branch = "canon" }
+snix-store = { git = "https://github.com/nrdxp/snix", branch = "canon", default-features = false, features = [
+  "fuse",
+] }
 
 [dev-dependencies]
 anyhow.workspace   = true

@@ -74,7 +74,7 @@ mod tests;
 
 use std::collections::HashMap;
 use std::fmt::Display;
-use std::ops::{Deref, Not};
+use std::ops::Deref;
 use std::str::FromStr;
 
 use gix::Url;

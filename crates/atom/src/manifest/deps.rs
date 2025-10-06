@@ -47,11 +47,11 @@
 //! All dependency types use `#[serde(deny_unknown_fields)]` to ensure strict
 //! validation and prevent typos in manifest files. Optional fields are properly
 //! handled with `skip_serializing_if` to keep the TOML output clean.
+use std::ffi::OsStr;
 use std::marker::PhantomData;
 use std::path::PathBuf;
 
 use bstr::ByteSlice;
-use gix::url as gix_url;
 use semver::VersionReq;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -123,7 +123,7 @@ pub struct AtomReq {
     version: VersionReq,
     /// The Git URL or local path where the atom's repository can be found.
     #[serde(serialize_with = "serialize_url", deserialize_with = "deserialize_url")]
-    store: gix_url::Url,
+    store: gix::url::Url,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -174,7 +174,7 @@ pub struct TarPin {
 /// This struct is used when a dependency is pinned directly to a Git repository.
 pub struct GitPin {
     /// The URL of the Git repository.
-    pub repo: Url,
+    pub repo: gix::Url,
     /// The fetching strategy, either by a specific ref (branch, tag, commit)
     /// or by resolving a semantic version tag.
     #[serde(flatten)]
@@ -256,7 +256,7 @@ impl AtomReq {
     /// # Returns
     ///
     /// A new `AtomReq` instance with the provided version and location.
-    pub fn new(version: VersionReq, store: gix_url::Url, tag: Option<AtomTag>) -> Self {
+    pub fn new(version: VersionReq, store: gix::url::Url, tag: Option<AtomTag>) -> Self {
         Self {
             version,
             store,
@@ -275,7 +275,7 @@ impl AtomReq {
     }
 
     /// return a reference to the store location
-    pub fn store(&self) -> &gix_url::Url {
+    pub fn store(&self) -> &gix::url::Url {
         &self.store
     }
 
@@ -312,6 +312,15 @@ pub enum DocError {
     /// Version resolution error
     #[error(transparent)]
     Semver(#[from] semver::Error),
+    /// Utf conversion error
+    #[error(transparent)]
+    Utf8(#[from] bstr::Utf8Error),
+    /// URL parse error
+    #[error(transparent)]
+    Url(#[from] url::ParseError),
+    /// Generic Error
+    #[error(transparent)]
+    Error(#[from] crate::lock::BoxError),
 }
 
 impl<T: Serialize + DeserializeOwned> TypedDocument<T> {
@@ -338,11 +347,7 @@ impl<T: Serialize> AsMut<DocumentMut> for TypedDocument<T> {
 }
 impl TypedDocument<Manifest> {
     /// Write an atom dependency into the manifest document
-    pub fn write_atom_dep(
-        &mut self,
-        key: &str,
-        req: &AtomReq,
-    ) -> Result<(), toml_edit::ser::Error> {
+    pub fn write_dep(&mut self, key: &str, req: &Dependency) -> Result<(), toml_edit::ser::Error> {
         req.write_dep(key, self)
     }
 }
@@ -353,7 +358,7 @@ impl AsMut<AtomReq> for AtomReq {
     }
 }
 
-impl WriteDeps<Manifest> for AtomReq {
+impl WriteDeps<Manifest> for Dependency {
     type Error = toml_edit::ser::Error;
 
     fn write_dep(&self, key: &str, doc: &mut TypedDocument<Manifest>) -> Result<(), Self::Error> {
@@ -378,7 +383,7 @@ fn not(b: &bool) -> bool {
 }
 
 use serde::{Deserializer, Serializer};
-pub(crate) fn serialize_url<S>(url: &gix_url::Url, serializer: S) -> Result<S::Ok, S::Error>
+pub(crate) fn serialize_url<S>(url: &gix::url::Url, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
 {
@@ -386,20 +391,20 @@ where
     serializer.serialize_str(&str)
 }
 
-pub(crate) fn deserialize_url<'de, D>(deserializer: D) -> Result<gix_url::Url, D::Error>
+pub(crate) fn deserialize_url<'de, D>(deserializer: D) -> Result<gix::url::Url, D::Error>
 where
     D: Deserializer<'de>,
 {
     use bstr::BString;
     let name = BString::deserialize(deserializer)?;
-    gix_url::parse(name.as_bstr())
+    gix::url::parse(name.as_bstr())
         .map_err(|e| <D::Error as serde::de::Error>::custom(e.to_string()))
 }
 
 use std::path::Path;
 
 use crate::id::Name;
-use crate::uri::Uri;
+use crate::uri::{AliasedUrl, Uri};
 impl ManifestWriter {
     /// Construct a new instance of a manifest writer ensuring all the constraints necessary to keep
     /// the lock and manifest in sync are respected.
@@ -450,6 +455,43 @@ impl ManifestWriter {
         Ok(())
     }
 
+    /// Function to add a user requested pin url to the manifest and lock files, ensuring they
+    /// remain in sync.
+    pub async fn add_url(
+        &mut self,
+        url: AliasedUrl,
+        key: Option<Name>,
+        import: Option<PathBuf>,
+        flake: bool,
+    ) -> Result<(), DocError> {
+        let direct = DirectPin::determine(&url)?;
+        let pin = PinReq {
+            import: if let DirectPin::Straight(_) = direct {
+                None
+            } else {
+                import.to_owned()
+            },
+            // TODO: add flags for indirect pins
+            kind: PinType::Direct(direct.to_owned()),
+            // add flake to specify flake
+            flake,
+        };
+
+        let (key, lock_entry) = direct.resolve(key.as_ref()).await?;
+        let dep = Dependency::Pin(pin);
+        self.doc.write_dep(&key, &dep)?;
+        if self
+            .lock
+            .deps
+            .as_mut()
+            .insert(key.to_owned(), lock_entry)
+            .is_some()
+        {
+            tracing::warn!("updating lock entry for `{}`", key);
+        }
+        Ok(())
+    }
+
     /// Function to add a user requested atom uri to the manifest and lock files, ensuring they
     /// remain in sync.
     pub fn add_uri(&mut self, uri: Uri, key: Option<Name>) -> Result<(), DocError> {
@@ -472,7 +514,7 @@ impl ManifestWriter {
         };
 
         if let Some(url) = url {
-            let mut atom: AtomReq = AtomReq::new(
+            let mut atom = AtomReq::new(
                 req.to_owned(),
                 url.to_owned(),
                 (&key != tag).then(|| tag.to_owned()),
@@ -484,7 +526,9 @@ impl ManifestWriter {
                 atom.set_version(version);
             };
 
-            self.doc.write_atom_dep(key.as_str(), &atom)?;
+            let dep = Dependency::Atom(atom);
+
+            self.doc.write_dep(key.as_str(), &dep)?;
             if self
                 .lock
                 .deps
@@ -500,5 +544,43 @@ impl ManifestWriter {
         }
 
         Ok(())
+    }
+}
+
+impl DirectPin {
+    fn determine(url: &AliasedUrl) -> Result<Self, DocError> {
+        let r = url.r#ref();
+        let url = url.url();
+        let pin = if url.scheme == gix::url::Scheme::File {
+            // TODO: handle file paths to sources
+            todo!()
+        } else if let Some(r) = r {
+            let maybe_req = VersionReq::parse(r);
+            let fetch = if let Ok(req) = maybe_req {
+                GitStrat::Version(req)
+            } else {
+                GitStrat::Ref(r.to_owned())
+            };
+            DirectPin::Git(GitPin {
+                repo: url.to_owned(),
+                fetch,
+            })
+        } else {
+            let path = url.path.to_path()?;
+            if path.extension() == Some(OsStr::new("tar"))
+                || path
+                    .file_name()
+                    .is_some_and(|f| f.to_str().is_some_and(|f| f.contains(".tar.")))
+            {
+                DirectPin::Tarball(TarPin {
+                    tar: url.to_string().parse()?,
+                })
+            } else {
+                DirectPin::Straight(Pin {
+                    pin: url.to_string().parse()?,
+                })
+            }
+        };
+        Ok(pin)
     }
 }
