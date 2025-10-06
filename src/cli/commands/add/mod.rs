@@ -48,8 +48,10 @@ pub struct PinArgs {
     /// of the pin is assumed. The actual strategy for calling import depends on the libary being
     /// invoked. This flag is ignored for single file inputs (since their is no other path to
     /// import).
+    #[clap(long, short)]
     import_path: Option<PathBuf>,
     /// Whether the pin should be imported as a Nix flake.
+    #[clap(long, short)]
     flake: bool,
 }
 

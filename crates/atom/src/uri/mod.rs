@@ -147,7 +147,7 @@ impl Display for AliasedUrl {
             if r.is_empty() {
                 url.fmt(f)
             } else {
-                write!(f, "{}^^{}", url, r)
+                write!(f, "{}^{}", url, r)
             }
         } else {
             url.fmt(f)
@@ -159,14 +159,16 @@ impl FromStr for AliasedUrl {
     type Err = UriError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut r#ref = None;
-        let mut url = gix::url::parse(s.into())?;
-        if let Some((f, r)) = url.path.to_string().split_once('@') {
-            r#ref = Some(r.into());
-            url.path = f.into();
+        let r#ref: Option<String>;
+        let url_str: &str;
+        if let Some((f, r)) = s.split_once('^') {
+            r#ref = Some(r.to_owned());
+            url_str = f;
+        } else {
+            r#ref = None;
+            url_str = s;
         }
-        let url = url.to_string();
-        let url = UrlRef::from(url.as_str());
+        let url = UrlRef::from(url_str);
         let u = url.to_url();
         if let Some(url) = u {
             Ok(AliasedUrl { url, r#ref })

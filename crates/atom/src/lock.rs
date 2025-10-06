@@ -143,8 +143,8 @@ pub struct AtomDep {
     /// The location of the atom, whether local or remote.
     ///
     /// This field is flattened in the TOML serialization and omitted if None.
-    #[serde(flatten)]
-    pub location: AtomLocation,
+    #[serde(serialize_with = "serialize_url", deserialize_with = "deserialize_url")]
+    pub source: gix::Url,
     /// The resolved Git revision (commit hash) for verification.
     pub rev: GitDigest,
     /// than cryptographic identity of the atom.
@@ -498,7 +498,7 @@ impl Lockfile {
                     crate::manifest::deps::Dependency::Atom(atom_req) => {
                         let req = atom_req.version();
                         if let Some(Dep::Atom(dep)) = self.deps.as_ref().get(k) {
-                            if !req.matches(&dep.version) {
+                            if !req.matches(&dep.version) || &dep.source != atom_req.store() {
                                 tracing::warn!(message = "updating out of date dependency in accordance with spec", key = %k);
                                 if let Ok(dep) = atom_req.resolve(k) {
                                     self.deps.as_mut().insert(k.to_owned(), Dep::Atom(dep));
@@ -559,11 +559,7 @@ impl AtomReq {
             tag: tag.to_owned(),
             name,
             version,
-            location: if let gix::url::Scheme::File = url.scheme {
-                AtomLocation::Path(url.path.to_string().into())
-            } else {
-                AtomLocation::Url(url.to_owned())
-            },
+            source: url.to_owned(),
             rev: match oid {
                 ObjectId::Sha1(bytes) => GitDigest::Sha1(bytes),
             },
