@@ -25,16 +25,10 @@
 //! - [`PublishOutcome`] - Result type for individual atom publishing attempts
 //! - [`Content`] - Backend-specific content information
 //!
-//! ## Current Backends
+//! ## Backends
 //!
+//! The architecture is designed to support multiple backends.
 //! - **Git** - Publishes atoms as Git objects in repositories (when `git` feature is enabled)
-//!
-//! ## Future Backends
-//!
-//! The architecture is designed to support additional backends:
-//! - **HTTP/HTTPS** - REST APIs for atom storage
-//! - **S3-compatible** - Cloud storage backends
-//! - **IPFS** - Distributed storage networks
 //!
 //! ## Safety Features
 //!
@@ -78,19 +72,44 @@
 //! }
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
-pub mod error;
-
-pub mod git;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
-use git::GitContent;
-
+use self::git::GitContent;
 use crate::AtomId;
 use crate::id::AtomTag;
 
-/// The results of Atom publishing, for reporting to the user.
+pub mod error;
+pub mod git;
+mod private {
+    /// a marker trait to seal the [`Publish<R>`] trait
+    pub trait Sealed {}
+}
+
+const ATOM_FORMAT_VERSION: &str = "pre1.0";
+const ATOM_MANIFEST: &str = "manifest";
+const ATOM_META_REF: &str = "meta";
+const ATOM_ORIGIN: &str = "origin";
+const ATOM_REF: &str = "atoms";
+const EMPTY_SIG: &str = "";
+const STORE_ROOT: &str = "eka";
+
+/// The default location where atom refs are stored.
+pub static ATOM_REFS: LazyLock<String> =
+    LazyLock::new(|| format!("{}/{}", REF_ROOT.as_str(), ATOM_REF));
+static META_REFS: LazyLock<String> =
+    LazyLock::new(|| format!("{}/{}", REF_ROOT.as_str(), ATOM_META_REF));
+static REF_ROOT: LazyLock<String> = LazyLock::new(|| format!("refs/{}", STORE_ROOT));
+
+/// Contains backend-specific content information for reporting results to the user.
+pub enum Content {
+    /// Content specific to the Git implementation.
+    Git(GitContent),
+}
+
+/// Represents the result of publishing a single atom, for reporting to the user.
 pub struct Record<R> {
     id: AtomId<R>,
     content: Content,
@@ -99,86 +118,75 @@ pub struct Record<R> {
 /// Basic statistics collected during a publishing request.
 #[derive(Default)]
 pub struct Stats {
-    /// How many Atoms were actually published.
+    /// The number of atoms that were successfully published.
     pub published: u32,
-    /// How many Atoms were safely skipped because they already existed.
+    /// The number of atoms that were skipped because they already existed in the store.
     pub skipped: u32,
-    /// How many Atoms failed to publish due to some error condition.
+    /// The number of atoms that failed to publish due to an error.
     pub failed: u32,
 }
 
-/// A Result is used over an Option here mainly so we can report which
-/// Atom was skipped, but it does not represent a true failure condition
+/// A `Result` indicating that an atom may have been skipped.
+///
+/// This is used instead of an `Option` to provide information about *which*
+/// atom was skipped, which is useful for reporting but does not represent a
+/// failure condition.
 type MaybeSkipped<T> = Result<T, AtomTag>;
 
-/// A Record that signifies whether an Atom was published or safetly skipped.
+/// The outcome of an attempt to publish a single atom.
+///
+/// This is either a [`Record`] for a successful publication or an [`AtomTag`]
+/// if the atom was safely skipped.
 type PublishOutcome<R> = MaybeSkipped<Record<R>>;
 
-/// A [`HashMap`] containing all valid Atoms in the current store.
+/// A [`HashMap`] containing all valid atoms in the current workspace.
+///
+/// The map links an [`AtomTag`] to the file path of its manifest.
 type ValidAtoms = HashMap<AtomTag, PathBuf>;
 
-/// Contains the content pertinent to a specific implementation for reporting results
-/// to the user.
-pub enum Content {
-    /// Content specific to the Git implementation.
-    Git(GitContent),
-}
-
-/// A [`Builder`] produces a [`Publish`] implementation, which has no other constructor.
-/// This is critical to ensure that vital invariants necessary for maintaining a clean
-/// and consistent state in the Ekala store are verified before publishing can occur.
+/// A builder for a [`Publish`] implementation.
+///
+/// This trait is central to ensuring that vital invariants for maintaining a
+/// clean and consistent state in the store are verified before any publishing
+/// can occur. A [`Publish`] implementation can only be constructed through a
+/// builder.
 pub trait Builder<'a, R> {
     /// The error type returned by the [`Builder::build`] method.
     type Error;
     /// The [`Publish`] implementation to construct.
     type Publisher: Publish<R>;
 
-    /// Collect all the Atoms in the worktree into a set.
+    /// Collects and validates all atoms in the worktree.
     ///
-    /// This function must be called before `Publish::publish` to ensure that there are
-    /// no duplicates, as this is the only way to construct an implementation.
+    /// This method must be called before publishing to ensure that there are
+    /// no duplicate atoms. It is the only way to construct a [`Publish`]
+    /// implementation.
     fn build(self) -> Result<(ValidAtoms, Self::Publisher), Self::Error>;
 }
 
-trait StateValidator<R> {
-    type Error;
-    type Publisher: Publish<R>;
-    /// Validate the state of the Atom source.
-    ///
-    /// This function is called during construction to ensure that we
-    /// never allow for an inconsistent state in the final Ekala store.
-    ///
-    /// Any conditions that would result in an inconsistent state will
-    /// result in an error, making it impossible to construct a publisher
-    /// until the state is corrected.
-    fn validate(publisher: &Self::Publisher) -> Result<ValidAtoms, Self::Error>;
-}
-
-mod private {
-    /// a marker trait to seal the [`Publish<R>`] trait
-    pub trait Sealed {}
-}
-
-/// The trait primarily responsible for exposing Atom publishing logic for a given store.
+/// The primary trait for exposing atom publishing logic for a given store.
 pub trait Publish<R>: private::Sealed {
     /// The error type returned by the publisher.
     type Error;
     /// The type representing the machine-readable identity for a specific version of an atom.
     type Id;
 
-    /// Publishes Atoms.
+    /// Publishes a collection of atoms.
     ///
-    /// This function processes a collection of paths, each representing an Atom to be published.
-    /// Internally the implementation calls [`Publish::publish_atom`] for each path.
+    /// This function processes a collection of paths, each representing an atom
+    /// to be published, by calling [`Publish::publish_atom`] for each path.
     ///
     /// # Error Handling
-    /// - The function aims to process all provided paths, even if some fail.
-    /// - Errors and skipped Atoms are collected as results but do not halt the overall process.
-    /// - The function continues until all the Atoms have been processed.
+    ///
+    /// The function processes all provided paths, even if some fail. Errors
+    /// and skipped atoms are collected as results but do not halt the overall
+    /// process.
     ///
     /// # Return Value
-    /// Returns a vector of results types, where the outter result represents whether an Atom has
-    /// failed, and the inner result determines whether an Atom was safely skipped, e.g. because it
+    ///
+    /// Returns a vector of results. The outer `Result` represents a failure
+    /// to publish an atom, while the inner `Result` ([`PublishOutcome`])
+    /// indicates whether an atom was published or safely skipped because it
     /// already exists.
     fn publish<C>(
         &self,
@@ -188,16 +196,16 @@ pub trait Publish<R>: private::Sealed {
     where
         C: IntoIterator<Item = PathBuf>;
 
-    /// Publish an Atom.
+    /// Publishes a single atom.
     ///
-    /// This function takes a single path and publishes the Atom located there, if possible.
+    /// This function takes a single path and publishes the atom located there.
     ///
     /// # Return Value
-    /// - An outcome is either the record ([`Record<R>`]) of the successfully publish Atom or the
-    ///   [`crate::AtomId`] if it was safely skipped.
     ///
-    /// - The function will return an error ([`Self::Error`]) if the Atom could not be published for
-    ///   any reason, e.g. invalid manifests.
+    /// - An [`Ok`] variant containing a [`PublishOutcome`], which is either the [`Record<R>`] of
+    ///   the successfully published atom or the [`AtomTag`] if it was safely skipped.
+    /// - An [`Err`] variant containing a [`Self::Error`] if the atom could not be published for any
+    ///   reason (e.g., an invalid manifest).
     fn publish_atom<P: AsRef<Path>>(
         &self,
         path: P,
@@ -205,30 +213,28 @@ pub trait Publish<R>: private::Sealed {
     ) -> Result<PublishOutcome<R>, Self::Error>;
 }
 
+/// Validates the state of the atom source.
+///
+/// This trait is called during the construction of a publisher to ensure that
+/// the store is never allowed to enter an inconsistent state. Any conditions
+/// that would result in an inconsistent state will return an error, making it
+/// impossible to construct a publisher until the state is corrected.
+trait StateValidator<R> {
+    type Error;
+    type Publisher: Publish<R>;
+
+    /// Validates the state of the atom source.
+    fn validate(publisher: &Self::Publisher) -> Result<ValidAtoms, Self::Error>;
+}
+
 impl<R> Record<R> {
-    /// Return a reference to the [`AtomId`] in the record.
+    /// Returns a reference to the [`AtomId`] in the record.
     pub fn id(&self) -> &AtomId<R> {
         &self.id
     }
 
-    /// Return a reference to the [`Content`] of the record.
+    /// Returns a reference to the [`Content`] of the record.
     pub fn content(&self) -> &Content {
         &self.content
     }
 }
-
-use std::sync::LazyLock;
-
-const EMPTY_SIG: &str = "";
-const STORE_ROOT: &str = "eka";
-const ATOM_FORMAT_VERSION: &str = "pre1.0";
-const ATOM_REF: &str = "atoms";
-const ATOM_MANIFEST: &str = "manifest";
-const ATOM_META_REF: &str = "meta";
-const ATOM_ORIGIN: &str = "origin";
-static REF_ROOT: LazyLock<String> = LazyLock::new(|| format!("refs/{}", STORE_ROOT));
-/// the default location where atom refs are stored
-pub static ATOM_REFS: LazyLock<String> =
-    LazyLock::new(|| format!("{}/{}", REF_ROOT.as_str(), ATOM_REF));
-static META_REFS: LazyLock<String> =
-    LazyLock::new(|| format!("{}/{}", REF_ROOT.as_str(), ATOM_META_REF));

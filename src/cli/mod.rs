@@ -1,17 +1,25 @@
-mod commands;
-pub mod logging;
-mod store;
+//! This module contains the command-line interface for Eka.
+//!
+//! It uses the `clap` crate to parse command-line arguments and subcommands.
+//! The main entry point is the `run` function, which executes the appropriate
+//! command based on the parsed arguments.
 
 use std::path::PathBuf;
 
 use clap::Parser;
-pub use commands::run;
-pub use logging::init_global_subscriber;
 
+pub use self::commands::run;
+pub use self::logging::init_global_subscriber;
+
+mod commands;
+pub mod logging;
+mod store;
+
+/// The top-level command-line arguments for Eka.
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 pub struct Args {
-    /// Change the current working directory
+    /// Change the current working directory.
     ///
     /// If specified, changes the current working directory to the given
     /// path before executing any commands. This affects all file system
@@ -19,6 +27,7 @@ pub struct Args {
     #[arg(short = 'C', value_name = "DIR", global = true, value_parser = validate_path)]
     working_directory: Option<PathBuf>,
 
+    /// Arguments for controlling logging behavior.
     #[command(flatten)]
     pub log: LogArgs,
 
@@ -26,14 +35,15 @@ pub struct Args {
     command: commands::Commands,
 }
 
+/// Arguments for controlling logging behavior.
 #[derive(Parser, Clone, Copy, Debug)]
 #[command(next_help_heading = "Log Options")]
 pub struct LogArgs {
-    /// Set the level of verbosity
+    /// Set the level of verbosity.
     ///
     /// This flag can be used multiple times to increase verbosity:
-    /// 1. -v    for DEBUG level
-    /// 2. -vv   for TRACE level
+    /// - `-v` for DEBUG level
+    /// - `-vv` for TRACE level
     ///
     /// If not specified, defaults to INFO level.
     ///
@@ -50,11 +60,11 @@ pub struct LogArgs {
     )]
     verbosity: u8,
 
-    /// Suppress verbosity (*takes precedent*)
+    /// Suppress verbosity, taking precedence over other flags.
     ///
     /// This flag can be used multiple times to decrease verbosity:
-    /// 1. -q    for WARN level
-    /// 2. -qq   for ERROR level
+    /// - `-q` for WARN level
+    /// - `-qq` for ERROR level
     ///
     /// This flag *overrides* any verbosity settings. It takes precedence over both the
     /// `--verbosity` flag and the `RUST_LOG` environment variable.
@@ -70,10 +80,11 @@ pub struct LogArgs {
     quiet: u8,
 }
 
-fn validate_path(path: &str) -> Result<PathBuf, std::io::Error> {
-    std::fs::canonicalize(path)
-}
-
+/// Changes the current working directory based on the `-C` flag.
+///
+/// This function is a bit of a hack to get around `clap`'s limitations.
+/// It manually parses the command-line arguments to find the `-C` flag
+/// and changes the current directory before `clap` does its parsing.
 pub fn change_directory() -> Vec<String> {
     let mut seen: Option<bool> = None;
     std::env::args()
@@ -91,4 +102,8 @@ pub fn change_directory() -> Vec<String> {
             arg
         })
         .collect()
+}
+
+fn validate_path(path: &str) -> Result<PathBuf, std::io::Error> {
+    std::fs::canonicalize(path)
 }

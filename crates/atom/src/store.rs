@@ -78,13 +78,15 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
-pub mod git;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use bstr::BStr;
 use semver::{Version, VersionReq};
 
 use crate::AtomTag;
+
+pub mod git;
 
 /// Type alias for unpacked atom reference information.
 type UnpackedRef<Id> = (AtomTag, Version, Id);
@@ -187,7 +189,6 @@ pub trait QueryStore<Ref, T: Send> {
         Spec: AsRef<BStr>;
 }
 
-use std::collections::HashMap;
 /// A trait for querying version information about atoms in remote stores.
 ///
 /// This trait extends [`QueryStore`] to provide high-level operations for working
@@ -249,7 +250,8 @@ where
     Self: std::fmt::Debug,
     T: Send,
 {
-    /// Hello world
+    /// Processes an iterator of references, unpacking and collecting them into an
+    /// iterator of atom information.
     fn process_atoms(refs: impl IntoIterator<Item = Ref>) -> <C as IntoIterator>::IntoIter {
         refs.into_iter()
             .filter_map(|x| x.unpack_atom_ref())
@@ -284,7 +286,8 @@ where
         Ok(atoms)
     }
 
-    /// foobar
+    /// Processes an iterator of atoms to find the highest version matching the
+    /// given tag and version requirement.
     fn process_highest_match(
         atoms: <C as IntoIterator>::IntoIter,
         tag: &AtomTag,
@@ -295,7 +298,7 @@ where
             .max_by_key(|(ref version, _)| version.to_owned())
     }
 
-    /// find the root commit of the remote repo
+    /// Processes an iterator of atoms to find the root commit of the remote repository.
     fn process_root(mut atoms: <C as IntoIterator>::IntoIter) -> Option<Id> {
         atoms.find_map(|(n, _, id)| (n.is_root()).then_some(id))
     }
@@ -384,6 +387,6 @@ pub trait UnpackRef<Id> {
     /// - `Some((tag, version, id))` if the reference follows atom reference format
     /// - `None` if the reference is not an atom reference or is malformed
     fn unpack_atom_ref(&self) -> Option<UnpackedRef<Id>>;
-    /// placeholder
+    /// Attempts to find the root reference in the store.
     fn find_root_ref(&self) -> Option<Id>;
 }

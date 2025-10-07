@@ -5,9 +5,14 @@
 //! In particular, the implementation to initialize ([`Init`]) a Git repository as an Ekala store
 //! is contained here, as well as the type representing the [`Root`] of history used for an
 //! [`crate::AtomId`].
+
 #[cfg(test)]
 pub(crate) mod test;
 
+use std::borrow::Cow;
+use std::io;
+use std::ops::Deref;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use bstr::BStr;
@@ -16,98 +21,94 @@ use gix::protocol::handshake::Ref;
 use gix::protocol::transport::client::Transport;
 use gix::sec::Trust;
 use gix::sec::trust::Mapping;
-use gix::{Commit, ObjectId, ThreadSafeRepository};
+use gix::{Commit, ObjectId, Repository, ThreadSafeRepository};
+use semver::Version;
 use thiserror::Error as ThisError;
 
+use crate::AtomTag;
 use crate::id::Origin;
-use crate::store::QueryVersion;
+use crate::store::{Init, NormalizeStorePath, QueryStore, QueryVersion};
+
+pub(super) const V1_ROOT: &str = "refs/tags/ekala/root/v1";
+const V1_ROOT_SEMVER: &str = "1.0.0";
+
+static DEFAULT_REMOTE: OnceLock<Cow<str>> = OnceLock::new();
+/// Provide a lazily instantiated static reference to the git repository.
+static REPO: OnceLock<Option<ThreadSafeRepository>> = OnceLock::new();
 
 /// An error encountered during initialization or other git store operations.
 #[derive(ThisError, Debug)]
 pub enum Error {
-    /// No git ref found.
-    #[error("No ref named `{0}` found for remote `{1}`")]
-    NoRef(String, String),
-    /// No remote url configured
-    #[error("No `{0}` url configured for remote `{1}`")]
-    NoUrl(String, String),
-    /// This git repository does not have a working directory.
-    #[error("Repository does not have a working directory")]
-    NoWorkDir,
-    /// The repository root calculation failed.
-    #[error("Failed to calculate the repositories root commit")]
-    RootNotFound,
-    /// The calculated root does not match what was reported by the remote.
-    #[error("The calculated root does not match the reported one")]
-    RootInconsistent,
-    /// The requested version is not contained on the remote.
-    #[error("The version requested does not exist on the remote")]
-    NoMatchingVersion,
-    /// A transparent wrapper for a [`gix::revision::walk::Error`]
-    #[error(transparent)]
-    WalkFailure(#[from] gix::revision::walk::Error),
-    /// A transparent wrapper for a [`std::io::Error`]
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
-    /// A transparent wrapper for a [`std::path::StripPrefixError`]
-    #[error(transparent)]
-    NormalizationFailed(#[from] std::path::StripPrefixError),
-    /// A transparent wrapper for a [`Box<gix::remote::find::existing::Error>`]
-    #[error(transparent)]
-    NoRemote(#[from] Box<gix::remote::find::existing::Error>),
-    /// A transparent wrapper for a [`Box<gix::remote::connect::Error>`]
-    #[error(transparent)]
-    Connect(#[from] Box<gix::remote::connect::Error>),
-    /// A transparent wrapper for a [`Box<gix::remote::fetch::prepare::Error>`]
-    #[error(transparent)]
-    Refs(#[from] Box<gix::remote::fetch::prepare::Error>),
-    /// A transparent wrapper for a [`Box<gix::remote::fetch::Error>`]
-    #[error(transparent)]
-    Fetch(#[from] Box<gix::remote::fetch::Error>),
-    /// A transparent wrapper for a [`Box<gix::object::find::existing::with_conversion::Error>`]
-    #[error(transparent)]
-    NoCommit(#[from] Box<gix::object::find::existing::with_conversion::Error>),
     /// A transparent wrapper for a [`Box<gix::refspec::parse::Error>`]
     #[error(transparent)]
     AddRefFailed(#[from] Box<gix::refspec::parse::Error>),
-    /// A transparent wrapper for a [`Box<gix::reference::edit::Error>`]
+    /// A transparent wrapper for a [`Box<gix::remote::connect::Error>`]
     #[error(transparent)]
-    WriteRef(#[from] Box<gix::reference::edit::Error>),
+    Connect(#[from] Box<gix::remote::connect::Error>),
     /// A transparent wrapper for a [`gix::protocol::transport::client::connect::Error`]
     #[error(transparent)]
     Connection(#[from] gix::protocol::transport::client::connect::Error),
     /// A transparent wrapper for a [`gix::config::credential_helpers::Error`]
     #[error(transparent)]
     Creds(#[from] gix::config::credential_helpers::Error),
+    /// A transparent wrapper for a [`Box<gix::remote::fetch::Error>`]
+    #[error(transparent)]
+    Fetch(#[from] Box<gix::remote::fetch::Error>),
     /// A transparent wrapper for a [`gix::config::file::init::from_paths::Error`]
     #[error(transparent)]
     File(#[from] gix::config::file::init::from_paths::Error),
     /// A transparent wrapper for a [`gix::protocol::handshake::Error`]
     #[error(transparent)]
     Handshake(#[from] Box<gix::protocol::handshake::Error>),
-    /// A transparent wrapper for a [`gix::refspec::parse::Error`]
+    /// A transparent wrapper for a [`std::io::Error`]
     #[error(transparent)]
-    Refspec(#[from] gix::refspec::parse::Error),
+    Io(#[from] std::io::Error),
+    /// The requested version is not contained on the remote.
+    #[error("The version requested does not exist on the remote")]
+    NoMatchingVersion,
+    /// A transparent wrapper for a [`Box<gix::object::find::existing::with_conversion::Error>`]
+    #[error(transparent)]
+    NoCommit(#[from] Box<gix::object::find::existing::with_conversion::Error>),
+    /// No git ref found.
+    #[error("No ref named `{0}` found for remote `{1}`")]
+    NoRef(String, String),
+    /// A transparent wrapper for a [`Box<gix::remote::find::existing::Error>`]
+    #[error(transparent)]
+    NoRemote(#[from] Box<gix::remote::find::existing::Error>),
+    /// No remote url configured
+    #[error("No `{0}` url configured for remote `{1}`")]
+    NoUrl(String, String),
+    /// This git repository does not have a working directory.
+    #[error("Repository does not have a working directory")]
+    NoWorkDir,
+    /// A transparent wrapper for a [`std::path::StripPrefixError`]
+    #[error(transparent)]
+    NormalizationFailed(#[from] std::path::StripPrefixError),
     /// A transparent wrapper for a [`gix::refspec::parse::Error`]
     #[error(transparent)]
     Refmap(#[from] gix::protocol::fetch::refmap::init::Error),
+    /// A transparent wrapper for a [`Box<gix::remote::fetch::prepare::Error>`]
+    #[error(transparent)]
+    Refs(#[from] Box<gix::remote::fetch::prepare::Error>),
     /// A transparent wrapper for a [`gix::refspec::parse::Error`]
     #[error(transparent)]
+    Refspec(#[from] gix::refspec::parse::Error),
+    /// The calculated root does not match what was reported by the remote.
+    #[error("The calculated root does not match the reported one")]
+    RootInconsistent,
+    /// The repository root calculation failed.
+    #[error("Failed to calculate the repositories root commit")]
+    RootNotFound,
+    /// A transparent wrapper for a [`gix::url::parse::Error`]
+    #[error(transparent)]
     UrlParse(#[from] gix::url::parse::Error),
+    /// A transparent wrapper for a [`gix::revision::walk::Error`]
+    #[error(transparent)]
+    WalkFailure(#[from] gix::revision::walk::Error),
+    /// A transparent wrapper for a [`Box<gix::reference::edit::Error>`]
+    #[error(transparent)]
+    WriteRef(#[from] Box<gix::reference::edit::Error>),
 }
-
-impl Error {
-    pub(crate) fn warn(self) -> Self {
-        tracing::warn!(message = %self);
-        self
-    }
-}
-
-/// Provide a lazyily instantiated static reference to the git repository.
-static REPO: OnceLock<Option<ThreadSafeRepository>> = OnceLock::new();
-
-use std::borrow::Cow;
-static DEFAULT_REMOTE: OnceLock<Cow<str>> = OnceLock::new();
 
 /// The wrapper type for the underlying type which will be used to represent
 /// the "root" identifier for an [`crate::AtomId`]. For git, this is a [`gix::ObjectId`]
@@ -117,82 +118,18 @@ static DEFAULT_REMOTE: OnceLock<Cow<str>> = OnceLock::new();
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Root(ObjectId);
 
-/// Return a static reference the the local Git repository.
-pub fn repo() -> Result<Option<&'static ThreadSafeRepository>, Box<gix::discover::Error>> {
-    let mut error = None;
-    let repo = REPO.get_or_init(|| match get_repo() {
-        Ok(repo) => Some(repo),
-        Err(e) => {
-            error = Some(e);
-            None
-        },
-    });
-    if let Some(e) = error {
-        Err(e)
-    } else {
-        Ok(repo.as_ref())
+trait EkalaRemote {
+    type Error;
+    const ANONYMOUS: &str = "<unamed>";
+    fn try_symbol(&self) -> Result<&str, Self::Error>;
+    fn symbol(&self) -> &str {
+        self.try_symbol().unwrap_or(Self::ANONYMOUS)
     }
 }
 
-use std::io;
-/// Run's the git binary, returning the output or the err, depending on the return value.
-///
-/// Note: We rely on this only for operations that are not yet implemented in GitOxide.
-///       Once push is implemented upstream, we can, and should, remove this.
-pub fn run_git_command(args: &[&str]) -> io::Result<Vec<u8>> {
-    use std::process::Command;
-    let output = Command::new("git").args(args).output()?;
-
-    if output.status.success() {
-        Ok(output.stdout)
-    } else {
-        Err(io::Error::other(String::from_utf8_lossy(&output.stderr)))
-    }
-}
-
-fn get_repo() -> Result<ThreadSafeRepository, Box<gix::discover::Error>> {
-    let opts = Options {
-        required_trust: Trust::Full,
-        ..Default::default()
-    };
-    ThreadSafeRepository::discover_opts(".", opts, Mapping::default()).map_err(Box::new)
-}
-
-/// Return a static reference to the default remote configured for pushing
-pub fn default_remote() -> &'static str {
-    use gix::remote::Direction;
-    DEFAULT_REMOTE
-        .get_or_init(|| {
-            repo()
-                .ok()
-                .flatten()
-                .and_then(|repo| {
-                    repo.to_thread_local()
-                        .remote_default_name(Direction::Push)
-                        .map(|s| s.to_string().into())
-                })
-                .unwrap_or("origin".into())
-        })
-        .as_ref()
-}
-
-use std::ops::Deref;
-impl Deref for Root {
-    type Target = ObjectId;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-type AtomQuery = (AtomTag, Version, ObjectId);
-impl Origin<Root> for std::vec::IntoIter<AtomQuery> {
-    type Error = Error;
-
-    fn calculate_origin(&self) -> Result<Root, Self::Error> {
-        let root = <gix::Url as QueryVersion<_, _, _, _>>::process_root(self.to_owned())
-            .ok_or(Error::RootNotFound)?;
-        Ok(Root(root))
+impl AsRef<[u8]> for Root {
+    fn as_ref(&self) -> &[u8] {
+        self.as_bytes()
     }
 }
 
@@ -218,66 +155,18 @@ impl<'a> Origin<Root> for Commit<'a> {
     }
 }
 
-use std::path::{Path, PathBuf};
+impl Deref for Root {
+    type Target = ObjectId;
 
-use gix::Repository;
-
-use super::{NormalizeStorePath, QueryStore};
-
-impl NormalizeStorePath for Repository {
-    type Error = Error;
-
-    fn normalize<P: AsRef<Path>>(&self, path: P) -> Result<PathBuf, Error> {
-        use std::fs;
-
-        use path_clean::PathClean;
-        let path = path.as_ref();
-
-        let rel_repo_root = self.workdir().ok_or(Error::NoWorkDir)?;
-        let repo_root = fs::canonicalize(rel_repo_root)?;
-        let current = self.current_dir();
-        let rel = current.join(path).clean();
-
-        rel.strip_prefix(&repo_root)
-            .map_or_else(
-                |e| {
-                    // handle absolute paths as if they were relative to the repo root
-                    if !path.is_absolute() {
-                        return Err(e);
-                    }
-                    let cleaned = path.clean();
-                    // Preserve the platform-specific root
-                    let p = cleaned.strip_prefix(Path::new("/"))?;
-                    repo_root
-                        .join(p)
-                        .clean()
-                        .strip_prefix(&repo_root)
-                        .map(Path::to_path_buf)
-                },
-                |p| Ok(p.to_path_buf()),
-            )
-            .map_err(|e| {
-                tracing::warn!(
-                    message = "Ignoring path outside repo root",
-                    path = %path.display(),
-                );
-                Error::NormalizationFailed(e)
-            })
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 
-impl AsRef<[u8]> for Root {
-    fn as_ref(&self) -> &[u8] {
-        self.as_bytes()
-    }
-}
-
-trait EkalaRemote {
-    type Error;
-    const ANONYMOUS: &str = "<unamed>";
-    fn try_symbol(&self) -> Result<&str, Self::Error>;
-    fn symbol(&self) -> &str {
-        self.try_symbol().unwrap_or(Self::ANONYMOUS)
+impl Error {
+    pub(crate) fn warn(self) -> Self {
+        tracing::warn!(message = %self);
+        self
     }
 }
 
@@ -296,16 +185,6 @@ impl<'repo> EkalaRemote for gix::Remote<'repo> {
     }
 }
 
-pub(super) const V1_ROOT: &str = "refs/tags/ekala/root/v1";
-const V1_ROOT_SEMVER: &str = "1.0.0";
-
-pub(crate) fn to_id(r: Ref) -> ObjectId {
-    let (_, t, p) = r.unpack();
-    // unwrap can't fail here as at least one of these is guaranteed Some
-    p.or(t).map(ToOwned::to_owned).unwrap()
-}
-
-use super::Init;
 impl<'repo> Init<Root, Ref, Box<dyn Transport + Send>> for gix::Remote<'repo> {
     type Error = Error;
 
@@ -350,11 +229,6 @@ impl<'repo> Init<Root, Ref, Box<dyn Transport + Send>> for gix::Remote<'repo> {
         })?
     }
 
-    /// Sync with the given remote and get the most up to date HEAD according to it.
-    fn sync(&self, transport: Option<&mut Box<dyn Transport + Send>>) -> Result<Ref, Error> {
-        self.get_ref("HEAD", transport)
-    }
-
     /// Initialize the repository by calculating the root, according to the latest HEAD.
     fn ekala_init(&self, transport: Option<&mut Box<dyn Transport + Send>>) -> Result<(), Error> {
         use gix::refs::transaction::PreviousValue;
@@ -387,25 +261,64 @@ impl<'repo> Init<Root, Ref, Box<dyn Transport + Send>> for gix::Remote<'repo> {
         tracing::info!(remote = name, message = "Successfully initialized");
         Ok(())
     }
+
+    /// Sync with the given remote and get the most up to date HEAD according to it.
+    fn sync(&self, transport: Option<&mut Box<dyn Transport + Send>>) -> Result<Ref, Error> {
+        self.get_ref("HEAD", transport)
+    }
 }
 
-type ProgressRange = std::ops::RangeInclusive<prodash::progress::key::Level>;
-const STANDARD_RANGE: ProgressRange = 2..=2;
+impl NormalizeStorePath for Repository {
+    type Error = Error;
 
-fn setup_line_renderer(
-    progress: &std::sync::Arc<prodash::tree::Root>,
-) -> prodash::render::line::JoinHandle {
-    prodash::render::line(
-        std::io::stderr(),
-        std::sync::Arc::downgrade(progress),
-        prodash::render::line::Options {
-            level_filter: Some(STANDARD_RANGE),
-            initial_delay: Some(std::time::Duration::from_millis(500)),
-            throughput: true,
-            ..prodash::render::line::Options::default()
-        }
-        .auto_configure(prodash::render::line::StreamKind::Stderr),
-    )
+    fn normalize<P: AsRef<Path>>(&self, path: P) -> Result<PathBuf, Error> {
+        use std::fs;
+
+        use path_clean::PathClean;
+        let path = path.as_ref();
+
+        let rel_repo_root = self.workdir().ok_or(Error::NoWorkDir)?;
+        let repo_root = fs::canonicalize(rel_repo_root)?;
+        let current = self.current_dir();
+        let rel = current.join(path).clean();
+
+        rel.strip_prefix(&repo_root)
+            .map_or_else(
+                |e| {
+                    // handle absolute paths as if they were relative to the repo root
+                    if !path.is_absolute() {
+                        return Err(e);
+                    }
+                    let cleaned = path.clean();
+                    // Preserve the platform-specific root
+                    let p = cleaned.strip_prefix(Path::new("/"))?;
+                    repo_root
+                        .join(p)
+                        .clean()
+                        .strip_prefix(&repo_root)
+                        .map(Path::to_path_buf)
+                },
+                |p| Ok(p.to_path_buf()),
+            )
+            .map_err(|e| {
+                tracing::warn!(
+                    message = "Ignoring path outside repo root",
+                    path = %path.display(),
+                );
+                Error::NormalizationFailed(e)
+            })
+    }
+}
+
+type AtomQuery = (AtomTag, Version, ObjectId);
+impl Origin<Root> for std::vec::IntoIter<AtomQuery> {
+    type Error = Error;
+
+    fn calculate_origin(&self) -> Result<Root, Self::Error> {
+        let root = <gix::Url as QueryVersion<_, _, _, _>>::process_root(self.to_owned())
+            .ok_or(Error::RootNotFound)?;
+        Ok(Root(root))
+    }
 }
 
 impl super::QueryStore<Ref, Box<dyn Transport + Send>> for gix::Url {
@@ -507,12 +420,6 @@ impl super::QueryStore<Ref, Box<dyn Transport + Send>> for gix::Url {
         Ok(refmap.remote_refs)
     }
 
-    fn get_transport(&self) -> Result<Box<dyn Transport + Send>, Self::Error> {
-        use gix::protocol::transport::client::connect::Options;
-        let transport = gix::protocol::transport::connect(self.to_owned(), Options::default())?;
-        Ok(Box::new(transport))
-    }
-
     fn get_ref<Spec>(
         &self,
         target: Spec,
@@ -527,6 +434,12 @@ impl super::QueryStore<Ref, Box<dyn Transport + Send>> for gix::Url {
                 .next()
                 .ok_or(Error::NoRef(name, self.to_string()))
         })
+    }
+
+    fn get_transport(&self) -> Result<Box<dyn Transport + Send>, Self::Error> {
+        use gix::protocol::transport::client::connect::Options;
+        let transport = gix::protocol::transport::connect(self.to_owned(), Options::default())?;
+        Ok(Box::new(transport))
     }
 }
 
@@ -612,14 +525,6 @@ impl<'repo> super::QueryStore<Ref, Box<dyn Transport + Send>> for gix::Remote<'r
         Ok(outcome.ref_map.remote_refs)
     }
 
-    fn get_transport(&self) -> Result<Box<dyn Transport + Send>, Self::Error> {
-        use gix::remote::Direction;
-        let url = self
-            .url(Direction::Fetch)
-            .ok_or_else(|| Error::NoUrl("fetch".to_string(), self.symbol().to_string()))?;
-        url.get_transport()
-    }
-
     fn get_ref<Spec>(
         &self,
         target: Spec,
@@ -635,12 +540,30 @@ impl<'repo> super::QueryStore<Ref, Box<dyn Transport + Send>> for gix::Remote<'r
                 .ok_or(Error::NoRef(name, self.symbol().to_owned()))
         })
     }
+
+    fn get_transport(&self) -> Result<Box<dyn Transport + Send>, Self::Error> {
+        use gix::remote::Direction;
+        let url = self
+            .url(Direction::Fetch)
+            .ok_or_else(|| Error::NoUrl("fetch".to_string(), self.symbol().to_string()))?;
+        url.get_transport()
+    }
 }
 
-use semver::Version;
-
-use crate::AtomTag;
 impl super::UnpackRef<ObjectId> for Ref {
+    fn find_root_ref(&self) -> Option<ObjectId> {
+        if let Ref::Direct {
+            full_ref_name: name,
+            object: id,
+        } = self
+        {
+            if name == V1_ROOT {
+                return Some(id.to_owned());
+            }
+        }
+        None
+    }
+
     fn unpack_atom_ref(&self) -> Option<super::UnpackedRef<ObjectId>> {
         let maybe_root = self.find_root_ref();
         if let Some(root) = maybe_root {
@@ -661,21 +584,91 @@ impl super::UnpackRef<ObjectId> for Ref {
 
         Some((tag, version, id))
     }
-
-    fn find_root_ref(&self) -> Option<ObjectId> {
-        if let Ref::Direct {
-            full_ref_name: name,
-            object: id,
-        } = self
-        {
-            if name == V1_ROOT {
-                return Some(id.to_owned());
-            }
-        }
-        None
-    }
 }
 
 type Refs = Vec<super::UnpackedRef<ObjectId>>;
-impl QueryVersion<Ref, ObjectId, Refs, Box<dyn Transport + Send>> for gix::Url {}
 impl<'repo> QueryVersion<Ref, ObjectId, Refs, Box<dyn Transport + Send>> for gix::Remote<'repo> {}
+impl QueryVersion<Ref, ObjectId, Refs, Box<dyn Transport + Send>> for gix::Url {}
+
+/// Return a static reference to the default remote configured for pushing
+pub fn default_remote() -> &'static str {
+    use gix::remote::Direction;
+    DEFAULT_REMOTE
+        .get_or_init(|| {
+            repo()
+                .ok()
+                .flatten()
+                .and_then(|repo| {
+                    repo.to_thread_local()
+                        .remote_default_name(Direction::Push)
+                        .map(|s| s.to_string().into())
+                })
+                .unwrap_or("origin".into())
+        })
+        .as_ref()
+}
+
+fn get_repo() -> Result<ThreadSafeRepository, Box<gix::discover::Error>> {
+    let opts = Options {
+        required_trust: Trust::Full,
+        ..Default::default()
+    };
+    ThreadSafeRepository::discover_opts(".", opts, Mapping::default()).map_err(Box::new)
+}
+
+/// Return a static reference the the local Git repository.
+pub fn repo() -> Result<Option<&'static ThreadSafeRepository>, Box<gix::discover::Error>> {
+    let mut error = None;
+    let repo = REPO.get_or_init(|| match get_repo() {
+        Ok(repo) => Some(repo),
+        Err(e) => {
+            error = Some(e);
+            None
+        },
+    });
+    if let Some(e) = error {
+        Err(e)
+    } else {
+        Ok(repo.as_ref())
+    }
+}
+
+/// Runs the `git` binary with the given arguments, returning its output.
+///
+/// Note: This function is a temporary workaround for operations not yet implemented in `gix`.
+/// It should be removed once `gix` supports all necessary functionality (e.g., push).
+pub fn run_git_command(args: &[&str]) -> io::Result<Vec<u8>> {
+    use std::process::Command;
+    let output = Command::new("git").args(args).output()?;
+
+    if output.status.success() {
+        Ok(output.stdout)
+    } else {
+        Err(io::Error::other(String::from_utf8_lossy(&output.stderr)))
+    }
+}
+
+type ProgressRange = std::ops::RangeInclusive<prodash::progress::key::Level>;
+const STANDARD_RANGE: ProgressRange = 2..=2;
+
+fn setup_line_renderer(
+    progress: &std::sync::Arc<prodash::tree::Root>,
+) -> prodash::render::line::JoinHandle {
+    prodash::render::line(
+        std::io::stderr(),
+        std::sync::Arc::downgrade(progress),
+        prodash::render::line::Options {
+            level_filter: Some(STANDARD_RANGE),
+            initial_delay: Some(std::time::Duration::from_millis(500)),
+            throughput: true,
+            ..prodash::render::line::Options::default()
+        }
+        .auto_configure(prodash::render::line::StreamKind::Stderr),
+    )
+}
+
+pub(crate) fn to_id(r: Ref) -> ObjectId {
+    let (_, t, p) = r.unpack();
+    // unwrap can't fail here as at least one of these is guaranteed Some
+    p.or(t).map(ToOwned::to_owned).unwrap()
+}

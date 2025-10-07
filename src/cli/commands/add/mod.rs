@@ -1,4 +1,7 @@
-mod git;
+//! This module defines the `add` subcommand.
+//!
+//! The `add` subcommand is responsible for adding dependencies to an atom's
+//! manifest file. It can add dependencies from an atom URI or a pinned URL.
 
 use std::path::PathBuf;
 
@@ -7,6 +10,9 @@ use atom::id::Name;
 use atom::uri::{AliasedUrl, Uri};
 use clap::{Parser, Subcommand};
 
+mod git;
+
+/// The `add` subcommand.
 #[derive(Parser, Debug)]
 #[command(
     arg_required_else_help = true,
@@ -15,7 +21,7 @@ use clap::{Parser, Subcommand};
     next_help_heading = "Add Options"
 )]
 pub struct Args {
-    /// The path to the atom to modify
+    /// The path to the atom to modify.
     #[clap(long, short, default_value = ".", global = true)]
     path: PathBuf,
     /// The atom URI to add as a dependency.
@@ -31,14 +37,7 @@ pub struct Args {
     pin: Option<PinCommand>,
 }
 
-#[derive(Subcommand, Debug)]
-enum PinCommand {
-    /// Add dependencies from a given URL to the manifest.
-    ///
-    /// This command takes a URL and updates the manifest and lock with the result.
-    Pin(PinArgs),
-}
-
+/// Arguments for pinning a dependency to a specific URL.
 #[derive(Parser, Debug)]
 #[command(arg_required_else_help = true, next_help_heading = "Pin Options")]
 pub struct PinArgs {
@@ -55,12 +54,21 @@ pub struct PinArgs {
     flake: bool,
 }
 
+#[derive(Subcommand, Debug)]
+enum PinCommand {
+    /// Add dependencies from a given URL to the manifest.
+    ///
+    /// This command takes a URL and updates the manifest and lock with the result.
+    Pin(PinArgs),
+}
+
 #[derive(Parser, Debug)]
 struct StoreArgs {
     #[command(flatten)]
     git: git::GitArgs,
 }
 
+/// The main entry point for the `add` subcommand.
 pub(super) async fn run(args: Args) -> Result<()> {
     let mut writer = atom::ManifestWriter::new(&args.path)?;
 
