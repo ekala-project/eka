@@ -22,7 +22,7 @@ This living document outlines the development roadmap for `eka`, `atom-nix`, and
 - [x] **`eka add` Command:** Implement the `eka add` command for adding dependencies, as detailed in [ADR #2](adrs/0002-eka-add-command.md).
   - [x] **Manifest & Lock File Synchronization:** Ensure atomic updates to the manifest (`eka.toml`) and lock file (`eka.lock`) to maintain consistency, as detailed in [ADR #1](adrs/0001-lock-generation.md) and its [addendum](adrs/0001-lock-generation-addendum.md).
   - [x] **Semantic Version Resolution:** Implement semver-based resolution by querying git references on the remote. The highest matching version is resolved and the exact version, revision hash, and cryptographic ID are recorded in the lock file.
-- [ ] **`eka add` Legacy Support:** Finalize support for locking legacy pin-style dependencies (e.g., Nix flakes URLs) to facilitate interoperability, as outlined in [ADR #3](adrs/0003-pure-rust-pin-dependencies.md).
+- [x] **`eka add` Legacy Support:** Finalize support for locking legacy pin-style dependencies (e.g., Nix flakes URLs) to facilitate interoperability, as outlined in [ADR #3](adrs/0003-pure-rust-pin-dependencies.md).
 - [ ] **`eka resolve` Command:** Implement a command to synchronize the lock file with the manifest without adding new dependencies.
 
 ### Evaluation & Execution
