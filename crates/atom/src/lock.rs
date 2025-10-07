@@ -58,9 +58,11 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use bstr::ByteSlice;
 use gix::ObjectId;
+use gix::protocol::handshake::Ref;
 use nix_compat::nixhash::NixHash;
-use semver::Version;
+use semver::{Version, VersionReq};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use snix_castore::blobservice::BlobService;
 use snix_castore::directoryservice::DirectoryService;
@@ -81,6 +83,14 @@ mod serde_base32;
 
 /// A type alias for a boxed error that is sendable and syncable.
 pub(crate) type BoxError = Box<dyn std::error::Error + Send + Sync>;
+
+#[derive(thiserror::Error, Debug)]
+enum LockError {
+    #[error(transparent)]
+    Generic(#[from] BoxError),
+    #[error("failed to resolve requested version")]
+    Resolve,
+}
 
 /// A type alias for the fetcher used for pinned dependencies.
 type PinFetcher = Fetcher<
@@ -627,17 +637,27 @@ impl GitPin {
         key: &Name,
         import: Option<PathBuf>,
         flake: bool,
-    ) -> Result<PinGitDep, BoxError> {
+    ) -> Result<PinGitDep, LockError> {
         use crate::manifest::deps::GitStrat;
         use crate::store::QueryStore;
 
         let r = match &self.fetch {
-            GitStrat::Ref(r) => self.repo.get_ref(format!("{}:{}", r, r).as_str(), None)?,
-            GitStrat::Version(_version_req) => {
+            GitStrat::Ref(r) => self
+                .repo
+                .get_ref(format!("{}:{}", r, r).as_str(), None)
+                .map_err(|e| LockError::Generic(e.into()))?,
+            GitStrat::Version(req) => {
                 let query = "refs/tags/v*";
-                let _refs = self.repo.get_refs([query], None)?;
-                // TODO: finish version matching
-                todo!()
+                let refs = self
+                    .repo
+                    .get_refs([query], None)
+                    .map_err(|e| LockError::Generic(e.into()))?;
+                if let Some(r) = GitPin::match_version(req, refs) {
+                    r
+                } else {
+                    tracing::error!(message = "could not resolve requested version", %self.repo, version = %req);
+                    return Err(LockError::Resolve);
+                }
             },
         };
 
@@ -651,6 +671,19 @@ impl GitPin {
             import,
             flake,
         })
+    }
+
+    fn match_version(req: &VersionReq, refs: impl IntoIterator<Item = Ref>) -> Option<Ref> {
+        refs.into_iter()
+            .filter_map(|r| {
+                let (n, ..) = r.unpack();
+                let path = PathBuf::from(n.to_str().ok()?);
+                let v_str = &path.file_name()?.to_str()?[1..];
+                let version = Version::parse(v_str).ok()?;
+                req.matches(&version).then_some((version, r))
+            })
+            .max_by_key(|(ref version, _)| version.to_owned())
+            .map(|(_, r)| r)
     }
 }
 
