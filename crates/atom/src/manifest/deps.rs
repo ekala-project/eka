@@ -16,9 +16,7 @@
 //!
 //! - [`Dependency`] - The main dependency structure containing all dependency types
 //! - [`AtomReq`] - Requirements for atom dependencies
-//! - [`PinReq`] - Requirements for pinned dependencies
 //! - [`SrcReq`] - Requirements for build-time sources
-//! - [`PinType`] - Enum distinguishing between direct and indirect pins
 //!
 //! ## Example Usage
 //!
@@ -106,7 +104,11 @@ pub enum Dependency {
     /// An atom dependency variant.
     Atom(AtomReq),
     /// A direct pin to an external source variant.
-    Pin(PinReq),
+    Pin(StraightPin),
+    /// A tarball pin to an external source variant.
+    TarPin(TarPin),
+    /// A git pin to an external source variant.
+    GitPin(GitPin),
     /// A dependency fetched at build-time as an FOD.
     Src(SrcReq),
 }
@@ -128,23 +130,10 @@ pub struct AtomReq {
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
 #[serde(untagged)]
-/// Represents the different types of pins for dependencies.
-///
-/// This enum distinguishes between direct pins (pointing to external URLs)
-/// and indirect pins (referencing dependencies from other atoms).
-pub enum PinType {
-    /// A direct pin to an external source with a URL.
-    Direct(DirectPin),
-    /// An indirect pin referencing a dependency from another atom.
-    Indirect(IndirectPin),
-}
-
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
-#[serde(untagged)]
 /// Represents the two types of direct pins.
 pub enum DirectPin {
     /// A simple pin, with an optional unpack field.
-    Straight(Pin),
+    Straight(StraightPin),
     /// A pin pointing to a tarball which will be unpacked before hashing.
     Tarball(TarPin),
     /// A git pin, with a ref or version.
@@ -154,9 +143,15 @@ pub enum DirectPin {
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
 #[serde(deny_unknown_fields)]
 /// Represents a simple pin, with an optional unpack field.
-pub struct Pin {
+pub struct StraightPin {
     /// The URL of the pinned resource.
     pub pin: Url,
+    /// A bool representing whether the pin represents a Nix flake, changing the behavior of the
+    /// `import` field, if so.
+    ///
+    /// This field is omitted from serialization if false.
+    #[serde(default, skip_serializing_if = "not")]
+    pub flake: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -165,6 +160,18 @@ pub struct Pin {
 pub struct TarPin {
     /// The URL of the tarball resource.
     pub tar: Url,
+    /// A bool representing whether the pin represents a Nix flake, changing the behavior of the
+    /// `import` field, if so.
+    ///
+    /// This field is omitted from serialization if false.
+    #[serde(default, skip_serializing_if = "not")]
+    pub flake: bool,
+    /// An optional relative path within the fetched source, used to import Nix expressions; the
+    /// precise behavior of which depends on whether or not the pin is a flake.
+    ///
+    /// This field is omitted from serialization if None.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub import: Option<PathBuf>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -174,11 +181,24 @@ pub struct TarPin {
 /// This struct is used when a dependency is pinned directly to a Git repository.
 pub struct GitPin {
     /// The URL of the Git repository.
+    #[serde(serialize_with = "serialize_url", deserialize_with = "deserialize_url")]
     pub repo: gix::Url,
     /// The fetching strategy, either by a specific ref (branch, tag, commit)
     /// or by resolving a semantic version tag.
     #[serde(flatten)]
     pub fetch: GitStrat,
+    /// A bool representing whether the pin represents a Nix flake, changing the behavior of the
+    /// `import` field, if so.
+    ///
+    /// This field is omitted from serialization if false.
+    #[serde(default, skip_serializing_if = "not")]
+    pub flake: bool,
+    /// An optional relative path within the fetched source, used to import Nix expressions; the
+    /// precise behavior of which depends on whether or not the pin is a flake.
+    ///
+    /// This field is omitted from serialization if None.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub import: Option<PathBuf>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -207,34 +227,6 @@ pub struct IndirectPin {
     /// This field is omitted from serialization if None.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub set: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
-/// Represents a direct pin to an external source, such as a URL or tarball.
-///
-/// This struct is used to specify pinned dependencies in the manifest,
-/// which can be either direct (pointing to URLs) or indirect (referencing
-/// dependencies from other atoms).
-#[serde(deny_unknown_fields)]
-pub struct PinReq {
-    /// An optional relative path within the fetched source, used to import Nix expressions; the
-    /// precise behavior of which depends on whether or not the pin is a flake.
-    ///
-    /// This field is omitted from serialization if None.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub import: Option<PathBuf>,
-    /// The kind of pin, which can be a direct URL, a Git repository, or an
-    /// indirect reference to a dependency from another atom.
-    ///
-    /// This field is flattened in the TOML serialization.
-    #[serde(flatten)]
-    pub kind: PinType,
-    /// A bool representing whether the pin represents a Nix flake, changing the behavior of the
-    /// `import` field, if so.
-    ///
-    /// This field is omitted from serialization if false.
-    #[serde(skip_serializing_if = "not")]
-    pub flake: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -378,7 +370,7 @@ impl WriteDeps<Manifest> for Dependency {
     }
 }
 
-fn not(b: &bool) -> bool {
+pub(crate) fn not(b: &bool) -> bool {
     !b
 }
 
@@ -464,21 +456,15 @@ impl ManifestWriter {
         import: Option<PathBuf>,
         flake: bool,
     ) -> Result<(), DocError> {
-        let direct = DirectPin::determine(&url)?;
-        let pin = PinReq {
-            import: if let DirectPin::Straight(_) = direct {
-                None
-            } else {
-                import.to_owned()
-            },
-            // TODO: add flags for indirect pins
-            kind: PinType::Direct(direct.to_owned()),
-            // add flake to specify flake
-            flake,
+        let direct = DirectPin::determine(&url, import.as_ref(), flake)?;
+        let (key, lock_entry) = direct.resolve(key.as_ref(), import, flake).await?;
+
+        let dep = match direct {
+            DirectPin::Straight(straight_pin) => Dependency::Pin(straight_pin),
+            DirectPin::Tarball(tar_pin) => Dependency::TarPin(tar_pin),
+            DirectPin::Git(git_pin) => Dependency::GitPin(git_pin),
         };
 
-        let (key, lock_entry) = direct.resolve(key.as_ref()).await?;
-        let dep = Dependency::Pin(pin);
         self.doc.write_dep(&key, &dep)?;
         if self
             .lock
@@ -548,7 +534,11 @@ impl ManifestWriter {
 }
 
 impl DirectPin {
-    fn determine(url: &AliasedUrl) -> Result<Self, DocError> {
+    fn determine(
+        url: &AliasedUrl,
+        import: Option<&PathBuf>,
+        flake: bool,
+    ) -> Result<Self, DocError> {
         let r = url.r#ref();
         let url = url.url();
         let pin = if url.scheme == gix::url::Scheme::File {
@@ -564,6 +554,8 @@ impl DirectPin {
             DirectPin::Git(GitPin {
                 repo: url.to_owned(),
                 fetch,
+                flake,
+                import: import.map(ToOwned::to_owned),
             })
         } else {
             let path = url.path.to_path()?;
@@ -574,10 +566,13 @@ impl DirectPin {
             {
                 DirectPin::Tarball(TarPin {
                     tar: url.to_string().parse()?,
+                    flake,
+                    import: import.map(ToOwned::to_owned),
                 })
             } else {
-                DirectPin::Straight(Pin {
+                DirectPin::Straight(StraightPin {
                     pin: url.to_string().parse()?,
+                    flake,
                 })
             }
         };

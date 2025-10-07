@@ -151,6 +151,7 @@ pub struct AtomDep {
     id: AtomDigest,
 }
 
+use crate::manifest::deps::not;
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
 /// Represents a direct pin to an external source, such as a URL or tarball.
 ///
@@ -164,6 +165,9 @@ pub struct PinDep {
     pub url: Url,
     /// The hash for integrity verification (e.g., sha256).
     hash: WrappedNixHash,
+    /// Whether toe file imported represents a nix flake.
+    #[serde(default, skip_serializing_if = "not")]
+    flake: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -176,9 +180,16 @@ pub struct PinGitDep {
     /// The name of the pinned Git source.
     pub name: Name,
     /// The Git repository URL.
+    #[serde(serialize_with = "serialize_url", deserialize_with = "deserialize_url")]
     pub url: gix::Url,
     /// The resolved revision (commit hash).
     pub rev: GitDigest,
+    /// The path to import inside the repo.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub import: Option<PathBuf>,
+    /// Whether the file imported represents a nix flake.
+    #[serde(default, skip_serializing_if = "not")]
+    pub flake: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -194,6 +205,12 @@ pub struct PinTarDep {
     pub url: Url,
     /// The hash of the tarball.
     hash: WrappedNixHash,
+    /// The path to import inside the tarball.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub import: Option<PathBuf>,
+    /// Whether the file imported represents a nix flake.
+    #[serde(default, skip_serializing_if = "not")]
+    pub flake: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -207,6 +224,14 @@ pub struct FromDep {
     pub name: Name,
     /// The atom ID from which to source.
     from: AtomDigest,
+    /// The name of the dependency to acquire from the 'from' atom (defaults to `name`).
+    ///
+    /// This field is omitted from serialization if None.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    set: Option<Name>,
+    /// The path to import inside the tarball.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub import: Option<PathBuf>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -490,8 +515,8 @@ impl Lockfile {
                             tracing::warn!(message = "unlocked dependency could not be resolved", key = %k);
                         };
                     },
-                    crate::manifest::deps::Dependency::Pin(_) => todo!(),
                     crate::manifest::deps::Dependency::Src(_) => todo!(),
+                    _ => (),
                 }
             } else {
                 match v {
@@ -512,8 +537,8 @@ impl Lockfile {
                             tracing::warn!(message = "dependency is mislabeled as inproper type, and attempts to rectify failed", key = %k);
                         };
                     },
-                    crate::manifest::deps::Dependency::Pin(_) => todo!(),
                     crate::manifest::deps::Dependency::Src(_) => todo!(),
+                    _ => (),
                 }
             }
         }
@@ -673,7 +698,12 @@ fn get_url_filename(url: &Urls) -> String {
 }
 
 impl DirectPin {
-    pub(crate) async fn resolve(&self, key: Option<&Name>) -> Result<(Name, Dep), BoxError> {
+    pub(crate) async fn resolve(
+        &self,
+        key: Option<&Name>,
+        import: Option<PathBuf>,
+        flake: bool,
+    ) -> Result<(Name, Dep), BoxError> {
         use snix_glue::fetchers::Fetch;
 
         let url = match self {
@@ -698,7 +728,10 @@ impl DirectPin {
                 exp_nar_sha256: None,
             },
             DirectPin::Git(git_pin) => {
-                return Ok((key.to_owned(), Dep::PinGit(git_pin.resolve(key).await?)));
+                return Ok((
+                    key.to_owned(),
+                    Dep::PinGit(git_pin.resolve(key, import, flake).await?),
+                ));
             },
         };
 
@@ -713,6 +746,7 @@ impl DirectPin {
                     name: key.to_owned(),
                     url: pin.pin.to_owned(),
                     hash: WrappedNixHash(hash),
+                    flake,
                 }),
             )),
             DirectPin::Tarball(tar_pin) => Ok((
@@ -721,6 +755,8 @@ impl DirectPin {
                     name: key.to_owned(),
                     url: tar_pin.tar.to_owned(),
                     hash: WrappedNixHash(hash),
+                    import,
+                    flake,
                 }),
             )),
             // we have already returned in the previous match
@@ -730,7 +766,12 @@ impl DirectPin {
 }
 
 impl GitPin {
-    async fn resolve(&self, key: &Name) -> Result<PinGitDep, BoxError> {
+    async fn resolve(
+        &self,
+        key: &Name,
+        import: Option<PathBuf>,
+        flake: bool,
+    ) -> Result<PinGitDep, BoxError> {
         use crate::manifest::deps::GitStrat;
         use crate::store::QueryStore;
 
@@ -751,6 +792,8 @@ impl GitPin {
             name: key.to_owned(),
             url: self.repo.to_owned(),
             rev: GitDigest::Sha1(id),
+            import,
+            flake,
         })
     }
 }
