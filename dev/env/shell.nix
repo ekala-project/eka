@@ -31,6 +31,7 @@ pkgs.mkShell.override { stdenv = pkgs.clangStdenv; } {
     ]
     ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
       darwin.apple_sdk.frameworks.SystemConfiguration
+      darwin.apple_sdk.frameworks.DiskArbitration
       libiconv
     ];
 }
