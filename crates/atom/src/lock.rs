@@ -56,54 +56,205 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use gix::ObjectId;
 use nix_compat::nixhash::NixHash;
 use semver::Version;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use snix_castore::blobservice::BlobService;
 use snix_castore::directoryservice::DirectoryService;
+use snix_glue::fetchers::Fetcher;
 use snix_store::nar::SimpleRenderer;
 use snix_store::pathinfoservice::PathInfoService;
 use url::Url;
 
-#[cfg(test)]
-mod test;
-
-use crate::Manifest;
-use crate::id::AtomTag;
-use crate::manifest::deps::{AtomReq, Dependency, DirectPin, GitPin};
+use crate::id::{AtomTag, Name};
+use crate::manifest::deps::{
+    AtomReq, Dependency, DirectPin, GitPin, deserialize_url, not, serialize_url,
+};
 use crate::store::QueryVersion;
+use crate::store::git::Root;
+use crate::{AtomId, Manifest};
 
-/// A wrapper around NixHash to provide custom serialization behavior.
-#[derive(Debug, PartialEq, PartialOrd, Eq, Clone, Serialize)]
-pub(crate) struct WrappedNixHash(pub NixHash);
+mod serde_base32;
 
-/// Represents different types of Git commit hashes.
+/// A type alias for a boxed error that is sendable and syncable.
+pub(crate) type BoxError = Box<dyn std::error::Error + Send + Sync>;
+
+/// A type alias for the fetcher used for pinned dependencies.
+type PinFetcher = Fetcher<
+    Arc<dyn BlobService>,
+    Arc<dyn DirectoryService>,
+    Arc<dyn PathInfoService>,
+    SimpleRenderer<Arc<dyn BlobService>, Arc<dyn DirectoryService>>,
+>;
+
+/// Represents a locked atom dependency, referencing a verifiable repository slice.
 ///
-/// This enum supports both SHA-1 and SHA-256 hashes, which are serialized
-/// as untagged values in TOML for maximum compatibility.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Eq)]
-#[serde(untagged)]
-pub enum GitDigest {
-    /// A SHA-1 commit hash.
-    #[serde(rename = "sha1")]
-    Sha1(#[serde(with = "hex")] [u8; 20]),
-    /// A SHA-256 commit hash.
-    #[serde(rename = "sha256")]
-    Sha256(#[serde(with = "hex")] [u8; 32]),
+/// This struct captures all the information needed to uniquely identify and
+/// fetch a specific version of an atom from a Git repository.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct AtomDep {
+    /// The unique identifier of the atom.
+    pub tag: AtomTag,
+    /// The name corresponding to the atom in the manifest at `deps.atoms.<name>`, if different
+    /// than the tag.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<Name>,
+    /// The semantic version of the atom.
+    pub version: Version,
+    /// The location of the atom, whether local or remote.
+    ///
+    /// This field is flattened in the TOML serialization and omitted if None.
+    #[serde(serialize_with = "serialize_url", deserialize_with = "deserialize_url")]
+    pub source: gix::Url,
+    /// The resolved Git revision (commit hash) for verification.
+    pub rev: GitDigest,
+    /// The cryptographic identity of the atom.
+    id: AtomDigest,
 }
 
-/// Represents the BLAKE-3 digest of an atom id
+/// Represents a locked build-time source, such as a registry or configuration.
+///
+/// This struct is used for sources that are fetched during the build process,
+/// such as package registries or configuration files that need to be available
+/// at build time.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct BuildSrc {
+    /// The name of the source.
+    pub name: Name,
+    /// The URL to fetch the source.
+    pub url: Url,
+    /// The hash for verification.
+    hash: WrappedNixHash,
+}
+
+/// Represents a cross-atom source reference, acquiring a dependency from another atom.
+///
+/// This struct enables atoms to reference dependencies from other atoms,
+/// creating a composition mechanism for building complex systems from simpler parts.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct FromDep {
+    /// The name of the sourced dependency.
+    pub name: Name,
+    /// The atom ID from which to source.
+    from: AtomDigest,
+    /// The name of the dependency to acquire from the 'from' atom (defaults to `name`).
+    ///
+    /// This field is omitted from serialization if None.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    set: Option<Name>,
+    /// The path to import inside the tarball.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub import: Option<PathBuf>,
+}
+
+/// The root structure for the lockfile, containing resolved dependencies and sources.
+///
+/// This struct represents the complete lockfile format used by atom to capture
+/// the exact versions and revisions of all dependencies for reproducible builds.
+/// The lockfile ensures that builds are deterministic and can be reproduced
+/// across different environments.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Lockfile {
+    /// The version of the lockfile schema.
+    ///
+    /// This field allows for future evolution of the lockfile format while
+    /// maintaining backward compatibility.
+    pub version: u8,
+    /// The list of locked dependencies (absent or empty if none).
+    ///
+    /// This field contains all the resolved dependencies with their exact
+    /// versions and revisions. It is omitted from serialization if None or empty.
+    #[serde(default, skip_serializing_if = "DepMap::is_empty")]
+    pub(crate) deps: DepMap<Dep>,
+}
+
+/// Represents a direct pin to an external source, such as a URL or tarball.
+///
+/// This struct is used for dependencies that are pinned to specific URLs
+/// with integrity verification through cryptographic hashes.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct PinDep {
+    /// The name of the pinned source.
+    pub name: Name,
+    /// The URL of the source.
+    pub url: Url,
+    /// The hash for integrity verification (e.g., sha256).
+    hash: WrappedNixHash,
+    /// Whether the file imported represents a nix flake.
+    #[serde(default, skip_serializing_if = "not")]
+    flake: bool,
+}
+
+/// Represents a pinned Git repository with a specific revision.
+///
+/// This struct is used for dependencies that are pinned to specific Git
+/// repositories and commits, providing both URL and revision information.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct PinGitDep {
+    /// The name of the pinned Git source.
+    pub name: Name,
+    /// The Git repository URL.
+    #[serde(serialize_with = "serialize_url", deserialize_with = "deserialize_url")]
+    pub url: gix::Url,
+    /// The resolved revision (commit hash).
+    pub rev: GitDigest,
+    /// The path to import inside the repo.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub import: Option<PathBuf>,
+    /// Whether the file imported represents a nix flake.
+    #[serde(default, skip_serializing_if = "not")]
+    pub flake: bool,
+}
+
+/// Represents a pinned tarball or archive source.
+///
+/// This struct is used for dependencies that are distributed as tarballs
+/// or archives, with integrity verification through cryptographic hashes.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct PinTarDep {
+    /// The name of the tar source.
+    pub name: Name,
+    /// The URL to the tarball.
+    pub url: Url,
+    /// The hash of the tarball.
+    hash: WrappedNixHash,
+    /// The path to import inside the tarball.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub import: Option<PathBuf>,
+    /// Whether the file imported represents a nix flake.
+    #[serde(default, skip_serializing_if = "not")]
+    pub flake: bool,
+}
+
+/// Represents the BLAKE-3 digest of an atom's identity.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Eq)]
 struct AtomDigest(#[serde(with = "serde_base32")] [u8; 32]);
 
-use crate::manifest::deps::{deserialize_url, serialize_url};
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Eq)]
+/// A wrapper for `BTreeMap` that ensures consistent ordering for serialization
+/// and minimal diffs in the lockfile. It maps dependency names to their locked
+/// representations.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct DepMap<Deps>(BTreeMap<Name, Deps>);
+
+/// A wrapper around `NixHash` to provide custom serialization behavior for TOML.
+#[derive(Debug, PartialEq, PartialOrd, Eq, Clone, Serialize)]
+pub(crate) struct WrappedNixHash(pub NixHash);
+
 /// Represents the location of an atom, either as a URL or a relative path.
 ///
 /// This enum is used to specify where an atom can be found, supporting both
 /// remote Git repositories and local relative paths within a repository.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Eq)]
 pub enum AtomLocation {
     /// A URL pointing to a Git repository containing the atom.
     ///
@@ -123,124 +274,13 @@ pub enum AtomLocation {
     Path(PathBuf),
 }
 
-use crate::AtomId;
-use crate::id::Name;
-use crate::store::git::Root;
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
-/// Represents a locked atom dependency, referencing a verifiable repository slice.
-///
-/// This struct captures all the information needed to uniquely identify and
-/// fetch a specific version of an atom from a Git repository.
-#[serde(deny_unknown_fields)]
-pub struct AtomDep {
-    /// than the tag The unique identifier of the atom.
-    pub tag: AtomTag,
-    /// The name corresponding to the atom in the manifest at `deps.atoms.<name>`, if diffferent
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<Name>,
-    /// The semantic version of the atom.
-    pub version: Version,
-    /// The location of the atom, whether local or remote.
-    ///
-    /// This field is flattened in the TOML serialization and omitted if None.
-    #[serde(serialize_with = "serialize_url", deserialize_with = "deserialize_url")]
-    pub source: gix::Url,
-    /// The resolved Git revision (commit hash) for verification.
-    pub rev: GitDigest,
-    /// than cryptographic identity of the atom.
-    id: AtomDigest,
-}
-
-use crate::manifest::deps::not;
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
-/// Represents a direct pin to an external source, such as a URL or tarball.
-///
-/// This struct is used for dependencies that are pinned to specific URLs
-/// with integrity verification through cryptographic hashes.
-#[serde(deny_unknown_fields)]
-pub struct PinDep {
-    /// The name of the pinned source.
-    pub name: Name,
-    /// The URL of the source.
-    pub url: Url,
-    /// The hash for integrity verification (e.g., sha256).
-    hash: WrappedNixHash,
-    /// Whether toe file imported represents a nix flake.
-    #[serde(default, skip_serializing_if = "not")]
-    flake: bool,
-}
-
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
-/// Represents a pinned Git repository with a specific revision.
-///
-/// This struct is used for dependencies that are pinned to specific Git
-/// repositories and commits, providing both URL and revision information.
-#[serde(deny_unknown_fields)]
-pub struct PinGitDep {
-    /// The name of the pinned Git source.
-    pub name: Name,
-    /// The Git repository URL.
-    #[serde(serialize_with = "serialize_url", deserialize_with = "deserialize_url")]
-    pub url: gix::Url,
-    /// The resolved revision (commit hash).
-    pub rev: GitDigest,
-    /// The path to import inside the repo.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub import: Option<PathBuf>,
-    /// Whether the file imported represents a nix flake.
-    #[serde(default, skip_serializing_if = "not")]
-    pub flake: bool,
-}
-
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
-/// Represents a pinned tarball or archive source.
-///
-/// This struct is used for dependencies that are distributed as tarballs
-/// or archives, with integrity verification through cryptographic hashes.
-#[serde(deny_unknown_fields)]
-pub struct PinTarDep {
-    /// The name of the tar source.
-    pub name: Name,
-    /// The URL to the tarball.
-    pub url: Url,
-    /// The hash of the tarball.
-    hash: WrappedNixHash,
-    /// The path to import inside the tarball.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub import: Option<PathBuf>,
-    /// Whether the file imported represents a nix flake.
-    #[serde(default, skip_serializing_if = "not")]
-    pub flake: bool,
-}
-
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
-/// Represents a cross-atom source reference, acquiring a dependency from another atom.
-///
-/// This struct enables atoms to reference dependencies from other atoms,
-/// creating a composition mechanism for building complex systems from simpler parts.
-#[serde(deny_unknown_fields)]
-pub struct FromDep {
-    /// The name of the sourced dependency.
-    pub name: Name,
-    /// The atom ID from which to source.
-    from: AtomDigest,
-    /// The name of the dependency to acquire from the 'from' atom (defaults to `name`).
-    ///
-    /// This field is omitted from serialization if None.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    set: Option<Name>,
-    /// The path to import inside the tarball.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub import: Option<PathBuf>,
-}
-
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
-#[serde(tag = "type")]
 /// Enum representing the different types of locked dependencies, serialized as tagged TOML tables.
 ///
 /// This enum provides a type-safe way to represent different kinds of dependencies
 /// in the lockfile, ensuring that each dependency type has the correct fields
 /// and validation at compile time.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+#[serde(tag = "type")]
 pub enum Dep {
     /// An atom dependency variant.
     ///
@@ -280,56 +320,27 @@ pub enum Dep {
     Build(BuildSrc),
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
-#[serde(deny_unknown_fields)]
-/// Represents a locked build-time source, such as a registry or configuration.
+/// Represents different types of Git commit hashes.
 ///
-/// This struct is used for sources that are fetched during the build process,
-/// such as package registries or configuration files that need to be available
-/// at build time.
-pub struct BuildSrc {
-    /// The name of the source.
-    pub name: Name,
-    /// The URL to fetch the source.
-    pub url: Url,
-    /// The hash for verification.
-    hash: WrappedNixHash,
+/// This enum supports both SHA-1 and SHA-256 hashes, which are serialized
+/// as untagged values in TOML for maximum compatibility.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Eq)]
+#[serde(untagged)]
+pub enum GitDigest {
+    /// A SHA-1 commit hash.
+    #[serde(rename = "sha1")]
+    Sha1(#[serde(with = "hex")] [u8; 20]),
+    /// A SHA-256 commit hash.
+    #[serde(rename = "sha256")]
+    Sha256(#[serde(with = "hex")] [u8; 32]),
 }
 
-/// A wrapper for `BTreeMap` that ensures consistent ordering for serialization
-/// and minimal diffs in the lockfile. It maps dependency names to their locked
-/// representations.
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) struct DepMap<Deps>(BTreeMap<Name, Deps>);
-
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
-/// The root structure for the lockfile, containing resolved dependencies and sources.
-///
-/// This struct represents the complete lockfile format used by atom to capture
-/// the exact versions and revisions of all dependencies for reproducible builds.
-/// The lockfile ensures that builds are deterministic and can be reproduced
-/// across different environments.
-#[serde(deny_unknown_fields)]
-pub struct Lockfile {
-    /// The version of the lockfile schema.
-    ///
-    /// This field allows for future evolution of the lockfile format while
-    /// maintaining backward compatibility.
-    pub version: u8,
-    /// The list of locked dependencies (absent or empty if none).
-    ///
-    /// This field contains all the resolved dependencies with their exact
-    /// versions and revisions. It is omitted from serialization if None or empty.
-    #[serde(default, skip_serializing_if = "DepMap::is_empty")]
-    pub(crate) deps: DepMap<Dep>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 /// The resolution mode for generating the lockfile.
 ///
 /// This enum controls how dependencies are resolved when generating a lockfile,
 /// determining whether to lock only direct dependencies or recursively resolve
 /// all transitive dependencies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ResolutionMode {
     /// Shallow resolution: Lock only direct dependencies.
     ///
@@ -347,202 +358,10 @@ pub enum ResolutionMode {
     Deep,
 }
 
-impl<'de> Deserialize<'de> for WrappedNixHash {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        // Deserialize into a String to handle owned data
-        let s = String::deserialize(deserializer)?;
-        // Pass the String as &str to NixHash::from_str
-        let hash = NixHash::from_str(&s, None).map_err(|_| {
-            serde::de::Error::invalid_value(serde::de::Unexpected::Str(&s), &"NixHash")
-        })?;
-        Ok(WrappedNixHash(hash))
-    }
-}
-
-impl From<ObjectId> for GitDigest {
-    fn from(id: ObjectId) -> Self {
-        match id {
-            ObjectId::Sha1(bytes) => GitDigest::Sha1(bytes),
-        }
-    }
-}
-
-use base32::{self};
-use serde::Serializer;
-
-mod serde_base32 {
-    use super::*;
-
-    pub fn serialize<S>(hash: &[u8; 32], serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let encoded = base32::encode(crate::BASE32, hash);
-        serializer.serialize_str(&encoded)
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<[u8; 32], D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        base32::decode(crate::BASE32, &s)
-            .ok_or_else(|| serde::de::Error::custom("Invalid Base32 string"))
-            .and_then(|bytes| {
-                bytes
-                    .try_into()
-                    .map_err(|_| serde::de::Error::custom("Expected 32 bytes for BLAKE3 hash"))
-            })
-    }
-}
-
-impl From<AtomId<Root>> for AtomDigest {
-    fn from(value: AtomId<Root>) -> Self {
-        use crate::Compute;
-
-        Self(*value.compute_hash())
-    }
-}
-
-impl Default for Lockfile {
-    fn default() -> Self {
-        Self {
-            version: 1,
-            deps: Default::default(),
-        }
-    }
-}
-
-impl<T> AsRef<BTreeMap<Name, T>> for DepMap<T> {
-    fn as_ref(&self) -> &BTreeMap<Name, T> {
-        let DepMap(map) = self;
-        map
-    }
-}
-
-impl<T> AsMut<BTreeMap<Name, T>> for DepMap<T> {
-    fn as_mut(&mut self) -> &mut BTreeMap<Name, T> {
-        let DepMap(map) = self;
-        map
-    }
-}
-
-impl<T: Clone + Serialize> Serialize for DepMap<T> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        // BTreeMap iterates in sorted order automatically.
-        let values: Vec<_> = self.as_ref().values().cloned().collect();
-        values.serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for DepMap<Dep> {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let entries: Vec<Dep> = Vec::deserialize(deserializer)?;
-        let mut map = BTreeMap::new();
-        for dep in entries {
-            match dep {
-                Dep::Atom(atom_dep) => {
-                    let key = if let Some(n) = &atom_dep.name {
-                        n
-                    } else {
-                        &atom_dep.tag
-                    };
-                    map.insert(key.to_owned(), Dep::Atom(atom_dep));
-                },
-                Dep::Pin(pin_dep) => {
-                    map.insert(pin_dep.name.to_owned(), Dep::Pin(pin_dep));
-                },
-                Dep::PinGit(pin_git_dep) => {
-                    map.insert(pin_git_dep.name.to_owned(), Dep::PinGit(pin_git_dep));
-                },
-                Dep::PinTar(pin_tar_dep) => {
-                    map.insert(pin_tar_dep.name.to_owned(), Dep::PinTar(pin_tar_dep));
-                },
-                Dep::From(from_dep) => {
-                    map.insert(from_dep.name.to_owned(), Dep::From(from_dep));
-                },
-                Dep::Build(build_dep) => {
-                    map.insert(build_dep.name.to_owned(), Dep::Build(build_dep));
-                },
-            }
-        }
-        Ok(DepMap(map))
-    }
-}
-
-impl<T> DepMap<T> {
-    fn is_empty(&self) -> bool {
-        self.as_ref().is_empty()
-    }
-}
-
-impl<T> Default for DepMap<T> {
-    fn default() -> Self {
-        Self(Default::default())
-    }
-}
-
-impl Lockfile {
-    /// Removes any dependencies from the lockfile that are no longer present in the
-    /// manifest, ensuring the lockfile only contains entries that are still relevant.
-    pub(crate) fn sanitize(&mut self, manifest: &Manifest) {
-        self.deps
-            .as_mut()
-            .retain(|k, _| manifest.deps.contains_key(k));
-        self.synchronize(manifest);
-    }
-
-    /// Updates the lockfile to match the dependencies specified in the manifest.
-    /// It resolves any new dependencies, updates existing ones if their version
-    /// requirements have changed, and ensures the lockfile is fully consistent.
-    pub(crate) fn synchronize(&mut self, manifest: &Manifest) {
-        for (k, v) in manifest.deps.iter() {
-            if !self.deps.as_ref().contains_key(k) {
-                match v {
-                    crate::manifest::deps::Dependency::Atom(atom_req) => {
-                        if let Ok(dep) = atom_req.resolve(k) {
-                            self.deps.as_mut().insert(k.to_owned(), Dep::Atom(dep));
-                        } else {
-                            tracing::warn!(message = "unlocked dependency could not be resolved", key = %k);
-                        };
-                    },
-                    crate::manifest::deps::Dependency::Src(_) => todo!(),
-                    _ => (),
-                }
-            } else {
-                match v {
-                    crate::manifest::deps::Dependency::Atom(atom_req) => {
-                        let req = atom_req.version();
-                        if let Some(Dep::Atom(dep)) = self.deps.as_ref().get(k) {
-                            if !req.matches(&dep.version) || &dep.source != atom_req.store() {
-                                tracing::warn!(message = "updating out of date dependency in accordance with spec", key = %k);
-                                if let Ok(dep) = atom_req.resolve(k) {
-                                    self.deps.as_mut().insert(k.to_owned(), Dep::Atom(dep));
-                                } else {
-                                    tracing::warn!(message = "out of sync dependency could not be resolved, check the version spec", key = %k);
-                                };
-                            }
-                        } else if let Ok(dep) = atom_req.resolve(k) {
-                            self.deps.as_mut().insert(k.to_owned(), Dep::Atom(dep));
-                        } else {
-                            tracing::warn!(message = "dependency is mislabeled as inproper type, and attempts to rectify failed", key = %k);
-                        };
-                    },
-                    crate::manifest::deps::Dependency::Src(_) => todo!(),
-                    _ => (),
-                }
-            }
-        }
-    }
+/// An enum to handle different URL types for filename extraction.
+enum Urls<'a> {
+    Url(&'a Url),
+    Git(&'a gix::Url),
 }
 
 impl AtomReq {
@@ -593,16 +412,80 @@ impl AtomReq {
     }
 }
 
-use std::sync::Arc;
+impl<T> AsMut<BTreeMap<Name, T>> for DepMap<T> {
+    fn as_mut(&mut self) -> &mut BTreeMap<Name, T> {
+        let DepMap(map) = self;
+        map
+    }
+}
 
-use snix_glue::fetchers::Fetcher;
+impl<T> AsRef<BTreeMap<Name, T>> for DepMap<T> {
+    fn as_ref(&self) -> &BTreeMap<Name, T> {
+        let DepMap(map) = self;
+        map
+    }
+}
 
-type PinFetcher = Fetcher<
-    Arc<dyn BlobService>,
-    Arc<dyn DirectoryService>,
-    Arc<dyn PathInfoService>,
-    SimpleRenderer<Arc<dyn BlobService>, Arc<dyn DirectoryService>>,
->;
+impl<'de> Deserialize<'de> for DepMap<Dep> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let entries: Vec<Dep> = Vec::deserialize(deserializer)?;
+        let mut map = BTreeMap::new();
+        for dep in entries {
+            match dep {
+                Dep::Atom(atom_dep) => {
+                    let key = if let Some(n) = &atom_dep.name {
+                        n
+                    } else {
+                        &atom_dep.tag
+                    };
+                    map.insert(key.to_owned(), Dep::Atom(atom_dep));
+                },
+                Dep::Pin(pin_dep) => {
+                    map.insert(pin_dep.name.to_owned(), Dep::Pin(pin_dep));
+                },
+                Dep::PinGit(pin_git_dep) => {
+                    map.insert(pin_git_dep.name.to_owned(), Dep::PinGit(pin_git_dep));
+                },
+                Dep::PinTar(pin_tar_dep) => {
+                    map.insert(pin_tar_dep.name.to_owned(), Dep::PinTar(pin_tar_dep));
+                },
+                Dep::From(from_dep) => {
+                    map.insert(from_dep.name.to_owned(), Dep::From(from_dep));
+                },
+                Dep::Build(build_dep) => {
+                    map.insert(build_dep.name.to_owned(), Dep::Build(build_dep));
+                },
+            }
+        }
+        Ok(DepMap(map))
+    }
+}
+
+impl<T> Default for DepMap<T> {
+    fn default() -> Self {
+        Self(Default::default())
+    }
+}
+
+impl<T> DepMap<T> {
+    fn is_empty(&self) -> bool {
+        self.as_ref().is_empty()
+    }
+}
+
+impl<T: Clone + Serialize> Serialize for DepMap<T> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        // BTreeMap iterates in sorted order automatically.
+        let values: Vec<_> = self.as_ref().values().cloned().collect();
+        values.serialize(serializer)
+    }
+}
 
 impl Dependency {
     // Do we need this actually?
@@ -651,49 +534,6 @@ impl Dependency {
             Vec::new(),
             Some(cache_root.join("fetcher.redb")),
         ))
-    }
-}
-
-pub(crate) type BoxError = Box<dyn std::error::Error + Send + Sync>;
-
-enum Urls<'a> {
-    Url(&'a Url),
-    Git(&'a gix::Url),
-}
-
-fn get_url_filename(url: &Urls) -> String {
-    match url {
-        Urls::Url(url) => {
-            if url.path() == "/" {
-                url.host_str().unwrap_or("source").to_string()
-            } else {
-                let s = if let Some(mut s) = url.path_segments() {
-                    s.next_back()
-                        .map(|s| {
-                            if let Some((file, _ext)) = s.split_once('.') {
-                                file
-                            } else {
-                                s
-                            }
-                        })
-                        .unwrap_or(url.path())
-                } else {
-                    url.path()
-                };
-                s.to_string()
-            }
-        },
-        Urls::Git(url) => {
-            if url.path_is_root() {
-                url.host().unwrap_or("source").to_string()
-            } else {
-                let path = url.path.to_string();
-                let p = PathBuf::from(path.as_str());
-                p.file_stem()
-                    .and_then(|x| x.to_str().map(ToOwned::to_owned))
-                    .unwrap_or(path)
-            }
-        },
     }
 }
 
@@ -765,6 +605,22 @@ impl DirectPin {
     }
 }
 
+impl From<AtomId<Root>> for AtomDigest {
+    fn from(value: AtomId<Root>) -> Self {
+        use crate::Compute;
+
+        Self(*value.compute_hash())
+    }
+}
+
+impl From<ObjectId> for GitDigest {
+    fn from(id: ObjectId) -> Self {
+        match id {
+            ObjectId::Sha1(bytes) => GitDigest::Sha1(bytes),
+        }
+    }
+}
+
 impl GitPin {
     async fn resolve(
         &self,
@@ -797,3 +653,121 @@ impl GitPin {
         })
     }
 }
+
+impl Default for Lockfile {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            deps: Default::default(),
+        }
+    }
+}
+
+impl Lockfile {
+    /// Removes any dependencies from the lockfile that are no longer present in the
+    /// manifest, ensuring the lockfile only contains entries that are still relevant.
+    pub(crate) fn sanitize(&mut self, manifest: &Manifest) {
+        self.deps
+            .as_mut()
+            .retain(|k, _| manifest.deps.contains_key(k));
+        self.synchronize(manifest);
+    }
+
+    /// Updates the lockfile to match the dependencies specified in the manifest.
+    /// It resolves any new dependencies, updates existing ones if their version
+    /// requirements have changed, and ensures the lockfile is fully consistent.
+    pub(crate) fn synchronize(&mut self, manifest: &Manifest) {
+        for (k, v) in manifest.deps.iter() {
+            if !self.deps.as_ref().contains_key(k) {
+                match v {
+                    crate::manifest::deps::Dependency::Atom(atom_req) => {
+                        if let Ok(dep) = atom_req.resolve(k) {
+                            self.deps.as_mut().insert(k.to_owned(), Dep::Atom(dep));
+                        } else {
+                            tracing::warn!(message = "unlocked dependency could not be resolved", key = %k);
+                        };
+                    },
+                    crate::manifest::deps::Dependency::Src(_) => todo!(),
+                    _ => (),
+                }
+            } else {
+                match v {
+                    crate::manifest::deps::Dependency::Atom(atom_req) => {
+                        let req = atom_req.version();
+                        if let Some(Dep::Atom(dep)) = self.deps.as_ref().get(k) {
+                            if !req.matches(&dep.version) || &dep.source != atom_req.store() {
+                                tracing::warn!(message = "updating out of date dependency in accordance with spec", key = %k);
+                                if let Ok(dep) = atom_req.resolve(k) {
+                                    self.deps.as_mut().insert(k.to_owned(), Dep::Atom(dep));
+                                } else {
+                                    tracing::warn!(message = "out of sync dependency could not be resolved, check the version spec", key = %k);
+                                };
+                            }
+                        } else if let Ok(dep) = atom_req.resolve(k) {
+                            self.deps.as_mut().insert(k.to_owned(), Dep::Atom(dep));
+                        } else {
+                            tracing::warn!(message = "dependency is mislabeled as inproper type, and attempts to rectify failed", key = %k);
+                        };
+                    },
+                    crate::manifest::deps::Dependency::Src(_) => todo!(),
+                    _ => (),
+                }
+            }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for WrappedNixHash {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        // Deserialize into a String to handle owned data
+        let s = String::deserialize(deserializer)?;
+        // Pass the String as &str to NixHash::from_str
+        let hash = NixHash::from_str(&s, None).map_err(|_| {
+            serde::de::Error::invalid_value(serde::de::Unexpected::Str(&s), &"NixHash")
+        })?;
+        Ok(WrappedNixHash(hash))
+    }
+}
+
+/// Extracts a filename from a URL, suitable for use as a dependency name.
+fn get_url_filename(url: &Urls) -> String {
+    match url {
+        Urls::Url(url) => {
+            if url.path() == "/" {
+                url.host_str().unwrap_or("source").to_string()
+            } else {
+                let s = if let Some(mut s) = url.path_segments() {
+                    s.next_back()
+                        .map(|s| {
+                            if let Some((file, _ext)) = s.split_once('.') {
+                                file
+                            } else {
+                                s
+                            }
+                        })
+                        .unwrap_or(url.path())
+                } else {
+                    url.path()
+                };
+                s.to_string()
+            }
+        },
+        Urls::Git(url) => {
+            if url.path_is_root() {
+                url.host().unwrap_or("source").to_string()
+            } else {
+                let path = url.path.to_string();
+                let p = PathBuf::from(path.as_str());
+                p.file_stem()
+                    .and_then(|x| x.to_str().map(ToOwned::to_owned))
+                    .unwrap_or(path)
+            }
+        },
+    }
+}
+
+#[cfg(test)]
+mod test;

@@ -1,18 +1,25 @@
-mod git;
-pub(super) mod init;
+//! This module defines the `publish` subcommand.
+//!
+//! The `publish` subcommand is responsible for publishing atoms to the atom
+//! store. It can publish atoms from specified paths or recursively from the
+//! current directory.
 
 use std::path::PathBuf;
 
+use atom::publish::Stats;
 use atom::publish::error::PublishError;
-use atom::publish::{self};
 use clap::Parser;
 
 use crate::cli::store::Detected;
 
+mod git;
+pub(super) mod init;
+
+/// The `publish` subcommand.
 #[derive(Parser, Debug)]
 #[command(arg_required_else_help = true, next_help_heading = "Publish Options")]
 pub(in super::super) struct PublishArgs {
-    /// Publish all the atoms in and under the current working directory
+    /// Publish all the atoms in and under the current working directory.
     #[arg(long, short, conflicts_with = "path")]
     recursive: bool,
 
@@ -23,20 +30,21 @@ pub(in super::super) struct PublishArgs {
     #[arg(long, conflicts_with_all = ["path", "recursive"])]
     pub(super) init: bool,
 
-    /// Path(s) to the atom(s) to publish
+    /// Path(s) to the atom(s) to publish.
     #[arg(required_unless_present_any = ["recursive", "init"])]
     path: Vec<PathBuf>,
     #[command(flatten)]
     pub(super) store: StoreArgs,
 }
 
+/// Arguments for the atom store.
 #[derive(Parser, Debug)]
 pub(super) struct StoreArgs {
     #[command(flatten)]
     pub(super) git: git::GitArgs,
 }
 
-use publish::Stats;
+/// The main entry point for the `publish` subcommand.
 pub(super) async fn run(store: Detected, args: PublishArgs) -> Result<Stats, PublishError> {
     let mut stats = Stats::default();
     #[allow(clippy::single_match)]

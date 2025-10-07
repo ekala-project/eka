@@ -1,6 +1,13 @@
+//! Handles logging and progress bars for the CLI.
+
+use std::io::IsTerminal;
 use std::str::FromStr;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use clap::Parser;
+use tracing_appender::non_blocking::WorkerGuard;
+use tracing_indicatif::IndicatifLayer;
+use tracing_indicatif::style::ProgressStyle;
 use tracing_subscriber::filter::{EnvFilter, LevelFilter};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -8,30 +15,34 @@ use tracing_subscriber::{Layer, fmt};
 
 use super::{Args, LogArgs};
 
-fn get_log_level(args: LogArgs) -> LevelFilter {
-    match args.quiet {
-        0 => (),
-        1 => return LevelFilter::WARN,
-        _ => return LevelFilter::ERROR,
-    }
-
-    if let Ok(rust_log) = std::env::var(EnvFilter::DEFAULT_ENV) {
-        if let Ok(level) = LevelFilter::from_str(&rust_log) {
-            return level;
-        }
-    }
-
-    match args.verbosity {
-        0 => LevelFilter::INFO,
-        1 => LevelFilter::DEBUG,
-        _ => LevelFilter::TRACE,
-    }
+/// Contains ANSI escape codes for styling terminal output.
+pub mod ansi {
+    /// ANSI escape code for magenta text.
+    pub const MAGENTA: &str = "\x1b[35m";
+    /// ANSI escape code to reset terminal styling.
+    pub const RESET: &str = "\x1b[0m";
 }
 
-use std::sync::atomic::{AtomicBool, Ordering};
+/// A flag to indicate whether ANSI escape codes should be used.
 pub static ANSI: AtomicBool = AtomicBool::new(true);
 
-use tracing_appender::non_blocking::WorkerGuard;
+/// A macro to log a fatal error and exit.
+#[macro_export]
+macro_rules! fatal {
+    ($error:expr) => {{
+        use $crate::cli::logging::{ANSI, ansi};
+        let ansi = ANSI.load(std::sync::atomic::Ordering::SeqCst);
+        tracing::error!(
+            fatal = true,
+            "{}FATAL{} {}",
+            if ansi { ansi::MAGENTA } else { "" },
+            if ansi { ansi::RESET } else { "" },
+            $error
+        );
+    }};
+}
+
+/// Initializes the global tracing subscriber.
 pub fn init_global_subscriber(args: LogArgs) -> WorkerGuard {
     let log_level = get_log_level(args);
 
@@ -39,12 +50,9 @@ pub fn init_global_subscriber(args: LogArgs) -> WorkerGuard {
 
     let (non_blocking, guard) = tracing_appender::non_blocking(std::io::stderr());
 
-    use tracing_indicatif::IndicatifLayer;
-    use tracing_indicatif::style::ProgressStyle;
     let progress_layer = IndicatifLayer::new().with_progress_style(
         ProgressStyle::with_template("{prefix:.bold.dim} {spinner} {wide_msg}").unwrap(),
     );
-    use std::io::IsTerminal;
 
     let fmt = if std::io::stderr().is_terminal() {
         fmt::layer()
@@ -76,22 +84,22 @@ pub fn init_global_subscriber(args: LogArgs) -> WorkerGuard {
     guard
 }
 
-pub mod ansi {
-    pub const MAGENTA: &str = "\x1b[35m";
-    pub const RESET: &str = "\x1b[0m";
-}
+fn get_log_level(args: LogArgs) -> LevelFilter {
+    match args.quiet {
+        0 => (),
+        1 => return LevelFilter::WARN,
+        _ => return LevelFilter::ERROR,
+    }
 
-#[macro_export]
-macro_rules! fatal {
-    ($error:expr) => {{
-        use $crate::cli::logging::{ANSI, ansi};
-        let ansi = ANSI.load(std::sync::atomic::Ordering::SeqCst);
-        tracing::error!(
-            fatal = true,
-            "{}FATAL{} {}",
-            if ansi { ansi::MAGENTA } else { "" },
-            if ansi { ansi::RESET } else { "" },
-            $error
-        );
-    }};
+    if let Ok(rust_log) = std::env::var(EnvFilter::DEFAULT_ENV) {
+        if let Ok(level) = LevelFilter::from_str(&rust_log) {
+            return level;
+        }
+    }
+
+    match args.verbosity {
+        0 => LevelFilter::INFO,
+        1 => LevelFilter::DEBUG,
+        _ => LevelFilter::TRACE,
+    }
 }

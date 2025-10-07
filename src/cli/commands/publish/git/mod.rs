@@ -1,21 +1,27 @@
+//! This module defines Git-specific logic for the `publish` subcommand.
+
 use std::collections::HashSet;
+use std::path::Path;
 
 use atom::publish::error::git::Error;
-use atom::publish::git::{GitOutcome, GitResult};
-use atom::store::git;
+use atom::publish::git::{GitOutcome, GitPublisher, GitResult};
+use atom::publish::{Builder, Publish};
+use atom::store::{NormalizeStorePath, QueryVersion, git};
 use clap::Parser;
 use gix::ThreadSafeRepository;
 use tracing_indicatif::span_ext::IndicatifSpanExt;
+use tracing_indicatif::style::ProgressStyle;
 
 use super::PublishArgs;
 
+/// Git-specific arguments for the `publish` subcommand.
 #[derive(Parser, Debug)]
 #[command(next_help_heading = "Git Options")]
 pub(crate) struct GitArgs {
-    /// The target remote to publish the atom(s) to
+    /// The target remote to publish the atom(s) to.
     #[arg(long, short = 't', default_value_t = git::default_remote().to_owned(), name = "TARGET")]
     pub(super) remote: String,
-    /// The revision to publish the atom(s) from
+    /// The revision to publish the atom(s) from.
     ///
     /// Specifies a revision using Git's extended SHA-1 syntax.
     /// This can be a commit hash, branch name, tag, or a relative
@@ -24,18 +30,12 @@ pub(crate) struct GitArgs {
     spec: String,
 }
 
+/// The main entry point for the Git-specific `publish` logic.
 #[tracing::instrument(skip_all)]
 pub(super) async fn run(
     repo: &ThreadSafeRepository,
     args: PublishArgs,
 ) -> GitResult<(Vec<GitResult<GitOutcome>>, Vec<Error>)> {
-    use std::path::Path;
-
-    use atom::publish::git::GitPublisher;
-    use atom::publish::{Builder, Publish};
-    use atom::store::{NormalizeStorePath, QueryVersion};
-    use tracing_indicatif::style::ProgressStyle;
-
     let span = tracing::Span::current();
     span.pb_set_style(
         &ProgressStyle::with_template("{spinner:.green} {msg}: running for [{elapsed}]")

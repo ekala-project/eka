@@ -8,15 +8,15 @@
 //!
 //! The manifest supports three main categories of dependencies:
 //!
-//! - **Atom dependencies** - References to other atoms by ID and version
-//! - **Pin dependencies** - Direct references to external sources (URLs, Git repos, tarballs)
-//! - **Source dependencies** - Build-time dependencies like source code or config files
+//! - **Atom dependencies** - References to other atoms by ID and version.
+//! - **Pin dependencies** - Direct references to external sources (URLs, Git repos, tarballs).
+//! - **Source dependencies** - Build-time dependencies like source code or config files.
 //!
 //! ## Key Types
 //!
-//! - [`Dependency`] - The main dependency structure containing all dependency types
-//! - [`AtomReq`] - Requirements for atom dependencies
-//! - [`SrcReq`] - Requirements for build-time sources
+//! - [`Dependency`] - The main dependency structure containing all dependency types.
+//! - [`AtomReq`] - Requirements for atom dependencies.
+//! - [`SrcReq`] - Requirements for build-time sources.
 //!
 //! ## Example Usage
 //!
@@ -45,77 +45,29 @@
 //! All dependency types use `#[serde(deny_unknown_fields)]` to ensure strict
 //! validation and prevent typos in manifest files. Optional fields are properly
 //! handled with `skip_serializing_if` to keep the TOML output clean.
+
 use std::ffi::OsStr;
 use std::marker::PhantomData;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use bstr::ByteSlice;
+use bstr::{BString, ByteSlice};
 use semver::VersionReq;
 use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use toml_edit::DocumentMut;
 use url::Url;
 
-use crate::id::AtomTag;
+use crate::id::{AtomTag, Name};
+use crate::uri::{AliasedUrl, Uri};
 use crate::{Lockfile, Manifest};
 
-/// A Writer struct to ensure modifications to the manifest and lock stay in sync
-/// # Example
-///
-/// ```rust,no_run
-/// use std::path::Path;
-///
-/// use atom::id::Name;
-/// use atom::manifest::deps::ManifestWriter;
-/// use atom::uri::Uri;
-///
-/// let mut writer = ManifestWriter::new(Path::new("/path/to/atom.toml")).unwrap();
-/// let uri = "my-atom@^1.0.0".parse::<Uri>().unwrap();
-/// let key = "my-atom".parse::<Name>().unwrap();
-/// writer.add_uri(uri, Some(key)).unwrap();
-/// writer.write_atomic().unwrap();
-/// ```
-pub struct ManifestWriter {
-    path: PathBuf,
-    doc: TypedDocument<Manifest>,
-    lock: Lockfile,
-}
-
-/// Newtype wrapper to tie DocumentMut to a specific serializable type T.
-struct TypedDocument<T> {
-    /// The actual document we want associated with our type
-    inner: DocumentMut,
-    _marker: PhantomData<T>,
-}
-
-/// A trait to implement writing to a mutable toml document representing an atom Manifest
-trait WriteDeps<T: Serialize> {
-    /// The error type returned by the methods.
-    type Error;
-
-    /// write the dep to the given toml doc
-    fn write_dep(&self, name: &str, doc: &mut TypedDocument<T>) -> Result<(), Self::Error>;
-}
+//================================================================================================
+// Structs & Enums
+//================================================================================================
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
-/// The dependencies specified in the manifest
-#[serde(untagged)]
-pub enum Dependency {
-    /// An atom dependency variant.
-    Atom(AtomReq),
-    /// A direct pin to an external source variant.
-    Pin(StraightPin),
-    /// A tarball pin to an external source variant.
-    TarPin(TarPin),
-    /// A git pin to an external source variant.
-    GitPin(GitPin),
-    /// A dependency fetched at build-time as an FOD.
-    Src(SrcReq),
-}
-
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
-/// Represents a locked atom dependency, referencing a verifiable repository slice.
 #[serde(deny_unknown_fields)]
+/// Represents a locked atom dependency, referencing a verifiable repository slice.
 pub struct AtomReq {
     /// The tag of the atom, used if the dependency name in the manifest
     /// differs from the atom's actual tag.
@@ -130,6 +82,22 @@ pub struct AtomReq {
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
 #[serde(untagged)]
+/// The dependencies specified in the manifest
+pub enum Dependency {
+    /// An atom dependency variant.
+    Atom(AtomReq),
+    /// A direct pin to an external source variant.
+    Pin(StraightPin),
+    /// A tarball pin to an external source variant.
+    TarPin(TarPin),
+    /// A git pin to an external source variant.
+    GitPin(GitPin),
+    /// A dependency fetched at build-time as an FOD.
+    Src(SrcReq),
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+#[serde(untagged)]
 /// Represents the two types of direct pins.
 pub enum DirectPin {
     /// A simple pin, with an optional unpack field.
@@ -140,38 +108,42 @@ pub enum DirectPin {
     Git(GitPin),
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
-#[serde(deny_unknown_fields)]
-/// Represents a simple pin, with an optional unpack field.
-pub struct StraightPin {
-    /// The URL of the pinned resource.
-    pub pin: Url,
-    /// A bool representing whether the pin represents a Nix flake, changing the behavior of the
-    /// `import` field, if so.
-    ///
-    /// This field is omitted from serialization if false.
-    #[serde(default, skip_serializing_if = "not")]
-    pub flake: bool,
-}
-
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
-#[serde(deny_unknown_fields)]
-/// Represents a simple pin, with an optional unpack field.
-pub struct TarPin {
-    /// The URL of the tarball resource.
-    pub tar: Url,
-    /// A bool representing whether the pin represents a Nix flake, changing the behavior of the
-    /// `import` field, if so.
-    ///
-    /// This field is omitted from serialization if false.
-    #[serde(default, skip_serializing_if = "not")]
-    pub flake: bool,
-    /// An optional relative path within the fetched source, used to import Nix expressions; the
-    /// precise behavior of which depends on whether or not the pin is a flake.
-    ///
-    /// This field is omitted from serialization if None.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub import: Option<PathBuf>,
+#[derive(thiserror::Error, Debug)]
+/// Errors that can occur when working with a `TypedDocument`.
+pub enum DocError {
+    /// The manifest path could not be accessed.
+    #[error("the atom directory disappeared or is inaccessible: {0}")]
+    Missing(PathBuf),
+    /// A TOML deserialization error occurred.
+    #[error(transparent)]
+    De(#[from] toml_edit::de::Error),
+    /// A TOML serialization error occurred.
+    #[error(transparent)]
+    Ser(#[from] toml_edit::TomlError),
+    /// A filesystem error occurred.
+    #[error(transparent)]
+    Read(#[from] std::io::Error),
+    /// A manifest serialization error occurred.
+    #[error(transparent)]
+    Manifest(#[from] toml_edit::ser::Error),
+    /// An error occurred while writing to a temporary file.
+    #[error(transparent)]
+    Write(#[from] tempfile::PersistError),
+    /// A Git resolution error occurred.
+    #[error(transparent)]
+    Git(#[from] Box<crate::store::git::Error>),
+    /// A semantic versioning error occurred.
+    #[error(transparent)]
+    Semver(#[from] semver::Error),
+    /// A UTF-8 conversion error occurred.
+    #[error(transparent)]
+    Utf8(#[from] bstr::Utf8Error),
+    /// A URL parsing error occurred.
+    #[error(transparent)]
+    Url(#[from] url::ParseError),
+    /// A generic error occurred.
+    #[error(transparent)]
+    Error(#[from] crate::lock::BoxError),
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -229,6 +201,29 @@ pub struct IndirectPin {
     pub set: Option<String>,
 }
 
+/// A writer for `atom.toml` manifests that ensures the `atom.lock` file is kept in sync.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use std::path::Path;
+///
+/// use atom::id::Name;
+/// use atom::manifest::deps::ManifestWriter;
+/// use atom::uri::Uri;
+///
+/// let mut writer = ManifestWriter::new(Path::new("/path/to/atom.toml")).unwrap();
+/// let uri = "my-atom@^1.0.0".parse::<Uri>().unwrap();
+/// let key = "my-atom".parse::<Name>().unwrap();
+/// writer.add_uri(uri, Some(key)).unwrap();
+/// writer.write_atomic().unwrap();
+/// ```
+pub struct ManifestWriter {
+    path: PathBuf,
+    doc: TypedDocument<Manifest>,
+    lock: Lockfile,
+}
+
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
 /// Represents a dependency which is fetched at build time as an FOD.
 #[serde(deny_unknown_fields)]
@@ -237,98 +232,67 @@ pub struct SrcReq {
     pub src: Url,
 }
 
-impl AtomReq {
-    /// Creates a new `AtomReq` with the specified version requirement and location.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+#[serde(deny_unknown_fields)]
+/// Represents a simple pin, with an optional unpack field.
+pub struct StraightPin {
+    /// The URL of the pinned resource.
+    pub pin: Url,
+    /// A bool representing whether the pin represents a Nix flake, changing the behavior of the
+    /// `import` field, if so.
     ///
-    /// # Arguments
-    ///
-    /// * `version` - The semantic version requirement for the atom
-    /// * `locale` - The location of the atom, either as a URL or relative path
-    ///
-    /// # Returns
-    ///
-    /// A new `AtomReq` instance with the provided version and location.
-    pub fn new(version: VersionReq, store: gix::url::Url, tag: Option<AtomTag>) -> Self {
-        Self {
-            version,
-            store,
-            tag,
-        }
-    }
-
-    /// return a reference to the version
-    pub fn version(&self) -> &VersionReq {
-        &self.version
-    }
-
-    /// set the version to a new value
-    pub fn set_version(&mut self, version: VersionReq) {
-        self.version = version
-    }
-
-    /// return a reference to the store location
-    pub fn store(&self) -> &gix::url::Url {
-        &self.store
-    }
-
-    /// return a reference to the atom tag
-    pub fn tag(&self) -> Option<&AtomTag> {
-        self.tag.as_ref()
-    }
+    /// This field is omitted from serialization if false.
+    #[serde(default, skip_serializing_if = "not")]
+    pub flake: bool,
 }
 
-#[derive(thiserror::Error, Debug)]
-/// transparent errors for TypedDocument
-pub enum DocError {
-    /// The manifest path access.
-    #[error("the atom directory disappeared or is inaccessible: {0}")]
-    Missing(PathBuf),
-    /// Toml deserialization errors
-    #[error(transparent)]
-    De(#[from] toml_edit::de::Error),
-    /// Toml error
-    #[error(transparent)]
-    Ser(#[from] toml_edit::TomlError),
-    /// Filesystem error
-    #[error(transparent)]
-    Read(#[from] std::io::Error),
-    /// Serialization error
-    #[error(transparent)]
-    Manifest(#[from] toml_edit::ser::Error),
-    /// Serialization error
-    #[error(transparent)]
-    Write(#[from] tempfile::PersistError),
-    /// Git resolution error
-    #[error(transparent)]
-    Git(#[from] Box<crate::store::git::Error>),
-    /// Version resolution error
-    #[error(transparent)]
-    Semver(#[from] semver::Error),
-    /// Utf conversion error
-    #[error(transparent)]
-    Utf8(#[from] bstr::Utf8Error),
-    /// URL parse error
-    #[error(transparent)]
-    Url(#[from] url::ParseError),
-    /// Generic Error
-    #[error(transparent)]
-    Error(#[from] crate::lock::BoxError),
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+#[serde(deny_unknown_fields)]
+/// Represents a pin to a tarball, with an optional unpack field.
+pub struct TarPin {
+    /// The URL of the tarball resource.
+    pub tar: Url,
+    /// A bool representing whether the pin represents a Nix flake, changing the behavior of the
+    /// `import` field, if so.
+    ///
+    /// This field is omitted from serialization if false.
+    #[serde(default, skip_serializing_if = "not")]
+    pub flake: bool,
+    /// An optional relative path within the fetched source, used to import Nix expressions; the
+    /// precise behavior of which depends on whether or not the pin is a flake.
+    ///
+    /// This field is omitted from serialization if None.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub import: Option<PathBuf>,
 }
 
-impl<T: Serialize + DeserializeOwned> TypedDocument<T> {
-    /// Constructor: Create from a serializable instance of T.
-    /// This enforces that the document comes from serializing T.
-    pub fn new(doc: &str) -> Result<(Self, T), DocError> {
-        let validated: T = toml_edit::de::from_str(doc)?;
+/// A newtype wrapper to tie a `DocumentMut` to a specific serializable type `T`.
+struct TypedDocument<T> {
+    /// The underlying `toml_edit` document.
+    inner: DocumentMut,
+    _marker: PhantomData<T>,
+}
 
-        let inner = doc.parse::<DocumentMut>()?;
-        Ok((
-            Self {
-                inner,
-                _marker: PhantomData,
-            },
-            validated,
-        ))
+//================================================================================================
+// Traits
+//================================================================================================
+
+/// A trait for writing dependencies to a mutable TOML document representing an Atom manifest.
+trait WriteDeps<T: Serialize> {
+    /// The error type returned by the methods.
+    type Error;
+
+    /// Writes the dependency to the given TOML document.
+    fn write_dep(&self, name: &str, doc: &mut TypedDocument<T>) -> Result<(), Self::Error>;
+}
+
+//================================================================================================
+// Impls
+//================================================================================================
+
+impl AsMut<AtomReq> for AtomReq {
+    fn as_mut(&mut self) -> &mut AtomReq {
+        self
     }
 }
 
@@ -337,71 +301,90 @@ impl<T: Serialize> AsMut<DocumentMut> for TypedDocument<T> {
         &mut self.inner
     }
 }
-impl TypedDocument<Manifest> {
-    /// Write an atom dependency into the manifest document
-    pub fn write_dep(&mut self, key: &str, req: &Dependency) -> Result<(), toml_edit::ser::Error> {
-        req.write_dep(key, self)
-    }
-}
 
-impl AsMut<AtomReq> for AtomReq {
-    fn as_mut(&mut self) -> &mut AtomReq {
-        self
-    }
-}
-
-impl WriteDeps<Manifest> for Dependency {
-    type Error = toml_edit::ser::Error;
-
-    fn write_dep(&self, key: &str, doc: &mut TypedDocument<Manifest>) -> Result<(), Self::Error> {
-        let doc = doc.as_mut();
-        let atom_table = toml_edit::ser::to_document(self)?.as_table().to_owned();
-
-        if !doc.contains_table("deps") {
-            doc["deps"] = toml_edit::table();
+impl AtomReq {
+    /// Creates a new `AtomReq` with the specified version requirement and location.
+    pub fn new(version: VersionReq, store: gix::url::Url, tag: Option<AtomTag>) -> Self {
+        Self {
+            version,
+            store,
+            tag,
         }
+    }
 
-        let deps = doc["deps"].as_table_mut().unwrap();
-        deps.set_implicit(true);
-        deps.set_position(deps.len() + 1);
+    /// Returns a reference to the version requirement.
+    pub fn version(&self) -> &VersionReq {
+        &self.version
+    }
 
-        doc["deps"][key] = toml_edit::Item::Table(atom_table);
-        Ok(())
+    /// Sets the version requirement to a new value.
+    pub fn set_version(&mut self, version: VersionReq) {
+        self.version = version
+    }
+
+    /// Returns a reference to the store location.
+    pub fn store(&self) -> &gix::url::Url {
+        &self.store
+    }
+
+    /// Returns a reference to the atom tag, if specified.
+    pub fn tag(&self) -> Option<&AtomTag> {
+        self.tag.as_ref()
     }
 }
 
-pub(crate) fn not(b: &bool) -> bool {
-    !b
+impl DirectPin {
+    /// Determines the type of `DirectPin` from a given URL and other parameters.
+    fn determine(
+        url: &AliasedUrl,
+        import: Option<&PathBuf>,
+        flake: bool,
+    ) -> Result<Self, DocError> {
+        let r = url.r#ref();
+        let url = url.url();
+        let pin = if url.scheme == gix::url::Scheme::File {
+            // TODO: handle file paths to sources
+            todo!()
+        } else if let Some(r) = r {
+            let maybe_req = VersionReq::parse(r);
+            let fetch = if let Ok(req) = maybe_req {
+                GitStrat::Version(req)
+            } else {
+                GitStrat::Ref(r.to_owned())
+            };
+            DirectPin::Git(GitPin {
+                repo: url.to_owned(),
+                fetch,
+                flake,
+                import: import.map(ToOwned::to_owned),
+            })
+        } else {
+            let path = url.path.to_path()?;
+            if path.extension() == Some(OsStr::new("tar"))
+                || path
+                    .file_name()
+                    .is_some_and(|f| f.to_str().is_some_and(|f| f.contains(".tar.")))
+            {
+                DirectPin::Tarball(TarPin {
+                    tar: url.to_string().parse()?,
+                    flake,
+                    import: import.map(ToOwned::to_owned),
+                })
+            } else {
+                DirectPin::Straight(StraightPin {
+                    pin: url.to_string().parse()?,
+                    flake,
+                })
+            }
+        };
+        Ok(pin)
+    }
 }
 
-use serde::{Deserializer, Serializer};
-pub(crate) fn serialize_url<S>(url: &gix::url::Url, serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    let str = url.to_string();
-    serializer.serialize_str(&str)
-}
-
-pub(crate) fn deserialize_url<'de, D>(deserializer: D) -> Result<gix::url::Url, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    use bstr::BString;
-    let name = BString::deserialize(deserializer)?;
-    gix::url::parse(name.as_bstr())
-        .map_err(|e| <D::Error as serde::de::Error>::custom(e.to_string()))
-}
-
-use std::path::Path;
-
-use crate::id::Name;
-use crate::uri::{AliasedUrl, Uri};
 impl ManifestWriter {
-    /// Construct a new instance of a manifest writer ensuring all the constraints necessary to keep
-    /// the lock and manifest in sync are respected.
+    /// Constructs a new `ManifestWriter`, ensuring that the manifest and lock file constraints
+    /// are respected.
     pub fn new(path: &Path) -> Result<Self, DocError> {
-        use std::ffi::OsStr;
         use std::fs;
         let path = if path.file_name() == Some(OsStr::new(crate::MANIFEST_NAME.as_str())) {
             path.into()
@@ -424,62 +407,7 @@ impl ManifestWriter {
         Ok(ManifestWriter { doc, lock, path })
     }
 
-    /// After processing all changes, write the changes to the manifest and lock to disk. This
-    /// method should be called last, after processing any requested changes.
-    pub fn write_atomic(&mut self) -> Result<(), DocError> {
-        use std::io::Write;
-
-        use tempfile::NamedTempFile;
-
-        let dir = self
-            .path
-            .parent()
-            .ok_or(DocError::Missing(self.path.clone()))?;
-        let lock_path = self.path.with_file_name(crate::LOCK_NAME.as_str());
-        let mut tmp =
-            NamedTempFile::with_prefix_in(format!(".{}", crate::MANIFEST_NAME.as_str()), dir)?;
-        let mut tmp_lock =
-            NamedTempFile::with_prefix_in(format!(".{}", crate::LOCK_NAME.as_str()), dir)?;
-        tmp.write_all(self.doc.as_mut().to_string().as_bytes())?;
-        tmp_lock.write_all(toml_edit::ser::to_string_pretty(&self.lock)?.as_bytes())?;
-        tmp.persist(&self.path)?;
-        tmp_lock.persist(lock_path)?;
-        Ok(())
-    }
-
-    /// Function to add a user requested pin url to the manifest and lock files, ensuring they
-    /// remain in sync.
-    pub async fn add_url(
-        &mut self,
-        url: AliasedUrl,
-        key: Option<Name>,
-        import: Option<PathBuf>,
-        flake: bool,
-    ) -> Result<(), DocError> {
-        let direct = DirectPin::determine(&url, import.as_ref(), flake)?;
-        let (key, lock_entry) = direct.resolve(key.as_ref(), import, flake).await?;
-
-        let dep = match direct {
-            DirectPin::Straight(straight_pin) => Dependency::Pin(straight_pin),
-            DirectPin::Tarball(tar_pin) => Dependency::TarPin(tar_pin),
-            DirectPin::Git(git_pin) => Dependency::GitPin(git_pin),
-        };
-
-        self.doc.write_dep(&key, &dep)?;
-        if self
-            .lock
-            .deps
-            .as_mut()
-            .insert(key.to_owned(), lock_entry)
-            .is_some()
-        {
-            tracing::warn!("updating lock entry for `{}`", key);
-        }
-        Ok(())
-    }
-
-    /// Function to add a user requested atom uri to the manifest and lock files, ensuring they
-    /// remain in sync.
+    /// Adds a user-requested atom URI to the manifest and lock files, ensuring they remain in sync.
     pub fn add_uri(&mut self, uri: Uri, key: Option<Name>) -> Result<(), DocError> {
         use crate::lock::Dep;
 
@@ -531,51 +459,129 @@ impl ManifestWriter {
 
         Ok(())
     }
+
+    /// Adds a user-requested pin URL to the manifest and lock files, ensuring they remain in sync.
+    pub async fn add_url(
+        &mut self,
+        url: AliasedUrl,
+        key: Option<Name>,
+        import: Option<PathBuf>,
+        flake: bool,
+    ) -> Result<(), DocError> {
+        let direct = DirectPin::determine(&url, import.as_ref(), flake)?;
+        let (key, lock_entry) = direct.resolve(key.as_ref(), import, flake).await?;
+
+        let dep = match direct {
+            DirectPin::Straight(straight_pin) => Dependency::Pin(straight_pin),
+            DirectPin::Tarball(tar_pin) => Dependency::TarPin(tar_pin),
+            DirectPin::Git(git_pin) => Dependency::GitPin(git_pin),
+        };
+
+        self.doc.write_dep(&key, &dep)?;
+        if self
+            .lock
+            .deps
+            .as_mut()
+            .insert(key.to_owned(), lock_entry)
+            .is_some()
+        {
+            tracing::warn!("updating lock entry for `{}`", key);
+        }
+        Ok(())
+    }
+
+    /// Atomically writes the changes to the manifest and lock files on disk.
+    /// This method should be called last, after all changes have been processed.
+    pub fn write_atomic(&mut self) -> Result<(), DocError> {
+        use std::io::Write;
+
+        use tempfile::NamedTempFile;
+
+        let dir = self
+            .path
+            .parent()
+            .ok_or(DocError::Missing(self.path.clone()))?;
+        let lock_path = self.path.with_file_name(crate::LOCK_NAME.as_str());
+        let mut tmp =
+            NamedTempFile::with_prefix_in(format!(".{}", crate::MANIFEST_NAME.as_str()), dir)?;
+        let mut tmp_lock =
+            NamedTempFile::with_prefix_in(format!(".{}", crate::LOCK_NAME.as_str()), dir)?;
+        tmp.write_all(self.doc.as_mut().to_string().as_bytes())?;
+        tmp_lock.write_all(toml_edit::ser::to_string_pretty(&self.lock)?.as_bytes())?;
+        tmp.persist(&self.path)?;
+        tmp_lock.persist(lock_path)?;
+        Ok(())
+    }
 }
 
-impl DirectPin {
-    fn determine(
-        url: &AliasedUrl,
-        import: Option<&PathBuf>,
-        flake: bool,
-    ) -> Result<Self, DocError> {
-        let r = url.r#ref();
-        let url = url.url();
-        let pin = if url.scheme == gix::url::Scheme::File {
-            // TODO: handle file paths to sources
-            todo!()
-        } else if let Some(r) = r {
-            let maybe_req = VersionReq::parse(r);
-            let fetch = if let Ok(req) = maybe_req {
-                GitStrat::Version(req)
-            } else {
-                GitStrat::Ref(r.to_owned())
-            };
-            DirectPin::Git(GitPin {
-                repo: url.to_owned(),
-                fetch,
-                flake,
-                import: import.map(ToOwned::to_owned),
-            })
-        } else {
-            let path = url.path.to_path()?;
-            if path.extension() == Some(OsStr::new("tar"))
-                || path
-                    .file_name()
-                    .is_some_and(|f| f.to_str().is_some_and(|f| f.contains(".tar.")))
-            {
-                DirectPin::Tarball(TarPin {
-                    tar: url.to_string().parse()?,
-                    flake,
-                    import: import.map(ToOwned::to_owned),
-                })
-            } else {
-                DirectPin::Straight(StraightPin {
-                    pin: url.to_string().parse()?,
-                    flake,
-                })
-            }
-        };
-        Ok(pin)
+impl TypedDocument<Manifest> {
+    /// Writes an atom dependency into the manifest document.
+    pub fn write_dep(&mut self, key: &str, req: &Dependency) -> Result<(), toml_edit::ser::Error> {
+        req.write_dep(key, self)
     }
+}
+
+impl<T: Serialize + DeserializeOwned> TypedDocument<T> {
+    /// Creates a new `TypedDocument` from a serializable instance of `T`.
+    /// This enforces that the document is created by serializing `T`.
+    pub fn new(doc: &str) -> Result<(Self, T), DocError> {
+        let validated: T = toml_edit::de::from_str(doc)?;
+
+        let inner = doc.parse::<DocumentMut>()?;
+        Ok((
+            Self {
+                inner,
+                _marker: PhantomData,
+            },
+            validated,
+        ))
+    }
+}
+
+impl WriteDeps<Manifest> for Dependency {
+    type Error = toml_edit::ser::Error;
+
+    fn write_dep(&self, key: &str, doc: &mut TypedDocument<Manifest>) -> Result<(), Self::Error> {
+        let doc = doc.as_mut();
+        let atom_table = toml_edit::ser::to_document(self)?.as_table().to_owned();
+
+        if !doc.contains_table("deps") {
+            doc["deps"] = toml_edit::table();
+        }
+
+        let deps = doc["deps"].as_table_mut().unwrap();
+        deps.set_implicit(true);
+        deps.set_position(deps.len() + 1);
+
+        doc["deps"][key] = toml_edit::Item::Table(atom_table);
+        Ok(())
+    }
+}
+
+//================================================================================================
+// Functions
+//================================================================================================
+
+/// Deserializes a `gix::url::Url` from a string.
+pub(crate) fn deserialize_url<'de, D>(deserializer: D) -> Result<gix::url::Url, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let name = BString::deserialize(deserializer)?;
+    gix::url::parse(name.as_bstr())
+        .map_err(|e| <D::Error as serde::de::Error>::custom(e.to_string()))
+}
+
+/// A helper function for `serde(skip_serializing_if)` to omit `false` boolean values.
+pub(crate) fn not(b: &bool) -> bool {
+    !b
+}
+
+/// Serializes a `gix::url::Url` to a string.
+pub(crate) fn serialize_url<S>(url: &gix::url::Url, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    let str = url.to_string();
+    serializer.serialize_str(&str)
 }

@@ -1,5 +1,13 @@
 use super::*;
 
+const ALIASED_URLS: &[&str] = &[
+    "gh:foo/bar^master",
+    "bb^refs/heads/my-work",
+    "https://gl:bar/baz",
+    "pkgs^main",
+    "git@gh:owner/repo^master",
+];
+
 const ALIASES: &[&str] = &[
     "gl:repo::atom@^2.0",
     "gl::atom@^2.1",
@@ -25,14 +33,6 @@ const ALIASES: &[&str] = &[
     "foo@^0.8",
     "::foo",
     "::foo",
-];
-
-const ALIASED_URLS: &[&str] = &[
-    "gh:foo/bar^master",
-    "bb^refs/heads/my-work",
-    "https://gl:bar/baz",
-    "pkgs^main",
-    "git@gh:owner/repo^master",
 ];
 
 #[test]

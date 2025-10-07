@@ -1,3 +1,9 @@
+//! Manages application configuration by loading settings from standard locations.
+//!
+//! This crate provides a unified configuration object (`Config`) that aggregates
+//! settings from files and environment variables, making them accessible
+//! globally via a lazily initialized static reference (`CONFIG`).
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::LazyLock;
@@ -8,55 +14,70 @@ use figment::{Figment, Metadata, Provider};
 use gix::ThreadSafeRepository;
 use serde::{Deserialize, Serialize};
 
-/// Provide a lazyily instantiated static reference to
-/// a config object parsed from canonical locations
-/// so that applications have immutable access to it from
-/// anywhere without ever having to parse the config more
-/// than once.
+/// Provides a lazily instantiated static reference to the application `Config`.
 ///
-/// For efficiency, all collections in the Config contain
-/// references to values owned by the deserializer instead
-/// of owned data, ensuring cheap copying where ownership
-/// is required.
+/// This static variable ensures that configuration is parsed only once from
+/// canonical locations and then made immutably available throughout the
+/// application's lifecycle.
 pub static CONFIG: LazyLock<Config> = LazyLock::new(load_config);
 
-fn load_config() -> Config {
-    Config::figment().extract().unwrap_or_default()
-}
-
+/// A type alias for a hash map of borrowed string slices, used for command aliases.
 type Aliases<'a> = HashMap<&'a str, &'a str>;
 
-#[derive(Deserialize, Serialize)]
-pub struct Config {
-    #[serde(borrow)]
-    aliases: Aliases<'static>,
-    pub cache: CacheConfig,
-}
-
+/// Defines cache-related configuration settings.
 #[derive(Deserialize, Serialize)]
 pub struct CacheConfig {
+    /// The root directory for storing cached data.
     pub root_dir: PathBuf,
+}
+
+/// Represents the application's primary configuration structure.
+#[derive(Deserialize, Serialize)]
+pub struct Config {
+    /// A map of command aliases.
+    #[serde(borrow)]
+    aliases: Aliases<'static>,
+    /// Cache-related settings.
+    pub cache: CacheConfig,
 }
 
 impl Default for CacheConfig {
     fn default() -> Self {
         Self {
-            root_dir: get_cache(),
+            root_dir: get_cache_dir(),
         }
     }
 }
 
 impl Config {
+    /// Returns a reference to the command aliases.
     pub fn aliases(&self) -> &Aliases<'_> {
         &self.aliases
     }
-}
 
-fn get_cache() -> PathBuf {
-    if let Ok(c) = etcetera::choose_base_strategy() {
-        c.cache_dir().join("eka")
-    } else {
-        std::env::temp_dir().join("eka")
+    /// Constructs a `Figment` instance for configuration loading.
+    ///
+    /// This method builds a configuration provider by layering default settings,
+    /// user-specific configuration files, and environment variables.
+    pub fn figment() -> Figment {
+        let mut fig = Figment::from(Config::default());
+
+        if let Ok(c) = etcetera::choose_base_strategy() {
+            let config = c.config_dir().join("eka.toml");
+            fig = fig.admerge(Toml::file(config));
+        }
+
+        if let Ok(r) = ThreadSafeRepository::discover(".") {
+            let repo_config = r.git_dir().join("info/eka.toml");
+            fig = fig.admerge(Toml::file(repo_config));
+        };
+
+        fig.admerge(Env::prefixed("EKA_"))
+    }
+
+    /// Creates a `Config` instance from a given provider.
+    pub fn from<T: Provider>(provider: T) -> Result<Config, Box<figment::Error>> {
+        Figment::from(provider).extract().map_err(Box::new)
     }
 }
 
@@ -76,28 +97,6 @@ impl Default for Config {
     }
 }
 
-impl Config {
-    pub fn from<T: Provider>(provider: T) -> Result<Config, Box<figment::Error>> {
-        Figment::from(provider).extract().map_err(Box::new)
-    }
-
-    pub fn figment() -> Figment {
-        let mut fig = Figment::from(Config::default());
-
-        if let Ok(c) = etcetera::choose_base_strategy() {
-            let config = c.config_dir().join("eka.toml");
-            fig = fig.admerge(Toml::file(config));
-        }
-
-        if let Ok(r) = ThreadSafeRepository::discover(".") {
-            let repo_config = r.git_dir().join("info/eka.toml");
-            fig = fig.admerge(Toml::file(repo_config));
-        };
-
-        fig.admerge(Env::prefixed("EKA_"))
-    }
-}
-
 impl Provider for Config {
     fn metadata(&self) -> figment::Metadata {
         Metadata::named("Eka CLI Config")
@@ -108,4 +107,20 @@ impl Provider for Config {
     ) -> Result<figment::value::Map<figment::Profile, figment::value::Dict>, figment::Error> {
         figment::providers::Serialized::defaults(Config::default()).data()
     }
+}
+
+/// Determines the appropriate cache directory based on the operating system.
+fn get_cache_dir() -> PathBuf {
+    if let Ok(c) = etcetera::choose_base_strategy() {
+        c.cache_dir().join("eka")
+    } else {
+        std::env::temp_dir().join("eka")
+    }
+}
+
+/// Loads the application configuration using the default `Figment` provider.
+///
+/// This function is used to initialize the `CONFIG` static variable.
+fn load_config() -> Config {
+    Config::figment().extract().unwrap_or_default()
 }

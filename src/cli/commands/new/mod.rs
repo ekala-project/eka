@@ -1,3 +1,11 @@
+//! This module defines the `new` subcommand.
+//!
+//! The `new` subcommand is responsible for creating a new atom in the
+//! specified directory.
+
+use std::ffi::OsStr;
+use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
 
 use anyhow::Result;
@@ -5,6 +13,7 @@ use atom::{AtomTag, Manifest};
 use clap::Parser;
 use semver::Version;
 
+/// The `new` subcommand.
 #[derive(Parser, Debug)]
 #[command(arg_required_else_help = true, next_help_heading = "New Options")]
 pub struct Args {
@@ -21,11 +30,8 @@ pub struct Args {
     tag: Option<AtomTag>,
 }
 
+/// The main entry point for the `new` subcommand.
 pub(super) fn run(args: Args) -> Result<()> {
-    use std::ffi::OsStr;
-    use std::fs;
-    use std::io::Write;
-
     let tag: AtomTag = if let Some(tag) = args.tag {
         tag
     } else {

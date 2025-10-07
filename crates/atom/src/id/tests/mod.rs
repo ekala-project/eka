@@ -1,9 +1,47 @@
+//! Tests for the `AtomTag` identifier, ensuring validation logic is correct.
+//!
+//! These tests cover valid and invalid formats, including various Unicode characters,
+//! edge cases, and specific error conditions to ensure the tag parsing is robust.
+
 use super::*;
+
+#[test]
+fn edge_cases() {
+    assert_eq!(
+        AtomTag::try_from("α"),
+        Ok(AtomTag("α".into())),
+        "Single valid Unicode character should be accepted"
+    );
+
+    assert_eq!(
+        AtomTag::try_from("ñ_1"),
+        Ok(AtomTag("ñ_1".into())),
+        "Mix of Unicode, underscore, and number should be valid"
+    );
+
+    assert_eq!(
+        AtomTag::try_from("\u{200B}"),
+        Err(Error::InvalidStart('\u{200B}')),
+        "Zero-width space should be invalid start"
+    );
+
+    assert_eq!(
+        AtomTag::try_from("α\u{200B}"),
+        Err(Error::InvalidCharacters("\u{200B}".into())),
+        "Zero-width space should be invalid in the middle"
+    );
+}
 
 #[test]
 fn empty() {
     let res = AtomTag::try_from("");
     assert!(res == Err(Error::Empty));
+}
+
+#[test]
+fn invalid_chars() {
+    let res = AtomTag::try_from("a-!@#$%^&*()_-asdf");
+    assert!(res == Err(Error::InvalidCharacters("!@#$%^&*()".into())));
 }
 
 #[test]
@@ -14,45 +52,6 @@ fn invalid_start() {
     };
     for a in ["9atom", "'atom", "_atom", "-atom", "%atom"] {
         assert(a)
-    }
-}
-
-#[test]
-fn invalid_chars() {
-    let res = AtomTag::try_from("a-!@#$%^&*()_-asdf");
-    assert!(res == Err(Error::InvalidCharacters("!@#$%^&*()".into())));
-}
-
-#[test]
-fn valid_unicode_tags() {
-    let valid_tags = [
-        "αβγ",              // Greek lowercase
-        "ΑΒΓ",              // Greek uppercase
-        "кириллица",        // Cyrillic
-        "汉字",             // Chinese characters
-        "ひらがな",         // Japanese Hiragana
-        "한글",             // Korean Hangul
-        "Ññ",               // Spanish letter with tilde
-        "Öö",               // German umlaut
-        "Ææ",               // Latin ligature
-        "Łł",               // Polish letter
-        "ئ",                // Arabic letter
-        "א",                // Hebrew letter
-        "ก",                // Thai letter
-        "Ա",                // Armenian letter
-        "ᚠ",                // Runic letter
-        "ᓀ",                // Canadian Aboriginal Syllabics
-        "あア",             // Mix of Hiragana and Katakana
-        "한글漢字",         // Mix of Korean and Chinese
-        "Café_au_lait-123", // Mix of Latin, underscore, hyphen, and numbers
-    ];
-
-    for tag in valid_tags {
-        assert!(
-            AtomTag::try_from(tag).is_ok(),
-            "Expected '{}' to be valid",
-            tag
-        );
     }
 }
 
@@ -116,28 +115,34 @@ fn specific_unicode_errors() {
 }
 
 #[test]
-fn edge_cases() {
-    assert_eq!(
-        AtomTag::try_from("α"),
-        Ok(AtomTag("α".into())),
-        "Single valid Unicode character should be accepted"
-    );
+fn valid_unicode_tags() {
+    let valid_tags = [
+        "αβγ",              // Greek lowercase
+        "ΑΒΓ",              // Greek uppercase
+        "кириллица",        // Cyrillic
+        "汉字",             // Chinese characters
+        "ひらがな",         // Japanese Hiragana
+        "한글",             // Korean Hangul
+        "Ññ",               // Spanish letter with tilde
+        "Öö",               // German umlaut
+        "Ææ",               // Latin ligature
+        "Łł",               // Polish letter
+        "ئ",                // Arabic letter
+        "א",                // Hebrew letter
+        "ก",                // Thai letter
+        "Ա",                // Armenian letter
+        "ᚠ",                // Runic letter
+        "ᓀ",                // Canadian Aboriginal Syllabics
+        "あア",             // Mix of Hiragana and Katakana
+        "한글漢字",         // Mix of Korean and Chinese
+        "Café_au_lait-123", // Mix of Latin, underscore, hyphen, and numbers
+    ];
 
-    assert_eq!(
-        AtomTag::try_from("ñ_1"),
-        Ok(AtomTag("ñ_1".into())),
-        "Mix of Unicode, underscore, and number should be valid"
-    );
-
-    assert_eq!(
-        AtomTag::try_from("\u{200B}"),
-        Err(Error::InvalidStart('\u{200B}')),
-        "Zero-width space should be invalid start"
-    );
-
-    assert_eq!(
-        AtomTag::try_from("α\u{200B}"),
-        Err(Error::InvalidCharacters("\u{200B}".into())),
-        "Zero-width space should be invalid in the middle"
-    );
+    for tag in valid_tags {
+        assert!(
+            AtomTag::try_from(tag).is_ok(),
+            "Expected '{}' to be valid",
+            tag
+        );
+    }
 }

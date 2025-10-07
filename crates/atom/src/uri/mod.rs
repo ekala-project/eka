@@ -69,15 +69,24 @@
 //! - Malformed URLs
 //! - Invalid version specifications
 //! - Missing required components
+
 #[cfg(test)]
 mod tests;
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::ops::Deref;
 use std::str::FromStr;
+use std::sync::LazyLock;
 
 use gix::Url;
+use nom::branch::alt;
+use nom::bytes::complete::{tag, take_until};
+use nom::character::complete::digit1;
+use nom::combinator::{all_consuming, map, not, opt, peek, rest, verify};
+use nom::sequence::{separated_pair, tuple};
+use nom::{IResult, ParseTo};
 use semver::VersionReq;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -85,18 +94,14 @@ use thiserror::Error;
 use super::id::AtomTag;
 use crate::id::Error;
 
-#[derive(Debug)]
-struct Aliases(&'static HashMap<&'static str, &'static str>);
+static ALIASES: LazyLock<Aliases> = LazyLock::new(|| Aliases(config::CONFIG.aliases()));
 
-/// Represents either an atom URI or an aliased URL component
-///
-/// When built through the `FromStr` implementation, aliases are resolved.
-#[derive(Debug, Clone)]
-pub enum UriOrUrl {
-    /// Atom URI variant
-    Atom(Uri),
-    /// URL variant
-    Pin(AliasedUrl),
+/// A URL that may contain an alias to be resolved.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Default)]
+#[cfg_attr(test, derive(Serialize, Deserialize))]
+pub struct AliasedUrl {
+    url: Url,
+    r#ref: Option<String>,
 }
 
 /// Represents the parsed components of an Atom URI.
@@ -112,6 +117,55 @@ pub struct Uri {
     version: Option<VersionReq>,
 }
 
+/// Represents either an Atom URI or an aliased URL component.
+///
+/// When built through the `FromStr` implementation, aliases are resolved.
+#[derive(Debug, Clone)]
+pub enum UriOrUrl {
+    /// Atom URI variant
+    Atom(Uri),
+    /// URL variant
+    Pin(AliasedUrl),
+}
+
+/// An error encountered when constructing the concrete types from an Atom URI.
+#[derive(Error, Debug)]
+pub enum UriError {
+    /// The Atom identifier is missing, but required.
+    #[error("Missing the required Atom ID in URI")]
+    NoAtom,
+    /// There is no alias in the configuration matching the one given in the URI.
+    #[error("The passed alias does not exist: {0}")]
+    NoAlias(String),
+    /// The Url is invalid.
+    #[error("Parsing URL failed")]
+    NoUrl,
+    /// Malformed atom tag.
+    #[error(transparent)]
+    BadTag(#[from] Error),
+    /// The version requested is not valid.
+    #[error(transparent)]
+    InvalidVersionReq(#[from] semver::Error),
+    /// The Url did not parse correctly.
+    #[error(transparent)]
+    UrlParse(#[from] gix::url::parse::Error),
+    /// The Url did not parse correctly.
+    #[error(transparent)]
+    UrlParser(#[from] url::ParseError),
+}
+
+#[derive(Debug)]
+struct Aliases(&'static HashMap<&'static str, &'static str>);
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[cfg_attr(test, derive(Serialize, Deserialize))]
+struct AtomRef<'a> {
+    /// The specific Atom within the repository.
+    tag: Option<&'a str>,
+    /// The version of the Atom, if specified.
+    version: Option<&'a str>,
+}
+
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[cfg_attr(test, derive(Serialize, Deserialize))]
 struct Ref<'a> {
@@ -120,23 +174,28 @@ struct Ref<'a> {
     atom: AtomRef<'a>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Default)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
 #[cfg_attr(test, derive(Serialize, Deserialize))]
-/// a url potentially containing an alias
-pub struct AliasedUrl {
-    url: Url,
-    r#ref: Option<String>,
+struct UrlRef<'a> {
+    /// The URI scheme (e.g., "https", "ssh"), if present.
+    scheme: Option<&'a str>,
+    /// The username.
+    user: Option<&'a str>,
+    /// The password.
+    pass: Option<&'a str>,
+    /// A URL fragment which may contain an alias to be later expanded
+    frag: Option<&'a str>,
 }
 
 impl AliasedUrl {
-    /// get a reference to the underlying URL.
-    pub fn url(&self) -> &Url {
-        &self.url
-    }
-
-    /// get a reference to the optional git ref.
+    /// Returns a reference to the optional git ref.
     pub fn r#ref(&self) -> Option<&String> {
         self.r#ref.as_ref()
+    }
+
+    /// Returns a reference to the underlying URL.
+    pub fn url(&self) -> &Url {
+        &self.url
     }
 }
 
@@ -183,208 +242,6 @@ impl TryFrom<&str> for AliasedUrl {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
-#[cfg_attr(test, derive(Serialize, Deserialize))]
-struct UrlRef<'a> {
-    /// The URI scheme (e.g., "https", "ssh"), if present.
-    scheme: Option<&'a str>,
-    /// The username.
-    user: Option<&'a str>,
-    /// The password.
-    pass: Option<&'a str>,
-    /// A URL fragment which may contain an alias to be later expanded
-    frag: Option<&'a str>,
-}
-
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
-#[cfg_attr(test, derive(Serialize, Deserialize))]
-struct AtomRef<'a> {
-    /// The specific Atom within the repository.
-    tag: Option<&'a str>,
-    /// The version of the Atom, if specified.
-    version: Option<&'a str>,
-}
-
-use nom::branch::alt;
-use nom::bytes::complete::{tag, take_until};
-use nom::character::complete::digit1;
-use nom::combinator::{all_consuming, map, not, opt, peek, rest, verify};
-use nom::sequence::{separated_pair, tuple};
-use nom::{IResult, ParseTo};
-
-fn parse(input: &str) -> Ref<'_> {
-    let (rest, url) = match url(input) {
-        Ok(s) => s,
-        Err(_) => (input, None),
-    };
-
-    let url = url.map(UrlRef::from).unwrap_or_default();
-
-    let atom = AtomRef::from(rest);
-
-    tracing::trace!(
-        url.scheme,
-        url.user,
-        url.pass = url.pass.map(|_| "<redacted>"),
-        url.frag,
-        atom.tag,
-        atom.version,
-        "{}",
-        input
-    );
-
-    Ref { url, atom }
-}
-
-fn parse_alias(input: &str) -> (&str, Option<&str>) {
-    opt(verify(
-        map(
-            alt((
-                tuple((
-                    take_until::<_, _, ()>(":"),
-                    tag(":"),
-                    // not a port
-                    peek(not(digit1)),
-                )),
-                map(rest, |a| (a, "", ())),
-            )),
-            |(a, ..)| a,
-        ),
-        // not an scp url
-        |a| {
-            !(a as &str)
-                .chars()
-                .any(|c| c == ':' || c == '/' || c == '.')
-        },
-    ))(input)
-    .map(empty_none)
-    .unwrap_or((input, None))
-}
-
-fn parse_host(input: &str) -> IResult<&str, (&str, &str)> {
-    alt((first_path, ssh_host, map(rest, |a| (a, ""))))(input)
-}
-
-fn parse_port(input: &str) -> IResult<&str, Option<(&str, &str)>> {
-    opt(all_consuming(separated_pair(
-        take_until(":"),
-        tag(":"),
-        digit1,
-    )))(input)
-}
-
-fn ssh_host(input: &str) -> IResult<&str, (&str, &str)> {
-    let (rest, (host, colon)) = tuple((take_until(":"), tag(":")))(input)?;
-
-    let (rest, port) = opt(tuple((peek(digit1), take_until(":"), tag(":"))))(rest)?;
-
-    match port {
-        Some((_, port_str, second_colon)) => {
-            let full_host = &input[..(host.len() + colon.len() + port_str.len())];
-            Ok((rest, (full_host, second_colon)))
-        },
-        None => Ok((rest, (host, colon))),
-    }
-}
-
-fn first_path(input: &str) -> IResult<&str, (&str, &str)> {
-    tuple((
-        verify(take_until("/"), |h: &str| {
-            !h.contains(':') || parse_port(h).ok().and_then(|(_, p)| p).is_some()
-        }),
-        tag("/"),
-    ))(input)
-}
-
-type UrlPrefix<'a> = (Option<&'a str>, Option<&'a str>, Option<&'a str>);
-
-fn parse_url(url: &str) -> IResult<&str, UrlPrefix<'_>> {
-    let (rest, (scheme, user_pass)) = tuple((scheme, split_at))(url)?;
-
-    let (user, pass) = match user_pass {
-        Some(s) => match split_colon(s) {
-            Ok((p, Some(u))) => (Some(u), Some(p)),
-            Ok((u, None)) => (Some(u), None),
-            _ => (Some(s), None),
-        },
-        None => (None, None),
-    };
-
-    Ok((rest, (scheme, user, pass)))
-}
-
-fn not_empty(input: &str) -> Option<&str> {
-    if input.is_empty() { None } else { Some(input) }
-}
-
-fn empty_none<'a>((rest, opt): (&'a str, Option<&'a str>)) -> (&'a str, Option<&'a str>) {
-    (rest, opt.and_then(not_empty))
-}
-
-fn opt_split<'a>(input: &'a str, delim: &str) -> IResult<&'a str, Option<&'a str>> {
-    opt(map(tuple((take_until(delim), tag(delim))), |(url, _)| url))(input).map(empty_none)
-}
-
-fn url(input: &str) -> IResult<&str, Option<&str>> {
-    opt_split(input, "::")
-}
-
-fn scheme(input: &str) -> IResult<&str, Option<&str>> {
-    opt_split(input, "://")
-}
-
-fn split_at(input: &str) -> IResult<&str, Option<&str>> {
-    opt_split(input, "@")
-}
-
-fn split_colon(input: &str) -> IResult<&str, Option<&str>> {
-    opt_split(input, ":")
-}
-
-impl<'a> From<&'a str> for Ref<'a> {
-    /// Parses a string slice into a `Ref`.
-    ///
-    /// This is the primary way to create a `Ref` instance.
-    ///
-    /// # Arguments
-    ///
-    /// * `input` - A string slice containing the URI to parse.
-    ///
-    /// # Returns
-    ///
-    /// A `Ref` instance representing the parsed URI.
-    fn from(input: &'a str) -> Self {
-        parse(input)
-    }
-}
-
-/// A error encountered when constructing the concrete types from an Atom URI
-#[derive(Error, Debug)]
-pub enum UriError {
-    /// Malformed atom tag.
-    #[error(transparent)]
-    BadTag(#[from] Error),
-    /// The version requested is not valid.
-    #[error(transparent)]
-    InvalidVersionReq(#[from] semver::Error),
-    /// The Url did not parse correctly.
-    #[error(transparent)]
-    UrlParse(#[from] gix::url::parse::Error),
-    /// The Url did not parse correctly.
-    #[error(transparent)]
-    UrlParser(#[from] url::ParseError),
-    /// There is no alias in the configuration matching the one given in the URI.
-    #[error("The passed alias does not exist: {0}")]
-    NoAlias(String),
-    /// The Url is invalid
-    #[error("Parsing URL failed")]
-    NoUrl,
-    #[error("Missing the required Atom ID in URI")]
-    /// The Atom identifier is missing, but required
-    NoAtom,
-}
-
-use std::borrow::Cow;
 impl Aliases {
     fn get_alias(&self, s: &str) -> Result<&str, UriError> {
         self.get(s)
@@ -415,19 +272,15 @@ impl Deref for Aliases {
     }
 }
 
-impl<'a> From<&'a str> for UrlRef<'a> {
-    fn from(s: &'a str) -> Self {
-        let (scheme, user, pass, frag) = match parse_url(s) {
-            Ok((frag, (scheme, user, pass))) => (scheme, user, pass, not_empty(frag)),
-            _ => (None, None, None, None),
+impl<'a> AtomRef<'a> {
+    fn render(&self) -> Result<(AtomTag, Option<VersionReq>), UriError> {
+        let tag = AtomTag::try_from(self.tag.ok_or(UriError::NoAtom)?)?;
+        let version = if let Some(v) = self.version {
+            VersionReq::parse(v)?.into()
+        } else {
+            None
         };
-
-        Self {
-            scheme,
-            user,
-            pass,
-            frag,
-        }
+        Ok((tag, version))
     }
 }
 
@@ -443,8 +296,138 @@ impl<'a> From<&'a str> for AtomRef<'a> {
     }
 }
 
-use std::sync::LazyLock;
-static ALIASES: LazyLock<Aliases> = LazyLock::new(|| Aliases(config::CONFIG.aliases()));
+impl<'a> From<&'a str> for Ref<'a> {
+    /// Parses a string slice into a `Ref`.
+    ///
+    /// This is the primary way to create a `Ref` instance.
+    fn from(input: &'a str) -> Self {
+        parse(input)
+    }
+}
+
+impl Display for Uri {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let url = self
+            .url
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_default();
+        let version = self
+            .version
+            .as_ref()
+            .map(|v| format!("@{v}"))
+            .unwrap_or_default();
+        write!(
+            f,
+            "{}::{}{}",
+            &url.trim_end_matches('/'),
+            self.tag,
+            &version
+        )
+    }
+}
+
+impl FromStr for Uri {
+    type Err = UriError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let r = Ref::from(s);
+        Uri::try_from(r)
+    }
+}
+
+impl<'a> TryFrom<&'a str> for Uri {
+    type Error = UriError;
+
+    fn try_from(s: &'a str) -> Result<Self, Self::Error> {
+        s.parse()
+    }
+}
+
+impl Display for UriOrUrl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            UriOrUrl::Atom(uri) => uri.fmt(f),
+            UriOrUrl::Pin(url) => url.fmt(f),
+        }
+    }
+}
+
+impl FromStr for UriOrUrl {
+    type Err = UriError;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        if s.contains("::") {
+            s.parse::<Uri>().map(UriOrUrl::Atom)
+        } else {
+            s.parse::<AliasedUrl>().map(UriOrUrl::Pin)
+        }
+    }
+}
+
+impl Uri {
+    /// Returns the Atom identifier parsed from the URI.
+    #[must_use]
+    pub fn tag(&self) -> &AtomTag {
+        &self.tag
+    }
+
+    /// Returns a reference to the Url parsed out of the Atom URI.
+    #[must_use]
+    pub fn url(&self) -> Option<&Url> {
+        self.url.as_ref()
+    }
+
+    /// Returns the Atom version parsed from the URI.
+    #[must_use]
+    pub fn version(&self) -> Option<&VersionReq> {
+        self.version.as_ref()
+    }
+}
+
+impl<'a> TryFrom<Ref<'a>> for Uri {
+    type Error = UriError;
+
+    fn try_from(refs: Ref<'a>) -> Result<Self, Self::Error> {
+        let Ref { url, atom } = refs;
+
+        let url = url.to_url().ok();
+
+        let (id, version) = atom.render()?;
+
+        tracing::trace!(?url, %id, ?version);
+
+        Ok(Uri {
+            url,
+            tag: id,
+            version,
+        })
+    }
+}
+
+impl<'a> TryFrom<UrlRef<'a>> for Url {
+    type Error = UriError;
+
+    fn try_from(refs: UrlRef<'a>) -> Result<Self, Self::Error> {
+        refs.to_url()
+    }
+}
+
+impl<'a> From<&'a str> for UrlRef<'a> {
+    fn from(s: &'a str) -> Self {
+        let (scheme, user, pass, frag) = match parse_url(s) {
+            Ok((frag, (scheme, user, pass))) => (scheme, user, pass, not_empty(frag)),
+            _ => (None, None, None, None),
+        };
+
+        Self {
+            scheme,
+            user,
+            pass,
+            frag,
+        }
+    }
+}
 
 impl<'a> UrlRef<'a> {
     fn render_alias(&self) -> Option<(&str, Option<Cow<'static, str>>)> {
@@ -560,122 +543,131 @@ impl<'a> UrlRef<'a> {
     }
 }
 
-impl<'a> AtomRef<'a> {
-    fn render(&self) -> Result<(AtomTag, Option<VersionReq>), UriError> {
-        let tag = AtomTag::try_from(self.tag.ok_or(UriError::NoAtom)?)?;
-        let version = if let Some(v) = self.version {
-            VersionReq::parse(v)?.into()
-        } else {
-            None
-        };
-        Ok((tag, version))
+fn empty_none<'a>((rest, opt): (&'a str, Option<&'a str>)) -> (&'a str, Option<&'a str>) {
+    (rest, opt.and_then(not_empty))
+}
+
+fn first_path(input: &str) -> IResult<&str, (&str, &str)> {
+    tuple((
+        verify(take_until("/"), |h: &str| {
+            !h.contains(':') || parse_port(h).ok().and_then(|(_, p)| p).is_some()
+        }),
+        tag("/"),
+    ))(input)
+}
+
+fn not_empty(input: &str) -> Option<&str> {
+    if input.is_empty() { None } else { Some(input) }
+}
+
+fn opt_split<'a>(input: &'a str, delim: &str) -> IResult<&'a str, Option<&'a str>> {
+    opt(map(tuple((take_until(delim), tag(delim))), |(url, _)| url))(input).map(empty_none)
+}
+
+fn parse(input: &str) -> Ref<'_> {
+    let (rest, url) = match url(input) {
+        Ok(s) => s,
+        Err(_) => (input, None),
+    };
+
+    let url = url.map(UrlRef::from).unwrap_or_default();
+
+    let atom = AtomRef::from(rest);
+
+    tracing::trace!(
+        url.scheme,
+        url.user,
+        url.pass = url.pass.map(|_| "<redacted>"),
+        url.frag,
+        atom.tag,
+        atom.version,
+        "{}",
+        input
+    );
+
+    Ref { url, atom }
+}
+
+fn parse_alias(input: &str) -> (&str, Option<&str>) {
+    opt(verify(
+        map(
+            alt((
+                tuple((
+                    take_until::<_, _, ()>(":"),
+                    tag(":"),
+                    // not a port
+                    peek(not(digit1)),
+                )),
+                map(rest, |a| (a, "", ())),
+            )),
+            |(a, ..)| a,
+        ),
+        // not an scp url
+        |a| {
+            !(a as &str)
+                .chars()
+                .any(|c| c == ':' || c == '/' || c == '.')
+        },
+    ))(input)
+    .map(empty_none)
+    .unwrap_or((input, None))
+}
+
+fn parse_host(input: &str) -> IResult<&str, (&str, &str)> {
+    alt((first_path, ssh_host, map(rest, |a| (a, ""))))(input)
+}
+
+fn parse_port(input: &str) -> IResult<&str, Option<(&str, &str)>> {
+    opt(all_consuming(separated_pair(
+        take_until(":"),
+        tag(":"),
+        digit1,
+    )))(input)
+}
+
+type UrlPrefix<'a> = (Option<&'a str>, Option<&'a str>, Option<&'a str>);
+
+fn parse_url(url: &str) -> IResult<&str, UrlPrefix<'_>> {
+    let (rest, (scheme, user_pass)) = tuple((scheme, split_at))(url)?;
+
+    let (user, pass) = match user_pass {
+        Some(s) => match split_colon(s) {
+            Ok((p, Some(u))) => (Some(u), Some(p)),
+            Ok((u, None)) => (Some(u), None),
+            _ => (Some(s), None),
+        },
+        None => (None, None),
+    };
+
+    Ok((rest, (scheme, user, pass)))
+}
+
+fn scheme(input: &str) -> IResult<&str, Option<&str>> {
+    opt_split(input, "://")
+}
+
+fn split_at(input: &str) -> IResult<&str, Option<&str>> {
+    opt_split(input, "@")
+}
+
+fn split_colon(input: &str) -> IResult<&str, Option<&str>> {
+    opt_split(input, ":")
+}
+
+fn ssh_host(input: &str) -> IResult<&str, (&str, &str)> {
+    let (rest, (host, colon)) = tuple((take_until(":"), tag(":")))(input)?;
+
+    let (rest, port) = opt(tuple((peek(digit1), take_until(":"), tag(":"))))(rest)?;
+
+    match port {
+        Some((_, port_str, second_colon)) => {
+            let full_host = &input[..(host.len() + colon.len() + port_str.len())];
+            Ok((rest, (full_host, second_colon)))
+        },
+        None => Ok((rest, (host, colon))),
     }
 }
 
-impl<'a> TryFrom<Ref<'a>> for Uri {
-    type Error = UriError;
-
-    fn try_from(refs: Ref<'a>) -> Result<Self, Self::Error> {
-        let Ref { url, atom } = refs;
-
-        let url = url.to_url().ok();
-
-        let (id, version) = atom.render()?;
-
-        tracing::trace!(?url, %id, ?version);
-
-        Ok(Uri {
-            url,
-            tag: id,
-            version,
-        })
-    }
-}
-
-impl<'a> TryFrom<UrlRef<'a>> for Url {
-    type Error = UriError;
-
-    fn try_from(refs: UrlRef<'a>) -> Result<Self, Self::Error> {
-        refs.to_url()
-    }
-}
-
-impl FromStr for Uri {
-    type Err = UriError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let r = Ref::from(s);
-        Uri::try_from(r)
-    }
-}
-
-impl<'a> TryFrom<&'a str> for Uri {
-    type Error = UriError;
-
-    fn try_from(s: &'a str) -> Result<Self, Self::Error> {
-        s.parse()
-    }
-}
-
-impl Display for Uri {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let url = self
-            .url
-            .as_ref()
-            .map(ToString::to_string)
-            .unwrap_or_default();
-        let version = self
-            .version
-            .as_ref()
-            .map(|v| format!("@{v}"))
-            .unwrap_or_default();
-        write!(
-            f,
-            "{}::{}{}",
-            &url.trim_end_matches('/'),
-            self.tag,
-            &version
-        )
-    }
-}
-
-impl Uri {
-    #[must_use]
-    /// Returns a reference to the Url parsed out of the Atom URI.
-    pub fn url(&self) -> Option<&Url> {
-        self.url.as_ref()
-    }
-
-    #[must_use]
-    /// Returns the Atom identifier parsed from the URI.
-    pub fn tag(&self) -> &AtomTag {
-        &self.tag
-    }
-
-    #[must_use]
-    /// Returns the Atom version parsed from the URI.
-    pub fn version(&self) -> Option<&VersionReq> {
-        self.version.as_ref()
-    }
-}
-
-impl Display for UriOrUrl {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            UriOrUrl::Atom(uri) => uri.fmt(f),
-            UriOrUrl::Pin(url) => url.fmt(f),
-        }
-    }
-}
-
-impl FromStr for UriOrUrl {
-    type Err = UriError;
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        if s.contains("::") {
-            s.parse::<Uri>().map(UriOrUrl::Atom)
-        } else {
-            s.parse::<AliasedUrl>().map(UriOrUrl::Pin)
-        }
-    }
+fn url(input: &str) -> IResult<&str, Option<&str>> {
+    opt_split(input, "::")
 }

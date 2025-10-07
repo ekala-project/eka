@@ -19,12 +19,12 @@
 //! ## Architecture
 //!
 //! The crate is organized into several key modules:
-//! - [`manifest`] - Atom manifest format and dependency specification
-//! - [`lock`] - Lockfile format for capturing resolved dependencies
-//! - [`id`] - Atom identification and hashing
-//! - [`uri`] - Atom URI parsing and resolution
-//! - [`store`] - Storage backends for atoms (Git, etc.)
-//! - [`publish`] - Publishing atoms to stores
+//! - [`manifest`] - Defines the Atom manifest format and dependency specification.
+//! - [`lock`] - Manages the lockfile format for capturing resolved dependencies.
+//! - [`id`] - Handles Atom identification, hashing, and origin tracking.
+//! - [`uri`] - Provides tools for Atom URI parsing and resolution.
+//! - [`store`] - Implements storage backends for atoms, such as Git.
+//! - [`publish`] - Contains logic for publishing atoms to various stores.
 //!
 //! ## Git Storage Example
 //!
@@ -39,9 +39,9 @@
 //! 9f17c8c816bd1de6f8aa9c037d1b529212ab2a02        refs/eka/meta/ひらがな/0.1.0/origin
 //! ```
 //!
-//! - The ref under eka/atoms points to the complete atom contents
-//! - The `manifest` ref points to a minimal tree containing only the manifest
-//! - The `origin` ref points to the original source commit for verification
+//! - The ref under `eka/atoms` points to the complete atom contents.
+//! - The `manifest` ref points to a minimal tree containing only the manifest.
+//! - The `origin` ref points to the original source commit for verification.
 //!
 //! ## Basic Usage
 //!
@@ -59,43 +59,46 @@
 //!
 //! ## Features
 //!
-//! - **Type-safe dependency management** with compile-time validation
-//! - **Multiple storage backends** (Git, with extensibility for others)
-//! - **Cross-platform compatibility** with TOML-based serialization
-//! - **Comprehensive error handling** with detailed error types
-//! - **Efficient caching** for remote operations
+//! - **Type-safe dependency management** with compile-time validation.
+//! - **Multiple storage backends** (Git, with extensibility for others).
+//! - **Cross-platform compatibility** with TOML-based serialization.
+//! - **Comprehensive error handling** with detailed error types.
+//! - **Efficient caching** for remote operations.
+
 #![deny(missing_docs)]
+
+use std::sync::LazyLock;
+
+pub use self::core::Atom;
+pub use self::id::{AtomId, AtomTag, Compute, Origin};
+pub use self::lock::{Lockfile, ResolutionMode};
+pub use self::manifest::Manifest;
+pub use self::manifest::deps::ManifestWriter;
+pub use self::publish::ATOM_REFS;
 
 mod core;
 pub mod id;
 pub mod lock;
 pub mod log;
 pub mod manifest;
-
 pub mod publish;
 pub mod store;
 pub mod uri;
-pub use core::Atom;
-use std::sync::LazyLock;
 
-pub use id::{AtomId, AtomTag, Compute, Origin};
-pub use lock::{Lockfile, ResolutionMode};
-pub use manifest::Manifest;
-pub use manifest::deps::ManifestWriter;
-
-const TOML: &str = "toml";
-const LOCK: &str = "lock";
 const ATOM: &str = "atom";
-
 /// The base32 alphabet used for encoding Atom hashes.
 ///
 /// This uses the RFC4648 hex alphabet without padding, which provides a good balance
 /// between readability and compactness for Atom identifiers.
 const BASE32: base32::Alphabet = base32::Alphabet::Rfc4648HexLower { padding: false };
+const LOCK: &str = "lock";
+const TOML: &str = "toml";
 
-/// The filename used for Atom manifest files.
-pub static MANIFEST_NAME: LazyLock<String> = LazyLock::new(|| format!("{}.{}", ATOM, TOML));
-/// The filename used for Atom lock files.
+/// The conventional filename for an Atom lockfile (e.g., `atom.lock`).
+///
+/// This static variable is lazily initialized to ensure it is constructed only when needed.
 pub static LOCK_NAME: LazyLock<String> = LazyLock::new(|| format!("{}.{}", ATOM, LOCK));
-
-pub use publish::ATOM_REFS;
+/// The conventional filename for an Atom manifest (e.g., `atom.toml`).
+///
+/// This static variable is lazily initialized to ensure it is constructed only when needed.
+pub static MANIFEST_NAME: LazyLock<String> = LazyLock::new(|| format!("{}.{}", ATOM, TOML));
