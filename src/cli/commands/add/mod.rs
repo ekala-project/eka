@@ -70,7 +70,7 @@ struct StoreArgs {
 
 /// The main entry point for the `add` subcommand.
 pub(super) async fn run(args: Args) -> Result<()> {
-    let mut writer = atom::ManifestWriter::new(&args.path)?;
+    let mut writer = atom::ManifestWriter::new(&args.path).await?;
 
     if let Some(PinCommand::Pin(pin_args)) = args.pin {
         writer

@@ -384,7 +384,7 @@ impl DirectPin {
 impl ManifestWriter {
     /// Constructs a new `ManifestWriter`, ensuring that the manifest and lock file constraints
     /// are respected.
-    pub fn new(path: &Path) -> Result<Self, DocError> {
+    pub async fn new(path: &Path) -> Result<Self, DocError> {
         use std::fs;
         let path = if path.file_name() == Some(OsStr::new(crate::MANIFEST_NAME.as_str())) {
             path.into()
@@ -402,7 +402,7 @@ impl ManifestWriter {
         } else {
             Lockfile::default()
         };
-        lock.sanitize(&manifest);
+        lock.sanitize(&manifest).await;
 
         Ok(ManifestWriter { doc, lock, path })
     }

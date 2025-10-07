@@ -697,31 +697,62 @@ impl Default for Lockfile {
 }
 
 impl Lockfile {
+    const RESOLUTION_ERR_MSG: &str = "unlocked dependency could not be resolved";
+
     /// Removes any dependencies from the lockfile that are no longer present in the
     /// manifest, ensuring the lockfile only contains entries that are still relevant.
-    pub(crate) fn sanitize(&mut self, manifest: &Manifest) {
+    pub(crate) async fn sanitize(&mut self, manifest: &Manifest) {
         self.deps
             .as_mut()
             .retain(|k, _| manifest.deps.contains_key(k));
-        self.synchronize(manifest);
+        self.synchronize(manifest).await;
     }
 
     /// Updates the lockfile to match the dependencies specified in the manifest.
     /// It resolves any new dependencies, updates existing ones if their version
     /// requirements have changed, and ensures the lockfile is fully consistent.
-    pub(crate) fn synchronize(&mut self, manifest: &Manifest) {
+    pub(crate) async fn synchronize(&mut self, manifest: &Manifest) {
         for (k, v) in manifest.deps.iter() {
             if !self.deps.as_ref().contains_key(k) {
                 match v {
-                    crate::manifest::deps::Dependency::Atom(atom_req) => {
+                    Dependency::Atom(atom_req) => {
                         if let Ok(dep) = atom_req.resolve(k) {
                             self.deps.as_mut().insert(k.to_owned(), Dep::Atom(dep));
                         } else {
-                            tracing::warn!(message = "unlocked dependency could not be resolved", key = %k);
+                            tracing::warn!(message = Self::RESOLUTION_ERR_MSG, key = %k, r#type = "atom");
                         };
                     },
-                    crate::manifest::deps::Dependency::Src(_) => todo!(),
-                    _ => (),
+                    Dependency::Pin(pin_req) => {
+                        if let Ok((_, dep)) = DirectPin::Straight(pin_req.to_owned())
+                            .resolve(Some(k), None, pin_req.flake)
+                            .await
+                        {
+                            self.deps.as_mut().insert(k.to_owned(), dep);
+                        } else {
+                            tracing::warn!(message = Self::RESOLUTION_ERR_MSG, key = %k, r#type = "pin");
+                        }
+                    },
+                    Dependency::TarPin(tar_req) => {
+                        if let Ok((_, dep)) = DirectPin::Tarball(tar_req.to_owned())
+                            .resolve(Some(k), tar_req.import.to_owned(), tar_req.flake)
+                            .await
+                        {
+                            self.deps.as_mut().insert(k.to_owned(), dep);
+                        } else {
+                            tracing::warn!(message = Self::RESOLUTION_ERR_MSG, key = %k, r#type = "pin+tar");
+                        }
+                    },
+                    Dependency::GitPin(git_req) => {
+                        if let Ok(dep) = git_req
+                            .resolve(k, git_req.import.to_owned(), git_req.flake)
+                            .await
+                        {
+                            self.deps.as_mut().insert(k.to_owned(), Dep::PinGit(dep));
+                        } else {
+                            tracing::warn!(message = Self::RESOLUTION_ERR_MSG, key = %k, r#type = "pin+git");
+                        }
+                    },
+                    Dependency::Src(_) => todo!(),
                 }
             } else {
                 match v {
