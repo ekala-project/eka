@@ -215,6 +215,9 @@ pub struct PinGitDep {
     /// The Git repository URL.
     #[serde(serialize_with = "serialize_url", deserialize_with = "deserialize_url")]
     pub url: gix::Url,
+    /// The version which was resolved (if requested).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<Version>,
     /// The resolved revision (commit hash).
     pub rev: GitDigest,
     /// The path to import inside the repo.
@@ -641,19 +644,21 @@ impl GitPin {
         use crate::manifest::deps::GitStrat;
         use crate::store::QueryStore;
 
-        let r = match &self.fetch {
-            GitStrat::Ref(r) => self
-                .repo
-                .get_ref(format!("{}:{}", r, r).as_str(), None)
-                .map_err(|e| LockError::Generic(e.into()))?,
+        let (version, r) = match &self.fetch {
+            GitStrat::Ref(r) => (
+                None,
+                self.repo
+                    .get_ref(format!("{}:{}", r, r).as_str(), None)
+                    .map_err(|e| LockError::Generic(e.into()))?,
+            ),
             GitStrat::Version(req) => {
                 let query = "refs/tags/v*";
                 let refs = self
                     .repo
                     .get_refs([query], None)
                     .map_err(|e| LockError::Generic(e.into()))?;
-                if let Some(r) = GitPin::match_version(req, refs) {
-                    r
+                if let Some((v, r)) = GitPin::match_version(req, refs) {
+                    (Some(v), r)
                 } else {
                     tracing::error!(message = "could not resolve requested version", %self.repo, version = %req);
                     return Err(LockError::Resolve);
@@ -668,12 +673,16 @@ impl GitPin {
             name: key.to_owned(),
             url: self.repo.to_owned(),
             rev: GitDigest::Sha1(id),
+            version,
             import,
             flake,
         })
     }
 
-    fn match_version(req: &VersionReq, refs: impl IntoIterator<Item = Ref>) -> Option<Ref> {
+    fn match_version(
+        req: &VersionReq,
+        refs: impl IntoIterator<Item = Ref>,
+    ) -> Option<(Version, Ref)> {
         refs.into_iter()
             .filter_map(|r| {
                 let (n, ..) = r.unpack();
@@ -683,7 +692,6 @@ impl GitPin {
                 req.matches(&version).then_some((version, r))
             })
             .max_by_key(|(ref version, _)| version.to_owned())
-            .map(|(_, r)| r)
     }
 }
 
@@ -697,6 +705,8 @@ impl Default for Lockfile {
 }
 
 impl Lockfile {
+    const OUT_OF_SYNC: &str =
+        "out of sync dependency could not be resolved, check the version spec";
     const RESOLUTION_ERR_MSG: &str = "unlocked dependency could not be resolved";
 
     /// Removes any dependencies from the lockfile that are no longer present in the
@@ -756,24 +766,57 @@ impl Lockfile {
                 }
             } else {
                 match v {
-                    crate::manifest::deps::Dependency::Atom(atom_req) => {
+                    Dependency::Atom(atom_req) => {
                         let req = atom_req.version();
                         if let Some(Dep::Atom(dep)) = self.deps.as_ref().get(k) {
                             if !req.matches(&dep.version) || &dep.source != atom_req.store() {
-                                tracing::warn!(message = "updating out of date dependency in accordance with spec", key = %k);
+                                tracing::warn!(message = "updating out of date dependency in accordance with spec", key = %k, r#type = "atom");
                                 if let Ok(dep) = atom_req.resolve(k) {
                                     self.deps.as_mut().insert(k.to_owned(), Dep::Atom(dep));
                                 } else {
-                                    tracing::warn!(message = "out of sync dependency could not be resolved, check the version spec", key = %k);
+                                    tracing::warn!(message = Self::OUT_OF_SYNC, key = %k);
                                 };
                             }
-                        } else if let Ok(dep) = atom_req.resolve(k) {
-                            self.deps.as_mut().insert(k.to_owned(), Dep::Atom(dep));
-                        } else {
-                            tracing::warn!(message = "dependency is mislabeled as inproper type, and attempts to rectify failed", key = %k);
-                        };
+                        }
                     },
-                    crate::manifest::deps::Dependency::Src(_) => todo!(),
+                    Dependency::GitPin(git_req) => {
+                        if let Some(Dep::PinGit(dep)) = self.deps.as_ref().get(k) {
+                            let fetch = async |git_req: &GitPin, deps: &mut BTreeMap<Name, Dep>| {
+                                if let Ok(dep) = git_req
+                                    .resolve(k, git_req.import.to_owned(), git_req.flake)
+                                    .await
+                                {
+                                    deps.insert(k.to_owned(), Dep::PinGit(dep));
+                                } else {
+                                    tracing::warn!(
+                                        message = Self::OUT_OF_SYNC,
+                                        key = %k
+                                    );
+                                }
+                            };
+                            if dep.url == git_req.repo {
+                                use crate::manifest::deps::GitStrat;
+                                match git_req.fetch.to_owned() {
+                                    GitStrat::Ref(_) => {
+                                        // do nothing, we don't want to update locked refs unless
+                                        // explicitly requested
+                                    },
+                                    GitStrat::Version(version_req) => {
+                                        if dep
+                                            .version
+                                            .to_owned()
+                                            .is_none_or(|v| !version_req.matches(&v))
+                                        {
+                                            fetch(git_req, self.deps.as_mut()).await;
+                                        }
+                                    },
+                                }
+                            } else {
+                                fetch(git_req, self.deps.as_mut()).await;
+                            }
+                        }
+                    },
+                    Dependency::Src(_) => todo!(),
                     _ => (),
                 }
             }

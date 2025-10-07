@@ -212,11 +212,15 @@ pub struct IndirectPin {
 /// use atom::manifest::deps::ManifestWriter;
 /// use atom::uri::Uri;
 ///
-/// let mut writer = ManifestWriter::new(Path::new("/path/to/atom.toml")).unwrap();
-/// let uri = "my-atom@^1.0.0".parse::<Uri>().unwrap();
-/// let key = "my-atom".parse::<Name>().unwrap();
-/// writer.add_uri(uri, Some(key)).unwrap();
-/// writer.write_atomic().unwrap();
+/// async {
+///     let mut writer = ManifestWriter::new(Path::new("/path/to/atom.toml"))
+///         .await
+///         .unwrap();
+///     let uri = "my-atom@^1.0.0".parse::<Uri>().unwrap();
+///     let key = "my-atom".parse::<Name>().unwrap();
+///     writer.add_uri(uri, Some(key)).unwrap();
+///     writer.write_atomic().unwrap();
+/// };
 /// ```
 pub struct ManifestWriter {
     path: PathBuf,
