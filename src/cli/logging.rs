@@ -9,8 +9,10 @@ use tracing_subscriber::{Layer, fmt};
 use super::{Args, LogArgs};
 
 fn get_log_level(args: LogArgs) -> LevelFilter {
-    if args.quiet {
-        return LevelFilter::ERROR;
+    match args.quiet {
+        0 => (),
+        1 => return LevelFilter::WARN,
+        _ => return LevelFilter::ERROR,
     }
 
     if let Ok(rust_log) = std::env::var(EnvFilter::DEFAULT_ENV) {

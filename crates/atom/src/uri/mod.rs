@@ -74,11 +74,10 @@ mod tests;
 
 use std::collections::HashMap;
 use std::fmt::Display;
-use std::ops::{Deref, Not};
+use std::ops::Deref;
 use std::str::FromStr;
 
-use gix::url as gix_url;
-use gix_url::Url;
+use gix::Url;
 use semver::VersionReq;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -129,6 +128,18 @@ pub struct AliasedUrl {
     r#ref: Option<String>,
 }
 
+impl AliasedUrl {
+    /// get a reference to the underlying URL.
+    pub fn url(&self) -> &Url {
+        &self.url
+    }
+
+    /// get a reference to the optional git ref.
+    pub fn r#ref(&self) -> Option<&String> {
+        self.r#ref.as_ref()
+    }
+}
+
 impl Display for AliasedUrl {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let AliasedUrl { url, r#ref } = self;
@@ -136,7 +147,7 @@ impl Display for AliasedUrl {
             if r.is_empty() {
                 url.fmt(f)
             } else {
-                write!(f, "{}^^{}", url, r)
+                write!(f, "{}^{}", url, r)
             }
         } else {
             url.fmt(f)
@@ -148,20 +159,19 @@ impl FromStr for AliasedUrl {
     type Err = UriError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let (r, url) = match split_carot(s) {
-            Ok((s, Some(u))) => (s, u),
-            Ok((s, None)) => ("", s),
-            _ => return Err(UriError::NoUrl),
-        };
-
-        let url = UrlRef::from(url);
-        let u = url.to_url();
-        let r#ref = r.is_empty().not().then_some(r.to_string());
-        if let Some(url) = u {
-            Ok(AliasedUrl { url, r#ref })
+        let r#ref: Option<String>;
+        let url_str: &str;
+        if let Some((f, r)) = s.split_once('^') {
+            r#ref = Some(r.to_owned());
+            url_str = f;
         } else {
-            Err(UriError::NoUrl)
+            r#ref = None;
+            url_str = s;
         }
+        let url = UrlRef::from(url_str);
+        let url = url.to_url()?;
+
+        Ok(AliasedUrl { url, r#ref })
     }
 }
 
@@ -327,10 +337,6 @@ fn split_at(input: &str) -> IResult<&str, Option<&str>> {
     opt_split(input, "@")
 }
 
-fn split_carot(input: &str) -> IResult<&str, Option<&str>> {
-    opt_split(input, "^^")
-}
-
 fn split_colon(input: &str) -> IResult<&str, Option<&str>> {
     opt_split(input, ":")
 }
@@ -363,7 +369,10 @@ pub enum UriError {
     InvalidVersionReq(#[from] semver::Error),
     /// The Url did not parse correctly.
     #[error(transparent)]
-    UrlParse(#[from] gix_url::parse::Error),
+    UrlParse(#[from] gix::url::parse::Error),
+    /// The Url did not parse correctly.
+    #[error(transparent)]
+    UrlParser(#[from] url::ParseError),
     /// There is no alias in the configuration matching the one given in the URI.
     #[error("The passed alias does not exist: {0}")]
     NoAlias(String),
@@ -444,10 +453,16 @@ impl<'a> UrlRef<'a> {
         alias.and_then(|a| ALIASES.resolve_alias(a).ok().map(|a| (frag, Some(a))))
     }
 
-    fn to_url(&self) -> Option<Url> {
-        use gix_url::Scheme;
+    fn to_url(&self) -> Result<Url, UriError> {
+        use gix::url::Scheme;
 
-        let (frag, resolved) = self.render_alias().unwrap_or((self.frag?, None));
+        let (frag, resolved) = self
+            .render_alias()
+            .unwrap_or((self.frag.unwrap_or(""), None));
+
+        if frag.is_empty() && resolved.is_none() {
+            return Err(UriError::NoUrl);
+        }
 
         #[allow(clippy::unnecessary_unwrap)]
         let (rest, (maybe_host, delim)) = if resolved.is_some() {
@@ -491,12 +506,18 @@ impl<'a> UrlRef<'a> {
         // special case for empty fragments, e.g. foo::my-atom
         let rest = if rest.is_empty() { frag } else { rest };
 
+        let rest = if !frag.contains(rest) && !frag.is_empty() {
+            format!("{}/{}", rest, frag)
+        } else {
+            rest.into()
+        };
+
         let path = if host.is_none() {
             format!("{maybe_host}{delim}{rest}")
         } else if !rest.starts_with('/') {
             format!("/{rest}")
         } else {
-            rest.into()
+            rest.to_owned()
         };
 
         tracing::trace!(
@@ -535,7 +556,7 @@ impl<'a> UrlRef<'a> {
             tracing::debug!(?e);
             e
         })
-        .ok()
+        .map_err(Into::into)
     }
 }
 
@@ -557,7 +578,7 @@ impl<'a> TryFrom<Ref<'a>> for Uri {
     fn try_from(refs: Ref<'a>) -> Result<Self, Self::Error> {
         let Ref { url, atom } = refs;
 
-        let url = url.to_url();
+        let url = url.to_url().ok();
 
         let (id, version) = atom.render()?;
 
@@ -575,10 +596,7 @@ impl<'a> TryFrom<UrlRef<'a>> for Url {
     type Error = UriError;
 
     fn try_from(refs: UrlRef<'a>) -> Result<Self, Self::Error> {
-        match refs.to_url() {
-            Some(url) => Ok(url),
-            None => Err(UriError::NoUrl),
-        }
+        refs.to_url()
     }
 }
 
@@ -654,16 +672,10 @@ impl FromStr for UriOrUrl {
     type Err = UriError;
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        match s.parse::<Uri>() {
-            Ok(uri) => return Ok(UriOrUrl::Atom(uri)),
-            Err(e @ UriError::BadTag(_)) => {
-                if s.contains("::") {
-                    return Err(e);
-                }
-            },
-            Err(e @ UriError::InvalidVersionReq(_)) => return Err(e),
-            Err(_) => (),
+        if s.contains("::") {
+            s.parse::<Uri>().map(UriOrUrl::Atom)
+        } else {
+            s.parse::<AliasedUrl>().map(UriOrUrl::Pin)
         }
-        s.parse::<AliasedUrl>().map(UriOrUrl::Pin)
     }
 }

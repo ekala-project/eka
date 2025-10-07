@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::LazyLock;
 
 use etcetera::BaseStrategy;
@@ -29,11 +30,33 @@ type Aliases<'a> = HashMap<&'a str, &'a str>;
 pub struct Config {
     #[serde(borrow)]
     aliases: Aliases<'static>,
+    pub cache: CacheConfig,
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct CacheConfig {
+    pub root_dir: PathBuf,
+}
+
+impl Default for CacheConfig {
+    fn default() -> Self {
+        Self {
+            root_dir: get_cache(),
+        }
+    }
 }
 
 impl Config {
     pub fn aliases(&self) -> &Aliases<'_> {
         &self.aliases
+    }
+}
+
+fn get_cache() -> PathBuf {
+    if let Ok(c) = etcetera::choose_base_strategy() {
+        c.cache_dir().join("eka")
+    } else {
+        std::env::temp_dir().join("eka")
     }
 }
 
@@ -48,6 +71,7 @@ impl Default for Config {
                 ("sh", "sr.ht"),
                 ("pkgs", "gh:nixos/nixpkgs"),
             ]),
+            cache: CacheConfig::default(),
         }
     }
 }

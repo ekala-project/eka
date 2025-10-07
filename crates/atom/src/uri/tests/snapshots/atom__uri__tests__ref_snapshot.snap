@@ -1,5 +1,6 @@
 ---
 source: crates/atom/src/uri/tests/mod.rs
+assertion_line: 41
 expression: results
 ---
 - url:
@@ -90,6 +91,14 @@ expression: results
   atom:
     tag: zlib
     version: ^1
+- url:
+    scheme: ~
+    user: ~
+    pass: ~
+    frag: "pkgs:foo/bar"
+  atom:
+    tag: baz
+    version: ~
 - url:
     scheme: https
     user: user

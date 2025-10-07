@@ -20,13 +20,7 @@ pub(crate) struct GitArgs {
     /// Specifies a revision using Git's extended SHA-1 syntax.
     /// This can be a commit hash, branch name, tag, or a relative
     /// reference like HEAD~3 or master@{yesterday}.
-    #[arg(
-        long,
-        short,
-        default_value = "HEAD",
-        verbatim_doc_comment,
-        name = "REVSPEC"
-    )]
+    #[arg(long, short, default_value = "HEAD", name = "REVSPEC")]
     spec: String,
 }
 

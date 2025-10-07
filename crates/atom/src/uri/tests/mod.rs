@@ -12,6 +12,7 @@ const ALIASES: &[&str] = &[
     "gh:owner/repo::λ@^1",
     "git@gh:owner/repo::λ@^1",
     "pkgs::zlib@^1",
+    "pkgs:foo/bar::baz",
     "https://user:password@example.com/my/repo::id@^0.2",
     "user:password@example.com/my/repo::id@^0.2",
     "user@example.com/my/repo::id@^0.2",
@@ -27,11 +28,11 @@ const ALIASES: &[&str] = &[
 ];
 
 const ALIASED_URLS: &[&str] = &[
-    "gh:foo/bar^^master",
-    "bb^^refs/heads/my-work",
+    "gh:foo/bar^master",
+    "bb^refs/heads/my-work",
     "https://gl:bar/baz",
-    "pkgs^^main",
-    "git@gh:owner/repo^^master",
+    "pkgs^main",
+    "git@gh:owner/repo^master",
 ];
 
 #[test]

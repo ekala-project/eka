@@ -16,9 +16,7 @@
 //!
 //! - [`Dependency`] - The main dependency structure containing all dependency types
 //! - [`AtomReq`] - Requirements for atom dependencies
-//! - [`PinReq`] - Requirements for pinned dependencies
 //! - [`SrcReq`] - Requirements for build-time sources
-//! - [`PinType`] - Enum distinguishing between direct and indirect pins
 //!
 //! ## Example Usage
 //!
@@ -47,11 +45,11 @@
 //! All dependency types use `#[serde(deny_unknown_fields)]` to ensure strict
 //! validation and prevent typos in manifest files. Optional fields are properly
 //! handled with `skip_serializing_if` to keep the TOML output clean.
+use std::ffi::OsStr;
 use std::marker::PhantomData;
 use std::path::PathBuf;
 
 use bstr::ByteSlice;
-use gix::url as gix_url;
 use semver::VersionReq;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -106,7 +104,11 @@ pub enum Dependency {
     /// An atom dependency variant.
     Atom(AtomReq),
     /// A direct pin to an external source variant.
-    Pin(PinReq),
+    Pin(StraightPin),
+    /// A tarball pin to an external source variant.
+    TarPin(TarPin),
+    /// A git pin to an external source variant.
+    GitPin(GitPin),
     /// A dependency fetched at build-time as an FOD.
     Src(SrcReq),
 }
@@ -123,20 +125,7 @@ pub struct AtomReq {
     version: VersionReq,
     /// The Git URL or local path where the atom's repository can be found.
     #[serde(serialize_with = "serialize_url", deserialize_with = "deserialize_url")]
-    store: gix_url::Url,
-}
-
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
-#[serde(untagged)]
-/// Represents the different types of pins for dependencies.
-///
-/// This enum distinguishes between direct pins (pointing to external URLs)
-/// and indirect pins (referencing dependencies from other atoms).
-pub enum PinType {
-    /// A direct pin to an external source with a URL.
-    Direct(DirectPin),
-    /// An indirect pin referencing a dependency from another atom.
-    Indirect(IndirectPin),
+    store: gix::url::Url,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -144,7 +133,9 @@ pub enum PinType {
 /// Represents the two types of direct pins.
 pub enum DirectPin {
     /// A simple pin, with an optional unpack field.
-    Straight(Pin),
+    Straight(StraightPin),
+    /// A pin pointing to a tarball which will be unpacked before hashing.
+    Tarball(TarPin),
     /// A git pin, with a ref or version.
     Git(GitPin),
 }
@@ -152,12 +143,35 @@ pub enum DirectPin {
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
 #[serde(deny_unknown_fields)]
 /// Represents a simple pin, with an optional unpack field.
-pub struct Pin {
+pub struct StraightPin {
     /// The URL of the pinned resource.
     pub pin: Url,
-    /// If `true`, the resource will be unpacked after fetching.
-    #[serde(skip_serializing_if = "not")]
-    pub unpack: bool,
+    /// A bool representing whether the pin represents a Nix flake, changing the behavior of the
+    /// `import` field, if so.
+    ///
+    /// This field is omitted from serialization if false.
+    #[serde(default, skip_serializing_if = "not")]
+    pub flake: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+#[serde(deny_unknown_fields)]
+/// Represents a simple pin, with an optional unpack field.
+pub struct TarPin {
+    /// The URL of the tarball resource.
+    pub tar: Url,
+    /// A bool representing whether the pin represents a Nix flake, changing the behavior of the
+    /// `import` field, if so.
+    ///
+    /// This field is omitted from serialization if false.
+    #[serde(default, skip_serializing_if = "not")]
+    pub flake: bool,
+    /// An optional relative path within the fetched source, used to import Nix expressions; the
+    /// precise behavior of which depends on whether or not the pin is a flake.
+    ///
+    /// This field is omitted from serialization if None.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub import: Option<PathBuf>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -167,11 +181,24 @@ pub struct Pin {
 /// This struct is used when a dependency is pinned directly to a Git repository.
 pub struct GitPin {
     /// The URL of the Git repository.
-    pub repo: Url,
+    #[serde(serialize_with = "serialize_url", deserialize_with = "deserialize_url")]
+    pub repo: gix::Url,
     /// The fetching strategy, either by a specific ref (branch, tag, commit)
     /// or by resolving a semantic version tag.
     #[serde(flatten)]
     pub fetch: GitStrat,
+    /// A bool representing whether the pin represents a Nix flake, changing the behavior of the
+    /// `import` field, if so.
+    ///
+    /// This field is omitted from serialization if false.
+    #[serde(default, skip_serializing_if = "not")]
+    pub flake: bool,
+    /// An optional relative path within the fetched source, used to import Nix expressions; the
+    /// precise behavior of which depends on whether or not the pin is a flake.
+    ///
+    /// This field is omitted from serialization if None.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub import: Option<PathBuf>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -203,28 +230,6 @@ pub struct IndirectPin {
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
-/// Represents a direct pin to an external source, such as a URL or tarball.
-///
-/// This struct is used to specify pinned dependencies in the manifest,
-/// which can be either direct (pointing to URLs) or indirect (referencing
-/// dependencies from other atoms).
-#[serde(deny_unknown_fields)]
-pub struct PinReq {
-    /// An optional relative path within the fetched source, useful for Nix imports
-    /// or accessing a subdirectory within an archive.
-    ///
-    /// This field is omitted from serialization if None.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub path: Option<PathBuf>,
-    /// The kind of pin, which can be a direct URL, a Git repository, or an
-    /// indirect reference to a dependency from another atom.
-    ///
-    /// This field is flattened in the TOML serialization.
-    #[serde(flatten)]
-    pub kind: PinType,
-}
-
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
 /// Represents a dependency which is fetched at build time as an FOD.
 #[serde(deny_unknown_fields)]
 pub struct SrcReq {
@@ -243,7 +248,7 @@ impl AtomReq {
     /// # Returns
     ///
     /// A new `AtomReq` instance with the provided version and location.
-    pub fn new(version: VersionReq, store: gix_url::Url, tag: Option<AtomTag>) -> Self {
+    pub fn new(version: VersionReq, store: gix::url::Url, tag: Option<AtomTag>) -> Self {
         Self {
             version,
             store,
@@ -262,7 +267,7 @@ impl AtomReq {
     }
 
     /// return a reference to the store location
-    pub fn store(&self) -> &gix_url::Url {
+    pub fn store(&self) -> &gix::url::Url {
         &self.store
     }
 
@@ -299,6 +304,15 @@ pub enum DocError {
     /// Version resolution error
     #[error(transparent)]
     Semver(#[from] semver::Error),
+    /// Utf conversion error
+    #[error(transparent)]
+    Utf8(#[from] bstr::Utf8Error),
+    /// URL parse error
+    #[error(transparent)]
+    Url(#[from] url::ParseError),
+    /// Generic Error
+    #[error(transparent)]
+    Error(#[from] crate::lock::BoxError),
 }
 
 impl<T: Serialize + DeserializeOwned> TypedDocument<T> {
@@ -325,11 +339,7 @@ impl<T: Serialize> AsMut<DocumentMut> for TypedDocument<T> {
 }
 impl TypedDocument<Manifest> {
     /// Write an atom dependency into the manifest document
-    pub fn write_atom_dep(
-        &mut self,
-        key: &str,
-        req: &AtomReq,
-    ) -> Result<(), toml_edit::ser::Error> {
+    pub fn write_dep(&mut self, key: &str, req: &Dependency) -> Result<(), toml_edit::ser::Error> {
         req.write_dep(key, self)
     }
 }
@@ -340,7 +350,7 @@ impl AsMut<AtomReq> for AtomReq {
     }
 }
 
-impl WriteDeps<Manifest> for AtomReq {
+impl WriteDeps<Manifest> for Dependency {
     type Error = toml_edit::ser::Error;
 
     fn write_dep(&self, key: &str, doc: &mut TypedDocument<Manifest>) -> Result<(), Self::Error> {
@@ -360,12 +370,12 @@ impl WriteDeps<Manifest> for AtomReq {
     }
 }
 
-fn not(b: &bool) -> bool {
+pub(crate) fn not(b: &bool) -> bool {
     !b
 }
 
 use serde::{Deserializer, Serializer};
-pub(crate) fn serialize_url<S>(url: &gix_url::Url, serializer: S) -> Result<S::Ok, S::Error>
+pub(crate) fn serialize_url<S>(url: &gix::url::Url, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
 {
@@ -373,20 +383,20 @@ where
     serializer.serialize_str(&str)
 }
 
-pub(crate) fn deserialize_url<'de, D>(deserializer: D) -> Result<gix_url::Url, D::Error>
+pub(crate) fn deserialize_url<'de, D>(deserializer: D) -> Result<gix::url::Url, D::Error>
 where
     D: Deserializer<'de>,
 {
     use bstr::BString;
     let name = BString::deserialize(deserializer)?;
-    gix_url::parse(name.as_bstr())
+    gix::url::parse(name.as_bstr())
         .map_err(|e| <D::Error as serde::de::Error>::custom(e.to_string()))
 }
 
 use std::path::Path;
 
 use crate::id::Name;
-use crate::uri::Uri;
+use crate::uri::{AliasedUrl, Uri};
 impl ManifestWriter {
     /// Construct a new instance of a manifest writer ensuring all the constraints necessary to keep
     /// the lock and manifest in sync are respected.
@@ -437,6 +447,37 @@ impl ManifestWriter {
         Ok(())
     }
 
+    /// Function to add a user requested pin url to the manifest and lock files, ensuring they
+    /// remain in sync.
+    pub async fn add_url(
+        &mut self,
+        url: AliasedUrl,
+        key: Option<Name>,
+        import: Option<PathBuf>,
+        flake: bool,
+    ) -> Result<(), DocError> {
+        let direct = DirectPin::determine(&url, import.as_ref(), flake)?;
+        let (key, lock_entry) = direct.resolve(key.as_ref(), import, flake).await?;
+
+        let dep = match direct {
+            DirectPin::Straight(straight_pin) => Dependency::Pin(straight_pin),
+            DirectPin::Tarball(tar_pin) => Dependency::TarPin(tar_pin),
+            DirectPin::Git(git_pin) => Dependency::GitPin(git_pin),
+        };
+
+        self.doc.write_dep(&key, &dep)?;
+        if self
+            .lock
+            .deps
+            .as_mut()
+            .insert(key.to_owned(), lock_entry)
+            .is_some()
+        {
+            tracing::warn!("updating lock entry for `{}`", key);
+        }
+        Ok(())
+    }
+
     /// Function to add a user requested atom uri to the manifest and lock files, ensuring they
     /// remain in sync.
     pub fn add_uri(&mut self, uri: Uri, key: Option<Name>) -> Result<(), DocError> {
@@ -459,7 +500,7 @@ impl ManifestWriter {
         };
 
         if let Some(url) = url {
-            let mut atom: AtomReq = AtomReq::new(
+            let mut atom = AtomReq::new(
                 req.to_owned(),
                 url.to_owned(),
                 (&key != tag).then(|| tag.to_owned()),
@@ -471,7 +512,9 @@ impl ManifestWriter {
                 atom.set_version(version);
             };
 
-            self.doc.write_atom_dep(key.as_str(), &atom)?;
+            let dep = Dependency::Atom(atom);
+
+            self.doc.write_dep(key.as_str(), &dep)?;
             if self
                 .lock
                 .deps
@@ -487,5 +530,52 @@ impl ManifestWriter {
         }
 
         Ok(())
+    }
+}
+
+impl DirectPin {
+    fn determine(
+        url: &AliasedUrl,
+        import: Option<&PathBuf>,
+        flake: bool,
+    ) -> Result<Self, DocError> {
+        let r = url.r#ref();
+        let url = url.url();
+        let pin = if url.scheme == gix::url::Scheme::File {
+            // TODO: handle file paths to sources
+            todo!()
+        } else if let Some(r) = r {
+            let maybe_req = VersionReq::parse(r);
+            let fetch = if let Ok(req) = maybe_req {
+                GitStrat::Version(req)
+            } else {
+                GitStrat::Ref(r.to_owned())
+            };
+            DirectPin::Git(GitPin {
+                repo: url.to_owned(),
+                fetch,
+                flake,
+                import: import.map(ToOwned::to_owned),
+            })
+        } else {
+            let path = url.path.to_path()?;
+            if path.extension() == Some(OsStr::new("tar"))
+                || path
+                    .file_name()
+                    .is_some_and(|f| f.to_str().is_some_and(|f| f.contains(".tar.")))
+            {
+                DirectPin::Tarball(TarPin {
+                    tar: url.to_string().parse()?,
+                    flake,
+                    import: import.map(ToOwned::to_owned),
+                })
+            } else {
+                DirectPin::Straight(StraightPin {
+                    pin: url.to_string().parse()?,
+                    flake,
+                })
+            }
+        };
+        Ok(pin)
     }
 }

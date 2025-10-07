@@ -299,7 +299,7 @@ impl<'repo> EkalaRemote for gix::Remote<'repo> {
 pub(super) const V1_ROOT: &str = "refs/tags/ekala/root/v1";
 const V1_ROOT_SEMVER: &str = "1.0.0";
 
-fn to_id(r: Ref) -> ObjectId {
+pub(crate) fn to_id(r: Ref) -> ObjectId {
     let (_, t, p) = r.unpack();
     // unwrap can't fail here as at least one of these is guaranteed Some
     p.or(t).map(ToOwned::to_owned).unwrap()
