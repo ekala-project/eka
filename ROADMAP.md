@@ -2,7 +2,7 @@
 
 This living document outlines the development roadmap for `eka`, `atom-nix`, and eventually `eos`. The immediate goal is to achieve a usable user demo, with an eye towards a stable 1.0 release. To follow along with more specific architectural decisions, checkout the [ADRs](./adrs).
 
-## Milestone: Usable Demo
+## Milestone: [Usable Demo](https://github.com/ekala-project/eka/milestone/2)
 
 ### Core Atom Format & Publishing
 
@@ -15,7 +15,7 @@ This living document outlines the development roadmap for `eka`, `atom-nix`, and
   - [x] **Reproducible Atom Commits:** Atom commit headers are augmented with the source path and content hash. The commit timestamp is held constant to ensure the final atom commit hash is fully reproducible.
   - [x] **Efficient Version Discovery:** Publish atoms to versioned tags under `refs/eka/atoms/<tag>/<version>`. This allows for extremely cheap and efficient discovery of available atom versions by querying git references, often with server-side filtering, without needing to fetch any git objects.
 
-### Configuration & Dependency Management
+### [Configuration & Dependency Management](https://github.com/ekala-project/eka/issues/24)
 
 - [x] **Configuration:** Implement parsing for a basic `eka.toml` configuration file.
 - [x] **Atom URIs & Aliases:** Implement a user-friendly URI scheme for referencing atoms, with support for aliases in the configuration file for both atom URIs and legacy URLs, as detailed in [ADR #5](adrs/0005-uri-format.md).
@@ -25,7 +25,7 @@ This living document outlines the development roadmap for `eka`, `atom-nix`, and
 - [x] **`eka add` Legacy Support:** Finalize support for locking legacy pin-style dependencies (e.g., Nix flakes URLs) to facilitate interoperability, as outlined in [ADR #3](adrs/0003-pure-rust-pin-dependencies.md).
 - [ ] **`eka resolve` Command:** Implement a command to synchronize the lock file with the manifest without adding new dependencies.
 
-### Evaluation & Execution
+### [Evaluation & Execution](https://github.com/ekala-project/eka/issues/25)
 
 - [ ] **User Entrypoint:** Design and implement a basic user entrypoint for invoking atom evaluations. This will include evaluation-time sandboxing to provide strong reproducibility guarantees.
 - [ ] **`atom-nix` Integration:** Integrate the `atom-nix` module system into the main repository, establishing a monorepo structure.
