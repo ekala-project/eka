@@ -4,6 +4,22 @@
 
 This repository currently contains `eka`, a next-generation frontend for the [Ekala Project's](https://github.com/ekala-project) Nix-based infrastructure. Unlike the vast majority of existing Nix tooling, `eka` is not a wrapper around the `nix` CLI. It is a fundamentally new, native tool designed to provide a more efficient, approachable, and decentralized development experience.
 
+## Why Atom? The Future of Package Management
+
+The Atom Format is more than just a new packaging standard; it's a fundamental rethinking of how we distribute and manage software. It addresses the inherent limitations of centralized package registries, paving the way for a more secure, efficient, and decentralized future.
+
+### A Decentralized Replacement for Centralized Registries
+
+Atom is a complete, decentralized replacement for traditional package registries like npm, PyPI, or crates.io. It solves the same core problem of dependency management without relying on a single point of failure. By leveraging the distributed nature of Git, Atom ensures that package availability is not tied to a single entity, eliminating a critical vulnerability in the software supply chain.
+
+### End-to-End Security by Design
+
+Atoms are not "copies" of source code like traditional packages. They are cryptographically verifiable, immutable slices of the source repository itself. This is achieved by creating a new, lightweight reference to the same underlying Git data objects that comprise the source code. This git-native approach means there is no possibility for drift between the source and the packaged code because no files are ever copied. While there are practical considerations (like the ongoing transition from SHA-1), the model provides a foundation for a fully end-to-end secure pipeline—from source code, to package, to the final build artifact when combined with tools like Nix. The implications for supply chain security are profound.
+
+### Efficiency Without Compromise
+
+Typically, developers face a trade-off between the convenience of centralized registries and the complexities of decentralized systems. Atom eliminates this trade-off. By intelligently creating unambiguous cryptographic IDs for atoms, it opens up a world of possibilities for highly efficient, decentralized build pipelines that can outperform even the largest centralized systems. We are building the foundation for a system that is not only more secure and resilient but also orders of magnitude more efficient than what is possible with today's centralized models.
+
 This work is centered on four core components, which will eventually be unified into a single monorepo:
 
 - **Eka:** A user-facing CLI that provides a reasonable, statically-determinable interface for managing dependencies and builds.
@@ -20,8 +36,6 @@ This work is centered on four core components, which will eventually be unified 
 ## Core Concepts
 
 ### The Atom Format: Verifiable, Versioned Repository Slices
-
-Atoms are the fundamental building block of the Ekala ecosystem. An atom is a cryptographically secure, content-addressed, and uniquely identifiable slice of a Git repository. This is achieved through a git-native publishing model that eliminates the need for a central registry.
 
 **Key Features:**
 
