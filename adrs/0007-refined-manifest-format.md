@@ -73,8 +73,8 @@ bar = { atom = "source_a", version = "^1" }
 # with the dependency's own tag.
 bun = { atom = "https://some.com/atom/repo", version = "^2", tag = "bar" }
 
-# A tarball pin.
-baz = { tar = "https://example/my/tarball.tar.gz" }
+# A tarball pin. The URL can optionally contain a `${version}` placeholder.
+baz = { tar = "https://example/my/tarball-${version}.tar.gz", version = { from = "git_source", spec = "^1.2" } }
 
 # A git pin using a named source.
 buz = { git = "git_source", ref = "master" }
@@ -82,19 +82,22 @@ buz = { git = "git_source", ref = "master" }
 # A git pin with a version constraint, resolved via git tags.
 my_repo = { git = "https://gitlab.com/foo/bar.git", version = "^2" }
 
-# A generic pin from a URL.
-buzz = { pin = "https://some.com/external/pin.nix" }
+# A generic pin from a URL, with optional version resolution.
+buzz = { pin = "https://some.com/external/pin-${version}.nix", version = { from = "git_source", spec = ">= 2.0" } }
 
-# A build-time source dependency.
-my_src = { src = "https://foo.com/my/build/src.tar.gz" }
+# A build-time source dependency with version resolution.
+my_src = {
+  src = "https://foo.com/my/build/${version}/src.tar.gz",
+  version = { from = "git_source", spec = "^1" }
+}
 ```
 
 ### The `atom.lock` Lock File Format
 
-The lock file will contain an array of tables, `[[deps]]`, where each entry represents a fully resolved dependency.
+The lock file will contain an array of tables, `[[bonds]]`, where each entry represents a fully resolved dependency.
 
 ```toml
-[[deps]]
+[[bonds]]
 type = "atom"
 tag = "foo"
 version = "1.0.1" # Exact resolved version
@@ -104,7 +107,7 @@ rev = "<git_rev>"
 source = "../local/resolved/path"
 id = "<blake3_sum_of_atom_id>"
 
-[[deps]]
+[[bonds]]
 type = "atom"
 tag = "bar"
 version = "1.0.3"
@@ -112,7 +115,7 @@ rev = "<git_rev>"
 source = "https://some.com/atom/repo"
 id = "<blake3_sum_of_atom_id>"
 
-[[deps]]
+[[bonds]]
 type = "atom"
 tag = "bar"
 # The `key` field is present when the manifest key differs from the atom's tag.
@@ -122,25 +125,25 @@ rev = "<git_rev>"
 source = "ssh://git@some.com/atom/repo"
 id = "<blake3_sum_of_atom_id>"
 
-[[deps]]
+[[bonds]]
 type = "pin+tar"
 name = "baz"
 url = "https://example/my/tarball.tar.gz"
 hash = "sha256:0lkjn8q6p0c18acj43pj1cbiyixnf98wvkbgppr5vz73qkypii2g"
 
-[[deps]]
+[[bonds]]
 type = "git"
 name = "my_repo"
 url = "https://my.com/cool/repo"
 rev = "aa0ebc256a5b0540e9df53c64ef6930471c98407"
 
-[[deps]]
+[[bonds]]
 type = "pin"
 name = "buzz"
 url = "https://some.com/external/pin.nix"
 hash = "sha256:1spc2lsx16xy612lg8rsyd34j9fy6kmspxcvcfmawkxmyvi32g9v"
 
-[[deps]]
+[[bonds]]
 type = "build"
 name = "my_src"
 url = "https://foo.com/my/build/src.tar.gz"
@@ -158,7 +161,6 @@ hash = "sha256-hClMprWwiEQe7mUUToXZAR5wbhoVFi+UuqLL2K/eIPw="
   - The format is easily extensible for future dependency types.
 
 - **Negative:**
-  - This is a breaking change and will require a migration path for existing `atom.toml` files.
   - The parser and resolver logic will need to be rewritten to support the new format.
 
 ### Synergy with CLI URI Resolution
