@@ -1,8 +1,8 @@
-# Eka: A Foundational Frontend for a Better Nix Experience
+# Eka: A New Foundation for the Software Supply Chain
 
 > ⚠️ **Warning:** Eka is in early experimental stages. Features are unstable and subject to change.
 
-This repository currently contains `eka`, a next-generation frontend for the [Ekala Project's](https://github.com/ekala-project) Nix-based infrastructure. Unlike the vast majority of existing Nix tooling, `eka` is not a wrapper around the `nix` CLI. It is a fundamentally new, native tool designed to provide a more efficient, approachable, and decentralized development experience.
+This repository contains `eka`, a native frontend for the Atom Protocol, a new standard for decentralized software distribution. `eka` is a fundamentally new tool designed from the ground up to provide a more efficient, secure, and approachable development experience. It is the first step towards building a more resilient and transparent software supply chain, free from the single points of failure inherent in traditional, centralized package registries.
 
 ## Why Atom? The Future of Package Management
 
@@ -26,6 +26,20 @@ This work is centered on four core components, which will eventually be unified 
 - **[Atom-Nix][atom-nix]:** A Nix module system for evaluating atoms.
 - **Atom Format:** A verifiable, versioned, and git-native format for publishing source code, designed for decentralized distribution and end-to-end integrity.
 - **Eos (Future):** A planned distributed, content-addressed build scheduler that will eventually power Eka's evaluation backend.
+
+## The Nix Connection: A Foundation for Reproducible Builds
+
+While the Atom Protocol's ambition is to be a universal, backend-agnostic standard, a verifiable build system is essential to translate its source code integrity into truly reproducible artifacts. `eka`'s inaugural implementation is therefore deeply integrated with the Nix ecosystem, which provides a powerful foundation for this vision.
+
+The architecture is best understood as three distinct, decoupled layers:
+
+1.  **Package Management:** This is `eka`'s primary domain. It manages `atom` dependencies and can even lock legacy Nix dependencies without requiring a local Nix installation. By creating a universal, decentralized source packaging layer, Atom simplifies the entire toolchain. The need for complex adapters like `*2nix` tools is reduced, as `eka` could natively understand and lock theoretical `crate` atoms just as easily as it does Nix atoms.
+2.  **Evaluation:** This layer transforms dynamic, high-level code into a static, low-level build recipe (a Nix derivation). It resolves all variables and functions to produce a precise, unambiguous plan for the build.
+3.  **Build:** This final layer takes the static build recipe from the evaluation stage and executes it in a sandboxed environment to produce the final, bit-for-bit identical artifact.
+
+`eka` orchestrates this entire process, but the long-term vision is for the evaluation and build layers to be handled by a dedicated, distributed build scheduler, **Eos**. This clean separation of concerns is a core design principle, and it will eventually allow for a highly efficient, decentralized system where different stages of the pipeline can run on different machines. Nudging developers to think about these layers in a more disciplined fashion is a key goal, as the status quo of the Nix ecosystem is to have them tightly coupled.
+
+This architecture ensures the Atom Protocol itself remains generic. Its ambition is to become a fully language-agnostic standard by its first stable release. In the future, other ecosystems could adopt it directly. For example, `cargo` could be taught to publish crates in the Atom format, with no knowledge of whether they would ultimately be consumed by a Nix build system. The format is a foundational layer, not the entire pipeline.
 
 ## Design Goals
 
