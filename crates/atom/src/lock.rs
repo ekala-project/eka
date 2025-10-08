@@ -652,7 +652,7 @@ impl GitPin {
                     .map_err(|e| LockError::Generic(e.into()))?,
             ),
             GitStrat::Version(req) => {
-                let query = "refs/tags/v*";
+                let query = "refs/tags/*:refs/tags/*";
                 let refs = self
                     .repo
                     .get_refs([query], None)
@@ -686,9 +686,7 @@ impl GitPin {
         refs.into_iter()
             .filter_map(|r| {
                 let (n, ..) = r.unpack();
-                let path = PathBuf::from(n.to_str().ok()?);
-                let v_str = &path.file_name()?.to_str()?[1..];
-                let version = Version::parse(v_str).ok()?;
+                let version = extract_and_parse_semver(n.to_str().ok()?)?;
                 req.matches(&version).then_some((version, r))
             })
             .max_by_key(|(ref version, _)| version.to_owned())
@@ -837,6 +835,34 @@ impl<'de> Deserialize<'de> for WrappedNixHash {
         })?;
         Ok(WrappedNixHash(hash))
     }
+}
+
+use lazy_regex::{Lazy, Regex, lazy_regex};
+
+static SEMVER_REGEX: Lazy<Regex> = lazy_regex!(
+    r#"(?P<major>0|[1-9]\d*)\.(?P<minor>0|[1-9]\d*)\.(?P<patch>0|[1-9]\d*)(?:-(?P<prerelease>(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+(?P<buildmetadata>[0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?"#
+);
+
+fn extract_and_parse_semver(input: &str) -> Option<Version> {
+    let re = SEMVER_REGEX.to_owned();
+    println!("{}", input);
+    let captures = re.captures(input)?;
+
+    // Construct the SemVer string from captured groups
+    let version_str = format!(
+        "{}.{}.{}{}{}",
+        &captures["major"],
+        &captures["minor"],
+        &captures["patch"],
+        captures
+            .name("prerelease")
+            .map_or(String::new(), |m| format!("-{}", m.as_str())),
+        captures
+            .name("buildmetadata")
+            .map_or(String::new(), |m| format!("+{}", m.as_str()))
+    );
+
+    Version::parse(&version_str).ok()
 }
 
 /// Extracts a filename from a URL, suitable for use as a dependency name.
