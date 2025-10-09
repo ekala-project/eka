@@ -29,7 +29,7 @@ This work is centered on four core components, which will eventually be unified 
 
 ## The Nix Connection: A Foundation for Reproducible Builds
 
-While the Atom Protocol's ambition is to be a universal, backend-agnostic standard, a verifiable build system is essential to translate its source code integrity into truly reproducible artifacts. `eka`'s inaugural implementation is therefore deeply integrated with the Nix ecosystem, which provides a powerful foundation for this vision.
+While the Atom Protocol's ambition is to be a universal, language-agnostic standard, a verifiable build system is essential to translate its source code integrity into truly reproducible artifacts. `eka`'s inaugural implementation is therefore deeply integrated with the Nix ecosystem, which provides a powerful foundation for this vision.
 
 The architecture is best understood as three distinct, decoupled layers:
 
