@@ -1,4 +1,4 @@
-# 7. A Declarative, Source-Grouped Manifest Format
+# 7. Atom Manifest Dependency Format
 
 - **Status:** Proposed
 - **Deciders:** eka-devs
@@ -6,36 +6,42 @@
 
 ## Context and Problem Statement
 
-The `eka` project has reached a stage where a stable, well-defined manifest format (`atom.toml`) is required. This document proposes the first official, stable format, designed to be robust, intuitive, and philosophically aligned with `eka`'s decentralized, backend-agnostic vision.
+The `eka` project has reached a stage where a stable, well-defined dependency format for the `atom.toml` manifest is required. This document proposes the first official, stable format for the dependency sections of the manifest, designed to be robust, intuitive, and philosophically aligned with `eka`'s decentralized, backend-agnostic vision.
 
-The key design goals are:
+This ADR is intentionally scoped to the declaration of dependencies. Other manifest concerns, such as build configuration, will be addressed in future ADRs.
 
-1.  **Clarity and Explicitness:** The format must be declarative and easy to analyze statically.
+The key design goals for the dependency format are:
+
+1.  **Clarity and Explicitness:** The format must be declarative, self-describing, and easy to analyze statically.
 2.  **Embrace Decentralization:** The format must support source mirrors and make the origin of dependencies obvious, naturally handling potential name conflicts.
-3.  **Distinguish Modern and Legacy Dependencies:** The format must provide a primary, backend-agnostic dependency type (`atom`) while also offering a clear, namespaced mechanism for integrating with legacy, platform-specific dependencies (e.g., traditional Nix fetchers).
+3.  **Distinguish Buildable Atoms from other Dependencies:** The format must provide a primary interface for buildable atoms (i.e. atoms that are intended to produce an artifact), while also offering a clear, namespaced mechanism for integrating with backend-specific dependencies (e.g., traditional Nix fetchers).
+
+## Core Concepts: Atom Identity
+
+To understand the manifest, it's essential to understand how an atom is identified. An atom's identity is a combination of its content and its location, designed to be cryptographically unique and verifiable.
+
+- **Package Set:** A collection of atoms, typically stored in a Git repository. A key principle is that all atoms within a set must have a unique `tag`.
+- **Repository Root Hash:** The very first commit in a Git repository's history. This serves as a unique, immutable identifier for that repository, even across different mirrors.
+- **Atom Tag:** A user-defined, unique identifier for a package within a given set.
+- **Semantic Version:** All atoms must have a semantic version, which is critical for reliable dependency resolution.
+- **Cryptographic ID:** In the lock file, an atom's final, globally unique ID is a cryptographic hash derived from its `tag` and the `Repository Root Hash` of its set. This ensures that an atom with the tag `foo` from one set can never be confused with an atom named `foo` from another.
 
 ## Decision
 
-We will adopt a new manifest format that cleanly separates backend-agnostic **atoms** from backend-specific **legacy dependencies**.
-
-This design's core principles are:
-
-1.  **Atoms are the Primary Dependency Type:** They are backend-agnostic and grouped by source, which inherently namespaces them and solves name conflicts.
-2.  **Legacy Dependencies are Namespaced:** To support integration with existing ecosystems, the format provides platform-specific tables (e.g., `[legacy.nix]`). This creates a clear separation between the modern `atom` format and any legacy, platform-specific fetchers, leaving the door open for future backends (e.g., `[legacy.guix]`) without cluttering the top-level namespace.
-3.  **Content-Addressed Sources:** The identity of an atom source is determined by a hash of its content, making the lock file robust and location-independent.
+We will adopt a new manifest format that cleanly separates atom dependencies, from platform-specific ones, using a clear and conventional naming scheme.
 
 ### The `atom.toml` Manifest Format
 
-#### `[atom]` Table
+#### `[package]` Table
 
-Defines metadata about the current project. Its `[atom.sources]` sub-table defines the available sources for atom dependencies. A source can be a single URL, a list of mirror URLs, or the special value `"::"` for the local repository.
+Defines metadata about the current project. Its `[package.sets]` sub-table defines the available sources for atom dependencies. A set can be a single URL, a list of mirror URLs, or the special value `"::"` for the local repository.
 
 ```toml
-[atom]
+[package]
 tag = "my-project"
 version = "0.1.0"
 
-[atom.sources]
+[package.sets]
 # A single remote source.
 company-atoms = "git@github.com:our-company/atoms"
 # A remote source with mirrors. The resolver will try them in order.
@@ -45,151 +51,144 @@ public-registry = [ "https://registry-a.com/atoms", "https://registry-b.com/atom
 local-atoms = [ "::", "https://github.com/our-company/more-atoms" ]
 ```
 
-#### `[atoms.<source>]` Tables
+#### `[deps]` Table
 
-The primary mechanism for declaring dependencies. These are fundamentally backend-agnostic and are always simple key-value pairs of `<atom-tag> = "<version-constraint>"`.
+The unified top-level table for all dependencies.
+
+##### `[deps.from.<set-name>]` Tables
+
+The primary mechanism for declaring atom dependencies. The presence of an `atom.toml` implies that an atom is buildable, and this section defines its dependencies. They are always simple key-value pairs of `<atom-tag> = "<version-constraint>"`.
 
 ```toml
-[atoms.company-atoms]
+[deps.from.company-atoms]
 auth-service = "^1.5"
 ```
 
-#### `[legacy]` Tables
+##### `[deps.direct.nix]` Table
 
-This top-level table serves as a namespace for all backend-specific, non-atom dependencies.
+This table serves as a compatibility layer for backend-specific dependencies that are not in the `atom` format. It provides a "direct" interface to the underlying Nix fetchers.
 
-##### `[legacy.nix.fetch]` Table
-
-This table serves as a compatibility layer for legacy Nix dependencies that are not packaged in the backend-agnostic `atom` format. It provides a direct interface to the underlying Nix fetchers for situations where an atom-based dependency is not available.
-
-This clear separation ensures that the primary dependency mechanism (`atoms`) remains universal, while platform-specific integrations have a dedicated, namespaced home.
+- **Eval-Time Fetches:** Use keys like `url`, `git`, or `tar`.
+- **Build-Time Fetches:** Use the `build` key.
 
 ### Comprehensive Example (`atom.toml`)
 
 ```toml
-[atom]
+[package]
 tag = "my-server"
 version = "0.2.0"
 
-[atom.sources]
-# sources support mirrors
-company-atoms = [ "git@github.com:our-company/atoms", "https://github.com/our-companies-mirror/atoms" ]
-local-project = "::"
+[package.sets]
+company = [ "git@github.com:our-company/atoms", "https://github.com/our-companies-mirror/atoms" ]
+local = "::"
 
 # =============================================================================
 # ATOM DEPENDENCIES
 # =============================================================================
 
-[atoms.company-atoms]
+[deps.from.company]
 auth-service = "^1.5"
 
-[atoms.local-project]
+[deps.from.local]
 local-utility = "^0.1"
 
+
 # =============================================================================
-# LEGACY NIX DEPENDENCIES
+# DIRECT NIX DEPENDENCIES
 # =============================================================================
 
-[legacy.nix.fetch]
-# --- Eval-Time Dependencies ---
+[deps.direct.nix]
+# --- Eval-Time Direct Dependencies ---
 
-# A generic URL dependency.
 nix-installer.url = "https://nixos.org/nix/install"
-
 # A Git dependency with a static ref.
 nixpkgs = { git = "https://github.com/NixOS/nixpkgs", ref = "nixos-unstable" }
-
-# A Git dependency with a dynamic version constraint.
+# A Git dependency with a dynamic version constraint resolved from available tags
 other-repo = { git = "https://github.com/other/repo", version = "^1.2" }
-
 # A dynamic tarball dependency that depends on a resolved atom version.
-auth-service-docs = { tar = "https://docs.our-company.com/auth/{version}/docs.tar.gz", version = "company-atoms.auth-service" }
+auth-service-docs = { tar = "https://docs.our-company.com/auth/{version}/docs.tar.gz", version = "from.company.auth-service" }
 
+# --- Build-Time Direct Dependencies ---
 
-# --- Build-Time Dependencies ---
+# derives it's version variable directly from this local atom, e.g. to get a build source for an atom that defines a build recipe
+source-archive = { build = "https://dist.our-company.com/my-server/{version}/source.tar.gz", version = "from.local.my-server" }
 
-# A build-time source dependency, using the `build` key.
-# This is ideal for sources that are only needed during a build.
-source-archive = { build = "https://dist.our-company.com/my-server/{version}/source.tar.gz", version = "local-project.my-server" }
-
-# A build-time dependency from a URL that is marked as executable.
+# An executable single file fetched at build time
 online-builder = { build = "https://example.com/builder.sh", exec = true }
 
 # A build-time archive that should not be unpacked by the fetcher.
+# `unpack` is false by default if the extension does not indicate a tar file.
 data-archive = { build = "https://example.com/data.tar.gz", unpack = false }
-
 ```
 
 ### The `atom.lock` Lock File Format
 
-The lock file contains two main sections: a `[sources]` table and an array of atomic `[[bonds]]` tables. This structure ensures that the identity of a source is content-addressed by it's unambiguous root id, making the lock file robust and truly decentralized.
+The lock file contains a `[sets]` table and an array of `[[input]]` tables.
 
-1.  **`[sources]` Table:** This table maps a content hash of a source repository's root to its location(s). This hash serves as the canonical, location-independent identifier for the source.
-2.  **`[[bonds]]` Array:** This is a unified list of all fully resolved dependencies. Atom dependencies refer to their source via its content hash, creating a stable link.
+1.  **`[sets]` Table:** Maps the Repository Root Hash of a package set to its location(s).
+2.  **`[[input]]` Array:** A unified list of all fully resolved dependencies.
 
 ### Comprehensive Example (`atom.lock`)
 
 ```toml
-# The `[sources]` table maps the content hash of a source to its mirrors.
-[sources]
-"<hash_of_company_atoms_root>" = [ "git@github.com:our-company/atoms", "https://github.com/our-companies-mirror/atoms" ]
-"<hash_of_local_project_root>" = "::"
+[sets]
+"<hash_of_company_root>" = [ "git@github.com:our-company/atoms", "https://github.com/our-companies-mirror/atoms" ]
+"<hash_of_local_root>" = "::"
 
-# The `[[bonds]]` array lists all resolved dependencies.
-[[bonds]]
+[[input]]
 type = "atom"
 tag = "auth-service"
 version = "1.5.2"
-source = "<hash_of_company_atoms_root>"
+set = "<hash_of_company_root>"
 rev = "<git_rev_of_atom>"
-id = "<blake3_sum_of_atom_id>"
+id = "<blake3_hash_of_tag_and_set_hash>"
 
-[[bonds]]
+[[input]]
 type = "atom"
 tag = "local-utility"
 version = "0.1.3"
-source = "<hash_of_local_project_root>"
+set = "<hash_of_local_root>"
 rev = "<git_rev_of_atom>"
-id = "<blake3_sum_of_atom_id>"
+id = "<blake3_hash_of_tag_and_set_hash>"
 
-[[bonds]]
+[[input]]
 type = "nix+url"
 name = "nix-installer"
 url = "https://nixos.org/nix/install"
 hash = "sha256-..."
 
-[[bonds]]
+[[input]]
 type = "nix+git"
 name = "nixpkgs"
 url = "https://github.com/NixOS/nixpkgs"
 rev = "aa0ebc256a5b0540e9df53c64ef6930471c98407"
 
-[[bonds]]
+[[input]]
 type = "nix+git"
 name = "other-repo"
 url = "https://github.com/other/repo"
 rev = "<resolved_git_rev>"
 
-[[bonds]]
+[[input]]
 type = "nix+tar"
 name = "auth-service-docs"
 url = "https://docs.our-company.com/auth/1.5.2/docs.tar.gz"
 hash = "sha256-..."
 
-[[bonds]]
+[[input]]
 type = "nix+build"
 name = "source-archive"
 url = "https://dist.our-company.com/my-server/0.2.0/source.tar.gz"
 hash = "sha256-..."
 
-[[bonds]]
+[[input]]
 type = "nix+build"
 name = "online-builder"
 url = "https://example.com/builder.sh"
 hash = "sha256-..."
 exec = true
 
-[[bonds]]
+[[input]]
 type = "nix+build"
 name = "data-archive"
 url = "https://example.com/data.tar.gz"
@@ -201,7 +200,7 @@ unpack = false
 
 - **Positive:**
 
-  - **Future-Proof:** The clear separation between backend-agnostic `atoms` and `legacy.nix.fetch` dependencies creates a path for supporting other backends in the future.
+  - **Future-Proof:** The clear separation between backend-agnostic `deps` and `direct` dependencies creates a path for supporting other backends.
   - **Robust Decentralization:** Source mirroring and content-addressed locking make the format resilient.
   - **Explicit and Consistent:** The format is declarative, consistent, and easy to parse.
 
