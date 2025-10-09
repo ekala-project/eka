@@ -200,8 +200,8 @@ unpack = false
 
 - **Positive:**
 
-  - **Future-Proof:** The clear separation between backend-agnostic `deps` and `direct` dependencies creates a path for supporting other backends.
-  - **Robust Decentralization:** Source mirroring and content-addressed locking make the format resilient.
+  - **Future-Proof:** The clear separation between atom dependencies and `direct` dependencies creates a path for supporting other backends.
+  - **Robust Decentralization:** Set mirroring and content-addressed locking make the format resilient.
   - **Explicit and Consistent:** The format is declarative, consistent, and easy to parse.
 
 - **Negative:**
