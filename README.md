@@ -8,7 +8,7 @@ This is the first step towards a more resilient and transparent software supply 
 
 ## What is the Atom Protocol?
 
-The Atom Protocol is a rethinking of how we distribute and manage software. It addresses the inherent limitations of centralized package registries by focusing on three core principles:
+The [Atom Protocol](https://docs.eka.rs/atom/) is a rethinking of how we distribute and manage software. It addresses the inherent limitations of centralized package registries by focusing on three core principles:
 
 - **Decentralized Distribution:** Instead of a central server like npm or PyPI, Atom uses Git repositories as the source of truth. It leverages the distributed nature of Git to ensure that package availability is not tied to a single entity, eliminating a critical vulnerability in the software supply chain.
 
