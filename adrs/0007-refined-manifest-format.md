@@ -9,6 +9,7 @@
 The `eka` project has reached a stage where a stable, well-defined manifest format (`atom.toml`) is required. The previous format was a placeholder to enable initial resolver development. This document proposes the first official, stable format, designed to be robust, intuitive, and philosophically aligned with `eka`'s decentralized nature.
 
 The key design goals are:
+
 1.  **Clarity and Explicitness:** The format must be declarative and easy to analyze statically.
 2.  **Ergonomics and DRY:** Common operations should be concise, avoiding repetition.
 3.  **Embrace Decentralization:** The format should make the origin of dependencies obvious, naturally handling potential name conflicts.
@@ -19,6 +20,7 @@ The key design goals are:
 We will adopt a new manifest format structured around the following primary tables: `[atom]`, `[atoms.<source>]`, and `[nix.fetch]`.
 
 This design's core principles are:
+
 1.  **Atoms are Grouped by Source:** This inherently namespaces dependencies, elegantly solving name conflicts while aligning with atom's fundamentally decentralized nature.
 2.  **Platform-Specific Concerns are Grouped:** All Nix-related fetching logic is consolidated under a `[nix]` namespace.
 3.  **A Consistent Data Model:** All fetchable dependencies are tables, with TOML's dotted key syntax providing an ergonomic shortcut for the common single-key case.
@@ -58,9 +60,9 @@ auth-service = "^1.5"
 
 The `[nix.fetch]` table declares all dependencies to be fetched by the Nix backend. The key used within each dependency's table determines its fetching semantics:
 
--   **Eval-Time Fetches:** Use keys like `url`, `git`, or `tar`. These are fetched during Nix's evaluation phase.
--   **Build-Time URL Fetches:** Use the special key `build`. These are deferred until the build phase (Fixed-Output Derivations). The `build` key can be combined with `exec` and `unpack` booleans to mirror the arguments of the underlying Nix fetcher.
--   **Build-Time Executable Fetches:** Use the special key `exec`. This is for making a local executable file available at build time.
+- **Eval-Time Fetches:** Use keys like `url`, `git`, or `tar`. These are fetched during Nix's evaluation phase.
+- **Build-Time URL Fetches:** Use the special key `build`. These are deferred until the build phase (Fixed-Output Derivations). The `build` key can be combined with `exec` and `unpack` booleans to mirror the arguments of the underlying Nix fetcher.
+- **Build-Time Executable Fetches:** Use the special key `exec`. This is for making a local executable file available at build time.
 
 ### Comprehensive Example
 
@@ -195,11 +197,12 @@ unpack = false
 
 ## Consequences
 
--   **Positive:**
-    -   **Clear Separation of Concerns:** The `[nix.fetch]` table provides a clear home for all Nix-related fetching.
-    -   **Explicit Semantics:** The `build` key makes the distinction between eval-time and build-time fetching unambiguous and directly maps to the underlying implementation.
-    -   **Consistent and Ergonomic:** The dotted key syntax provides a concise format for simple cases, while the data model remains a consistent set of tables.
+- **Positive:**
 
--   **Negative:**
-    -   **Breaking Change:** This format is not compatible with the previous placeholder format.
-    -   **Implementation Effort:** The parser and resolver logic will need to be written to support this new, stable structure.
+  - **Clear Separation of Concerns:** The `[nix.fetch]` table provides a clear home for all Nix-related fetching.
+  - **Explicit Semantics:** The `build` key makes the distinction between eval-time and build-time fetching unambiguous and directly maps to the underlying implementation.
+  - **Consistent and Ergonomic:** The dotted key syntax provides a concise format for simple cases, while the data model remains a consistent set of tables.
+
+- **Negative:**
+  - **Breaking Change:** This format is not compatible with the previous placeholder format.
+  - **Implementation Effort:** The parser and resolver logic will need to be written to support this new, stable structure.
