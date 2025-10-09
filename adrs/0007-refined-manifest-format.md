@@ -133,7 +133,7 @@ The lock file contains two main sections: a `[sources]` table and an array of at
 # The `[sources]` table maps the content hash of a source to its mirrors.
 [sources]
 "<hash_of_company_atoms_root>" = [ "git@github.com:our-company/atoms", "https://github.com/our-companies-mirror/atoms" ]
-"<hash_of_local_project_root>" = [ "::", "https://github.com/our-company/more-atoms" ]
+"<hash_of_local_project_root>" = "::"
 
 # The `[[bonds]]` array lists all resolved dependencies.
 [[bonds]]
