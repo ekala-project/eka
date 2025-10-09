@@ -20,7 +20,7 @@ The key design goals for the dependency format are:
 
 To understand the manifest, it's essential to understand how an atom is identified. An atom's identity is a combination of its content and its location, designed to be cryptographically unique and verifiable.
 
-- **Package Set:** A collection of atoms, typically stored in a Git repository. A key principle is that all atoms within a set must have a unique `tag`. See the "Why Atom" section of the [README](https://github.com/ekala-project/eka?tab=readme-ov-file#why-atom-the-future-of-package-management) for more details.
+- **Package Set:** A collection of atoms, typically stored in a Git repository. A key principle is that all atoms within a set must have a unique `tag`. See the "Atom Protocol" section of the [README](https://github.com/ekala-project/eka?tab=readme-ov-file#what-is-the-atom-protocol) for more details.
 - **Repository Root Hash:** The very first commit in a Git repository's history. This serves as a unique, immutable identifier for that repository, even across different mirrors.
 - **Atom Tag:** A user-defined, unique identifier for a package within a given set.
 - **Semantic Version:** All atoms must have a semantic version, which is critical for reliable dependency resolution.
