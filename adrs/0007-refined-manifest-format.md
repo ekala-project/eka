@@ -2,35 +2,33 @@
 
 - **Status:** Proposed
 - **Deciders:** eka-devs
-- **Date:** 2025-10-08
+- **Date:** 2025-10-09
 
 ## Context and Problem Statement
 
-The `eka` project has reached a stage where a stable, well-defined manifest format (`atom.toml`) is required. The previous format was a placeholder to enable initial resolver development. This document proposes the first official, stable format, designed to be robust, intuitive, and philosophically aligned with `eka`'s decentralized nature.
+The `eka` project has reached a stage where a stable, well-defined manifest format (`atom.toml`) is required. This document proposes the first official, stable format, designed to be robust, intuitive, and philosophically aligned with `eka`'s decentralized, backend-agnostic vision.
 
 The key design goals are:
 
 1.  **Clarity and Explicitness:** The format must be declarative and easy to analyze statically.
-2.  **Ergonomics and DRY:** Common operations should be concise, avoiding repetition.
-3.  **Embrace Decentralization:** The format should make the origin of dependencies obvious, naturally handling potential name conflicts.
-4.  **Support Multiple Fetching Semantics:** The format must distinguish between dependencies needed at Nix evaluation time and those that can be deferred to build time, mirroring the capabilities of the underlying Nix fetchers.
+2.  **Embrace Decentralization:** The format must support source mirrors and make the origin of dependencies obvious, naturally handling potential name conflicts.
+3.  **Distinguish Modern and Legacy Dependencies:** The format must provide a primary, backend-agnostic dependency type (`atom`) while also offering a clear, namespaced mechanism for integrating with legacy, platform-specific dependencies (e.g., traditional Nix fetchers).
 
 ## Decision
 
-We will adopt a new manifest format structured around the following primary tables: `[atom]`, `[atoms.<source>]`, and `[nix.fetch]`.
+We will adopt a new manifest format that cleanly separates backend-agnostic **atoms** from backend-specific **legacy dependencies**.
 
 This design's core principles are:
 
-1.  **Atoms are Grouped by Source:** This inherently namespaces dependencies, elegantly solving name conflicts while aligning with atom's fundamentally decentralized nature.
-2.  **Platform-Specific Concerns are Grouped:** All Nix-related fetching logic is consolidated under a `[nix]` namespace.
-3.  **A Consistent Data Model:** All fetchable dependencies are tables, with TOML's dotted key syntax providing an ergonomic shortcut for the common single-key case.
-4.  **Directly Maps to Implementation:** The syntax for build-time fetches directly mirrors the arguments of the underlying Nix fetcher, ensuring clarity and maintainability.
+1.  **Atoms are the Primary Dependency Type:** They are backend-agnostic and grouped by source, which inherently namespaces them and solves name conflicts.
+2.  **Legacy Dependencies are Namespaced:** To support integration with existing ecosystems, the format provides platform-specific tables (e.g., `[legacy.nix]`). This creates a clear separation between the modern `atom` format and any legacy, platform-specific fetchers, leaving the door open for future backends (e.g., `[legacy.guix]`) without cluttering the top-level namespace.
+3.  **Content-Addressed Sources:** The identity of an atom source is determined by a hash of its content, making the lock file robust and location-independent.
 
 ### The `atom.toml` Manifest Format
 
 #### `[atom]` Table
 
-Defines metadata about the current project, including the sources it uses for its atom dependencies. A source can be a single URL, the special value `"::"` for the local repository, or a list of URLs which are treated as mirrors.
+Defines metadata about the current project. Its `[atom.sources]` sub-table defines the available sources for atom dependencies. A source can be a single URL, a list of mirror URLs, or the special value `"::"` for the local repository.
 
 ```toml
 [atom]
@@ -49,22 +47,24 @@ local-atoms = [ "::", "https://github.com/our-company/more-atoms" ]
 
 #### `[atoms.<source>]` Tables
 
-Dependencies on other atoms are declared as key-value pairs, where the key is the atom's tag and the value is a version constraint string.
+The primary mechanism for declaring dependencies. These are fundamentally backend-agnostic and are always simple key-value pairs of `<atom-tag> = "<version-constraint>"`.
 
 ```toml
 [atoms.company-atoms]
 auth-service = "^1.5"
 ```
 
-#### `[nix.fetch]` Table
+#### `[legacy]` Tables
 
-The `[nix.fetch]` table declares all dependencies to be fetched by the Nix backend. The key used within each dependency's table determines its fetching semantics:
+This top-level table serves as a namespace for all backend-specific, non-atom dependencies.
 
-- **Eval-Time Fetches:** Use keys like `url`, `git`, or `tar`. These are fetched during Nix's evaluation phase.
-- **Build-Time URL Fetches:** Use the special key `build`. These are deferred until the build phase (Fixed-Output Derivations). The `build` key can be combined with `exec` and `unpack` booleans to mirror the arguments of the underlying Nix fetcher.
-- **Build-Time Executable Fetches:** Use the special key `exec`. This is for making a local executable file available at build time.
+##### `[legacy.nix.fetch]` Table
 
-### Comprehensive Example
+This table serves as a compatibility layer for legacy Nix dependencies that are not packaged in the backend-agnostic `atom` format. It provides a direct interface to the underlying Nix fetchers for situations where an atom-based dependency is not available.
+
+This clear separation ensures that the primary dependency mechanism (`atoms`) remains universal, while platform-specific integrations have a dedicated, namespaced home.
+
+### Comprehensive Example (`atom.toml`)
 
 ```toml
 [atom]
@@ -87,10 +87,10 @@ auth-service = "^1.5"
 local-utility = "^0.1"
 
 # =============================================================================
-# NIX FETCH DEPENDENCIES
+# LEGACY NIX DEPENDENCIES
 # =============================================================================
 
-[nix.fetch]
+[legacy.nix.fetch]
 # --- Eval-Time Dependencies ---
 
 # A generic URL dependency.
@@ -126,6 +126,8 @@ The lock file contains two main sections: a `[sources]` table and an array of at
 
 1.  **`[sources]` Table:** This table maps a content hash of a source repository's root to its location(s). This hash serves as the canonical, location-independent identifier for the source.
 2.  **`[[bonds]]` Array:** This is a unified list of all fully resolved dependencies. Atom dependencies refer to their source via its content hash, creating a stable link.
+
+### Comprehensive Example (`atom.lock`)
 
 ```toml
 # The `[sources]` table maps the content hash of a source to its mirrors.
@@ -199,9 +201,9 @@ unpack = false
 
 - **Positive:**
 
-  - **Clear Separation of Concerns:** The `[nix.fetch]` table provides a clear home for all Nix-related fetching.
-  - **Explicit Semantics:** The `build` key makes the distinction between eval-time and build-time fetching unambiguous and directly maps to the underlying implementation.
-  - **Consistent and Ergonomic:** The dotted key syntax provides a concise format for simple cases, while the data model remains a consistent set of tables.
+  - **Future-Proof:** The clear separation between backend-agnostic `atoms` and `legacy.nix.fetch` dependencies creates a path for supporting other backends in the future.
+  - **Robust Decentralization:** Source mirroring and content-addressed locking make the format resilient.
+  - **Explicit and Consistent:** The format is declarative, consistent, and easy to parse.
 
 - **Negative:**
   - **Breaking Change:** This format is not compatible with the previous placeholder format.
