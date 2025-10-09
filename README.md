@@ -10,7 +10,7 @@ The Atom Format is more than just a new packaging standard; it's a fundamental r
 
 ### A Decentralized Replacement for Centralized Registries
 
-Atom is a complete, decentralized replacement for traditional package registries like npm, PyPI, or crates.io. It solves the same core problem of dependency management without relying on a single point of failure. By leveraging the distributed nature of Git, Atom ensures that package availability is not tied to a single entity, eliminating a critical vulnerability in the software supply chain.
+Atom is a complete, [decentralized replacement](https://docs.eka.rs/atom/) for traditional package registries like npm, PyPI, or crates.io. It solves the same core problem of dependency management without relying on a single point of failure. By leveraging the distributed nature of Git, Atom ensures that package availability is not tied to a single entity, eliminating a critical vulnerability in the software supply chain.
 
 ### End-to-End Security by Design
 
