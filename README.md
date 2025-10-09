@@ -18,7 +18,7 @@ The [Atom Protocol](https://docs.eka.rs/atom/) is a rethinking of how we distrib
 
 ## How It Works: The Three Layers
 
-Eka's architecture is best understood as three distinct, decoupled layers. This separation of concerns is a core design principle.
+Ekala's architecture is best understood as three distinct, decoupled layers. This separation of concerns is a core design principle.
 
 1.  **Package Management (Eka):** This is `eka`'s primary domain. It manages `atom` dependencies and generates a lockfile (`atom.lock`) that guarantees reproducible dependency resolution. It has no external binary dependencies and is designed to be exceptionally fast.
 
