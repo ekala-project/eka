@@ -1,186 +1,205 @@
-# 7. Refined Manifest and Lock File Format
+# 7. A Declarative, Source-Grouped Manifest Format
 
 - **Status:** Proposed
 - **Deciders:** eka-devs
-- **Date:** 2025-10-07
+- **Date:** 2025-10-08
 
 ## Context and Problem Statement
 
-The initial `atom.toml` manifest format has served its purpose but has several areas for improvement. As we add more features and dependency types, the need for a more robust, intuitive, and consistent format has become clear.
+The `eka` project has reached a stage where a stable, well-defined manifest format (`atom.toml`) is required. The previous format was a placeholder to enable initial resolver development. This document proposes the first official, stable format, designed to be robust, intuitive, and philosophically aligned with `eka`'s decentralized nature.
 
-The key issues with the current format are:
-
-1.  **Ambiguous Dependency Types:** The type of a dependency is often inferred from the presence of certain keys (e.g., `store`), which is not always clear.
-2.  **Verbose and Repetitive:** Defining sources for decentralized atoms requires repeating URLs.
-3.  **Inconsistent Structure:** Different dependency types are defined in slightly different ways.
-4.  **Unclear Terminology:** Terms like `deps` and `store` could be more formal and intuitive.
-
-We need a new format that is explicit, ergonomic, consistent, and philosophically aligned with the decentralized, repository-aware nature of `eka`.
-
-## Decision Drivers
-
-- **Clarity and Explicitness:** The format should be self-documenting. It must be easy to understand what each dependency is and where it comes from just by reading the manifest.
-- **Ergonomics:** The most common operations should be simple and concise.
-- **Consistency:** All dependency types should follow a similar, predictable structure.
-- **Don't Repeat Yourself (DRY):** The format should avoid forcing users to repeat information, such as source URLs.
-- **Future-Proofing:** The design should be extensible to support new dependency types without requiring another breaking change.
-
-## Considered Options
-
-1.  **Incremental Changes:** Making small tweaks to the existing format. This was rejected as it would not fully address the underlying structural issues.
-2.  **Nested/Dotted-Key Syntax:** Using a format like `source_a.bar = "^1"`. This was rejected as it scales poorly for more complex definitions and for non-atom dependency types.
-3.  **Decoupled Sources with Explicit Input Types:** A design where sources are defined separately and dependencies explicitly declare their type. This was chosen as it best meets all decision drivers.
+The key design goals are:
+1.  **Clarity and Explicitness:** The format must be declarative and easy to analyze statically.
+2.  **Ergonomics and DRY:** Common operations should be concise, avoiding repetition.
+3.  **Embrace Decentralization:** The format should make the origin of dependencies obvious, naturally handling potential name conflicts.
+4.  **Support Multiple Fetching Semantics:** The format must distinguish between dependencies needed at Nix evaluation time and those that can be deferred to build time, mirroring the capabilities of the underlying Nix fetchers.
 
 ## Decision
 
-We will adopt a new manifest and lock file format. The manifest (`atom.toml`) will be structured with three primary tables: `[atom]`, `[sources]`, and `[bonds]`.
+We will adopt a new manifest format structured around the following primary tables: `[atom]`, `[atoms.<source>]`, and `[nix.fetch]`.
+
+This design's core principles are:
+1.  **Atoms are Grouped by Source:** This inherently namespaces dependencies, elegantly solving name conflicts while aligning with atom's fundamentally decentralized nature.
+2.  **Platform-Specific Concerns are Grouped:** All Nix-related fetching logic is consolidated under a `[nix]` namespace.
+3.  **A Consistent Data Model:** All fetchable dependencies are tables, with TOML's dotted key syntax providing an ergonomic shortcut for the common single-key case.
+4.  **Directly Maps to Implementation:** The syntax for build-time fetches directly mirrors the arguments of the underlying Nix fetcher, ensuring clarity and maintainability.
 
 ### The `atom.toml` Manifest Format
 
 #### `[atom]` Table
 
-Defines metadata about the current project (the "atom" being defined).
+Defines metadata about the current project, including the sources it uses for its atom dependencies. A source can be a single URL, the special value `"::"` for the local repository, or a list of URLs which are treated as mirrors.
 
 ```toml
 [atom]
-tag = "atom_name"
-version = "1.0.1"
+tag = "my-project"
+version = "0.1.0"
+
+[atom.sources]
+# A single remote source.
+company-atoms = "git@github.com:our-company/atoms"
+# A remote source with mirrors. The resolver will try them in order.
+public-registry = [ "https://registry-a.com/atoms", "https://registry-b.com/atoms" ]
+# A source for atoms within this same repository
+# You can specify the remote location of the local repo as a mirror if you like
+local-atoms = [ "::", "https://github.com/our-company/more-atoms" ]
 ```
 
-#### `[sources]` Table
+#### `[atoms.<source>]` Tables
 
-Provides short, memorable aliases for remote source URLs. This table is the single source of truth for remote locations and is used to resolve aliases in the `[bonds]` table and CLI commands.
+Dependencies on other atoms are declared as key-value pairs, where the key is the atom's tag and the value is a version constraint string.
 
 ```toml
-[sources]
-git_source = "https://my.com/cool/repo"
-source_a = "https://some.com/atom/repo"
+[atoms.company-atoms]
+auth-service = "^1.5"
 ```
 
-#### `[bonds]` Table
+#### `[nix.fetch]` Table
 
-A single, unified table that declares all project dependencies, or "bonds". The bond's type is determined by a unique, explicit key (`atom`, `rel`, `git`, `tar`, `pin`, `src`).
+The `[nix.fetch]` table declares all dependencies to be fetched by the Nix backend. The key used within each dependency's table determines its fetching semantics:
+
+-   **Eval-Time Fetches:** Use keys like `url`, `git`, or `tar`. These are fetched during Nix's evaluation phase.
+-   **Build-Time URL Fetches:** Use the special key `build`. These are deferred until the build phase (Fixed-Output Derivations). The `build` key can be combined with `exec` and `unpack` booleans to mirror the arguments of the underlying Nix fetcher.
+-   **Build-Time Executable Fetches:** Use the special key `exec`. This is for making a local executable file available at build time.
+
+### Comprehensive Example
 
 ```toml
-[bonds]
-# A relative (in-repo) atom. The version is resolved from its own manifest at lock time.
-foo = { rel = true }
+[atom]
+tag = "my-server"
+version = "0.2.0"
 
-# An external atom from a named source.
-bar = { atom = "source_a", version = "^1" }
+[atom.sources]
+# sources support mirrors
+company-atoms = [ "git@github.com:our-company/atoms", "https://github.com/our-companies-mirror/atoms" ]
+local-project = "::"
 
-# An external atom from a direct URL. The `tag` key is required to avoid a name conflict
-# with the dependency's own tag.
-bun = { atom = "https://some.com/atom/repo", version = "^2", tag = "bar" }
+# =============================================================================
+# ATOM DEPENDENCIES
+# =============================================================================
 
-# A tarball pin. The URL can optionally contain a `${version}` placeholder.
-baz = { tar = "https://example/my/tarball-${version}.tar.gz", version = { from = "git_source", spec = "^1.2" } }
+[atoms.company-atoms]
+auth-service = "^1.5"
 
-# A git pin using a named source.
-buz = { git = "git_source", ref = "master" }
+[atoms.local-project]
+local-utility = "^0.1"
 
-# A git pin with a version constraint, resolved via git tags.
-my_repo = { git = "https://gitlab.com/foo/bar.git", version = "^2" }
+# =============================================================================
+# NIX FETCH DEPENDENCIES
+# =============================================================================
 
-# A generic pin from a URL, with optional version resolution.
-buzz = { pin = "https://some.com/external/pin-${version}.nix", version = { from = "git_source", spec = ">= 2.0" } }
+[nix.fetch]
+# --- Eval-Time Dependencies ---
 
-# A build-time source dependency with version resolution.
-my_src = {
-  src = "https://foo.com/my/build/${version}/src.tar.gz",
-  version = { from = "git_source", spec = "^1" }
-}
+# A generic URL dependency.
+nix-installer.url = "https://nixos.org/nix/install"
+
+# A Git dependency with a static ref.
+nixpkgs = { git = "https://github.com/NixOS/nixpkgs", ref = "nixos-unstable" }
+
+# A Git dependency with a dynamic version constraint.
+other-repo = { git = "https://github.com/other/repo", version = "^1.2" }
+
+# A dynamic tarball dependency that depends on a resolved atom version.
+auth-service-docs = { tar = "https://docs.our-company.com/auth/{version}/docs.tar.gz", version = "company-atoms.auth-service" }
+
+
+# --- Build-Time Dependencies ---
+
+# A build-time source dependency, using the `build` key.
+# This is ideal for sources that are only needed during a build.
+source-archive = { build = "https://dist.our-company.com/my-server/{version}/source.tar.gz", version = "local-project.my-server" }
+
+# A build-time dependency from a URL that is marked as executable.
+online-builder = { build = "https://example.com/builder.sh", exec = true }
+
+# A build-time archive that should not be unpacked by the fetcher.
+data-archive = { build = "https://example.com/data.tar.gz", unpack = false }
+
 ```
 
 ### The `atom.lock` Lock File Format
 
-The lock file will contain an array of tables, `[[bonds]]`, where each entry represents a fully resolved dependency.
+The lock file contains two main sections: a `[sources]` table and an array of atomic `[[bonds]]` tables. This structure ensures that the identity of a source is content-addressed by it's unambiguous root id, making the lock file robust and truly decentralized.
+
+1.  **`[sources]` Table:** This table maps a content hash of a source repository's root to its location(s). This hash serves as the canonical, location-independent identifier for the source.
+2.  **`[[bonds]]` Array:** This is a unified list of all fully resolved dependencies. Atom dependencies refer to their source via its content hash, creating a stable link.
 
 ```toml
+# The `[sources]` table maps the content hash of a source to its mirrors.
+[sources]
+"<hash_of_company_atoms_root>" = [ "git@github.com:our-company/atoms", "https://github.com/our-companies-mirror/atoms" ]
+"<hash_of_local_project_root>" = [ "::", "https://github.com/our-company/more-atoms" ]
+
+# The `[[bonds]]` array lists all resolved dependencies.
 [[bonds]]
 type = "atom"
-tag = "foo"
-version = "1.0.1" # Exact resolved version
-rev = "<git_rev>"
-# The source is a relative path for local development, which is crucial for
-# ensuring the revision hash remains stable across different clones.
-source = "../local/resolved/path"
+tag = "auth-service"
+version = "1.5.2"
+source = "<hash_of_company_atoms_root>"
+rev = "<git_rev_of_atom>"
 id = "<blake3_sum_of_atom_id>"
 
 [[bonds]]
 type = "atom"
-tag = "bar"
-version = "1.0.3"
-rev = "<git_rev>"
-source = "https://some.com/atom/repo"
+tag = "local-utility"
+version = "0.1.3"
+source = "<hash_of_local_project_root>"
+rev = "<git_rev_of_atom>"
 id = "<blake3_sum_of_atom_id>"
 
 [[bonds]]
-type = "atom"
-tag = "bar"
-# The `key` field is present when the manifest key differs from the atom's tag.
-key = "bun"
-version = "2.0.3"
-rev = "<git_rev>"
-source = "ssh://git@some.com/atom/repo"
-id = "<blake3_sum_of_atom_id>"
+type = "nix+url"
+name = "nix-installer"
+url = "https://nixos.org/nix/install"
+hash = "sha256-..."
 
 [[bonds]]
-type = "pin+tar"
-name = "baz"
-url = "https://example/my/tarball.tar.gz"
-hash = "sha256:0lkjn8q6p0c18acj43pj1cbiyixnf98wvkbgppr5vz73qkypii2g"
-
-[[bonds]]
-type = "git"
-name = "my_repo"
-url = "https://my.com/cool/repo"
+type = "nix+git"
+name = "nixpkgs"
+url = "https://github.com/NixOS/nixpkgs"
 rev = "aa0ebc256a5b0540e9df53c64ef6930471c98407"
 
 [[bonds]]
-type = "pin"
-name = "buzz"
-url = "https://some.com/external/pin.nix"
-hash = "sha256:1spc2lsx16xy612lg8rsyd34j9fy6kmspxcvcfmawkxmyvi32g9v"
+type = "nix+git"
+name = "other-repo"
+url = "https://github.com/other/repo"
+rev = "<resolved_git_rev>"
 
 [[bonds]]
-type = "build"
-name = "my_src"
-url = "https://foo.com/my/build/src.tar.gz"
-hash = "sha256-hClMprWwiEQe7mUUToXZAR5wbhoVFi+UuqLL2K/eIPw="
+type = "nix+tar"
+name = "auth-service-docs"
+url = "https://docs.our-company.com/auth/1.5.2/docs.tar.gz"
+hash = "sha256-..."
+
+[[bonds]]
+type = "nix+build"
+name = "source-archive"
+url = "https://dist.our-company.com/my-server/0.2.0/source.tar.gz"
+hash = "sha256-..."
+
+[[bonds]]
+type = "nix+build"
+name = "online-builder"
+url = "https://example.com/builder.sh"
+hash = "sha256-..."
+exec = true
+
+[[bonds]]
+type = "nix+build"
+name = "data-archive"
+url = "https://example.com/data.tar.gz"
+hash = "sha256-..."
+unpack = false
 ```
 
 ## Consequences
 
-- **Positive:**
+-   **Positive:**
+    -   **Clear Separation of Concerns:** The `[nix.fetch]` table provides a clear home for all Nix-related fetching.
+    -   **Explicit Semantics:** The `build` key makes the distinction between eval-time and build-time fetching unambiguous and directly maps to the underlying implementation.
+    -   **Consistent and Ergonomic:** The dotted key syntax provides a concise format for simple cases, while the data model remains a consistent set of tables.
 
-  - The manifest format will be significantly more intuitive and readable.
-  - The structure is consistent across all dependency types.
-  - Redundancy is eliminated through the `[sources]` table.
-  - The handling of relative (in-repo) dependencies is more robust and ergonomic.
-  - The format is easily extensible for future dependency types.
-
-- **Negative:**
-  - The parser and resolver logic will need to be rewritten to support the new format.
-
-### Synergy with CLI URI Resolution
-
-A key benefit of this design is the extension of the existing CLI URI resolution feature. Currently, users can define global aliases in their `eka.toml` configuration. This proposal allows the `[sources]` table in a project's `atom.toml` to serve as a set of temporary, project-specific aliases.
-
-This creates a powerful, layered aliasing system. When a user runs a command like `eka add source_a::my-atom@^1`, the resolver will:
-
-1.  First, check for a `source_a` alias in the current project's `[sources]` table.
-2.  If not found, it will fall back to checking for `source_a` in the user's global `eka.toml` aliases.
-
-This provides a powerful and intuitive workflow, allowing project-specific sources to be used as convenient aliases for adding dependencies without requiring modification of the user's global configuration. It demonstrates the extensibility of the original URI alias design.
-
-### Simplification and Reduced Scope
-
-A key goal of this redesign is to clarify the domain of concern for the manifest. The manifest's responsibility is to declare project bonds, not to handle language-specific integration details.
-
-To that end, the following features are explicitly **removed** from the manifest and lock file formats:
-
-- **`import` and `flake` keys:** These Nix-specific concepts do not belong in the generic dependency manifest. The responsibility for importing a Nix flake from a resolved dependency should be handled by library code within the Nix integration layer (e.g., via a dedicated function that operates on a resolved input).
-- **`from` key:** The ability to extract a sub-path from a dependency is also a language- or build-system-specific concern. This logic should be handled by the consuming code, not by the dependency resolver, e.g. re-exporting an input after calling one of the specialized import functions to handle various input types in atom-nix.
-
-This simplification ensures that the manifest remains a universal, language-agnostic declaration of project dependencies, preventing implementation details from leaking into the API.
+-   **Negative:**
+    -   **Breaking Change:** This format is not compatible with the previous placeholder format.
+    -   **Implementation Effort:** The parser and resolver logic will need to be written to support this new, stable structure.
