@@ -10,11 +10,11 @@ This is the first step towards a more resilient and transparent software supply 
 
 The Atom Protocol is a rethinking of how we distribute and manage software. It addresses the inherent limitations of centralized package registries by focusing on three core principles:
 
--   **Decentralized Distribution:** Instead of a central server like npm or PyPI, Atom uses Git repositories as the source of truth. It leverages the distributed nature of Git to ensure that package availability is not tied to a single entity, eliminating a critical vulnerability in the software supply chain.
+- **Decentralized Distribution:** Instead of a central server like npm or PyPI, Atom uses Git repositories as the source of truth. It leverages the distributed nature of Git to ensure that package availability is not tied to a single entity, eliminating a critical vulnerability in the software supply chain.
 
--   **Verifiable, Git-Native Packages:** Atoms are not "copies" of source code. They are cryptographically verifiable, immutable slices of a source repository. This is achieved by creating a new, lightweight reference to the same underlying Git objects that comprise the source code. There is no possibility for drift between the source and the packaged code because no files are ever copied.
+- **Verifiable, Git-Native Packages:** Atoms are not "copies" of source code. They are cryptographically verifiable, immutable slices of a source repository. This is achieved by creating a new, lightweight reference to the same underlying Git objects that comprise the source code. There is no possibility for drift between the source and the packaged code because no files are ever copied.
 
--   **Designed for Efficiency:** By creating unambiguous, content-addressed cryptographic IDs for every package, Atom enables highly efficient, decentralized build pipelines. This foundation allows for a system that is not only more secure and resilient but is also designed for high-performance, distributed build systems.
+- **Designed for Efficiency:** By creating unambiguous, content-addressed cryptographic IDs for every package, Atom enables highly efficient, decentralized build pipelines. This foundation allows for a system that is not only more secure and resilient but is also designed for high-performance, distributed build systems.
 
 ## How It Works: The Three Layers
 
@@ -32,16 +32,16 @@ While `eka`'s inaugural implementation is deeply integrated with the **Nix ecosy
 
 This work is centered on four core components, which will eventually be unified into a single monorepo:
 
--   **Eka:** A user-facing CLI that provides a reasonable, statically-determinable interface for managing dependencies and builds.
--   **[atom-nix]:** A Nix module system for evaluating atoms.
--   **Atom Protocol:** A verifiable, versioned, and git-native format for publishing source code, designed for decentralized distribution and end-to-end integrity.
--   **Eos (Future):** A planned distributed, content-addressed build scheduler that will eventually power Eka's evaluation backend.
+- **Eka:** A user-facing CLI that provides a reasonable, statically-determinable interface for managing dependencies and builds.
+- **[atom-nix]:** A Nix module system for evaluating atoms.
+- **Atom Protocol:** A verifiable, versioned, and git-native format for publishing source code, designed for decentralized distribution and end-to-end integrity.
+- **Eos (Future):** A planned distributed, content-addressed build scheduler that will eventually power Eka's evaluation backend.
 
 ## Core Concepts
 
--   **Manifest (`atom.toml`):** A declarative file where you define your project's dependencies, including both atoms and pinned legacy sources (like a specific Git branch).
--   **Lockfile (`atom.lock`):** A fully resolved lockfile that captures the exact versions and cryptographic hashes of all dependencies, ensuring that your builds are completely reproducible.
--   **Atom URI:** A user-friendly addressing scheme for dependencies (e.g., `gh:owner/repo::my-atom@^1`). Aliases like `gh:` are a UI-only concern and are fully expanded in the lockfile to ensure portability.
+- **Manifest (`atom.toml`):** A declarative file where you define your project's dependencies, including both atoms and pinned legacy sources (like a specific Git branch).
+- **Lockfile (`atom.lock`):** A fully resolved lockfile that captures the exact versions and cryptographic hashes of all dependencies, ensuring that your builds are completely reproducible.
+- **Atom URI:** A user-friendly addressing scheme for dependencies (e.g., `gh:owner/repo::my-atom@^1`). Aliases like `gh:` are a UI-only concern and are fully expanded in the lockfile to ensure portability.
 
 ## Core Commands
 
