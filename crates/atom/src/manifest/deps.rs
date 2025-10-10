@@ -46,6 +46,7 @@
 //! validation and prevent typos in manifest files. Optional fields are properly
 //! handled with `skip_serializing_if` to keep the TOML output clean.
 
+use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
@@ -80,6 +81,17 @@ pub struct AtomReq {
     store: gix::url::Url,
 }
 
+/// Represents the hashing strategy for the build-time fetch
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+pub enum BuildStrat {
+    /// The fetched file will be marked as executable
+    #[serde(rename = "exec")]
+    Exec(bool),
+    /// The tag file is a tarball which will be unpacked before hashing
+    #[serde(rename = "unpack")]
+    Unpack(bool),
+}
+
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
 #[serde(untagged)]
 /// The dependencies specified in the manifest
@@ -93,7 +105,18 @@ pub enum Dependency {
     /// A git pin to an external source variant.
     GitPin(GitPin),
     /// A dependency fetched at build-time as an FOD.
-    Src(SrcReq),
+    Src(NixSrc),
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+#[serde(deny_unknown_fields)]
+/// The dependencies specified in the manifest
+pub struct Dependency2 {
+    /// Specify atom dependencies from a specific set outlined in `[package.sets]`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    from: BTreeMap<Name, BTreeMap<AtomTag, VersionReq>>,
+    /// Direct dependencies not in the atom format.
+    direct: DirectDeps,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -173,6 +196,17 @@ pub struct GitPin {
     pub import: Option<PathBuf>,
 }
 
+/// Represents the manner in which we resolve a rev for this git fetch
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+pub enum GitSpec {
+    /// We will resolve the rev of the given ref.
+    #[serde(rename = "ref")]
+    Ref(String),
+    /// We will resolve a version from the available tags resembling a semantic version.
+    #[serde(rename = "version")]
+    Version(VersionReq),
+}
+
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
 /// Represents the two types of git fetch strategies.
 pub enum GitStrat {
@@ -228,12 +262,70 @@ pub struct ManifestWriter {
     lock: Lockfile,
 }
 
+/// Represents the underlying type of Nix dependency
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
-/// Represents a dependency which is fetched at build time as an FOD.
+#[serde(untagged)]
+pub enum NixDep {
+    /// A nix eval-time fetch
+    Fetch(NixFetch),
+    /// A nix eval-time git fetch
+    Git(NixGit),
+    /// A nix build-time fetch, e.g. for build sources
+    Build(NixSrc),
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
 #[serde(deny_unknown_fields)]
-pub struct SrcReq {
+/// Represents a nix fetch, either direct or tarball.
+pub struct NixFetch {
+    /// The URL of the resource.
+    #[serde(flatten)]
+    pub url: NixUrl,
+    /// An optional version, tied to a concrete, resolved version of an atom.
+    ///
+    /// Only relevant if the Url contains a `"{version}"` place-holder in its string
+    /// representation.
+    ///
+    /// This field is omitted from serialization if None.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+#[serde(deny_unknown_fields)]
+/// Represents a nix eval-time git fetch.
+pub struct NixGit {
+    /// The URL of the git repository.
+    pub git: gix::Url,
+    /// An optional version, tied to a concrete, resolved version of an atom.
+    ///
+    /// Only relevant if the Url contains a `"{version}"` place-holder in its string
+    /// representation.
+    ///
+    /// This field is omitted from serialization if None.
+    #[serde(flatten, skip_serializing_if = "Option::is_none")]
+    pub spec: Option<GitSpec>,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+#[serde(deny_unknown_fields)]
+/// Represents a dependency which is fetched at build time as an FOD.
+pub struct NixSrc {
     /// The URL from which to fetch the build-time source.
-    pub src: Url,
+    build: Url,
+    #[serde(flatten, default, skip_serializing_if = "strat_is_not")]
+    strat: BuildStrat,
+}
+
+/// Represents the field name in a Nix dependency, which determines how it will be fetched
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+pub enum NixUrl {
+    /// A tarball url which will be unpacked before being hashed
+    #[serde(rename = "tar")]
+    Tar(Url),
+    /// A straight url which will be fetched and hashed directly
+    #[serde(rename = "url")]
+    Url(Url),
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -268,6 +360,14 @@ pub struct TarPin {
     /// This field is omitted from serialization if None.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub import: Option<PathBuf>,
+}
+
+/// Represents different possible types of direct dependencies, i.e. those in the atom format
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+#[serde(deny_unknown_fields)]
+struct DirectDeps {
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    nix: BTreeMap<Name, NixDep>,
 }
 
 /// A newtype wrapper to tie a `DocumentMut` to a specific serializable type `T`.
@@ -579,6 +679,13 @@ where
 /// A helper function for `serde(skip_serializing_if)` to omit `false` boolean values.
 pub(crate) fn not(b: &bool) -> bool {
     !b
+}
+
+fn strat_is_not(strat: &BuildStrat) -> bool {
+    match strat {
+        BuildStrat::Exec(b) => not(b),
+        BuildStrat::Unpack(b) => not(b),
+    }
 }
 
 /// Serializes a `gix::url::Url` to a string.
