@@ -47,7 +47,14 @@ company-atoms = "git@github.com:our-company/atoms"
 # A remote source with mirrors. The resolver will try them in order.
 public-registry = [ "https://registry-a.com/atoms", "https://registry-b.com/atoms" ]
 # A source for atoms within this same repository
-# You can specify the remote location of the local repo as a mirror if you like
+# A source for atoms within this same repository. The `::` syntax enables a
+# "local mirror," which is critical for an efficient development workflow in a
+# repository containing multiple, interdependent atoms. It allows the resolver
+# to find local atoms without requiring a `git push` after every change,
+# avoiding a disruptive publish-test cycle. The remote URL is provided as a
+# fallback for environments like CI where the local repository context may not
+# be available. The precise mechanism for local resolution (e.g., a root index
+# vs. a file walk) is a CLI implementation detail.
 local-atoms = [ "::", "https://github.com/our-company/more-atoms" ]
 ```
 
@@ -103,9 +110,27 @@ local-utility = "^0.1"
 nix-installer.url = "https://nixos.org/nix/install"
 # A Git dependency with a static ref.
 nixpkgs = { git = "https://github.com/NixOS/nixpkgs", ref = "nixos-unstable" }
-# A Git dependency with a dynamic version constraint resolved from available tags
+# A Git dependency with a dynamic version constraint. This provides a
+# convenient way to track a dependency without needing to manually update a
+# static ref. The resolution process is highly optimized:
+# 1. It queries the git remote using server-side filters (leveraging regex
+#    character classes) to fetch only tags that resemble a semantic version.
+# 2. The client then filters these results using the official semver.org regex.
+# 3. Finally, the `semver` crate identifies the highest matching version that
+#    satisfies the constraint.
+# This process is efficient, even on large repositories.
 other-repo = { git = "https://github.com/other/repo", version = "^1.2" }
-# A dynamic tarball dependency that depends on a resolved atom version.
+# A dynamic tarball dependency whose URL is interpolated from a resolved atom
+# version. This feature is critical for maintaining a single source of truth
+# for version numbers, preventing drift between an atom's declared version and
+# the version of the source archive it packages (e.g., a zlib atom packaging
+# a zlib source tarball).
+#
+# The resolution logic is strictly defined to prevent ambiguity:
+# 1. All `[deps.from.*]` atom dependencies are resolved first.
+# 2. The versions of these resolved atoms can then be interpolated into the
+#    fields of `[deps.direct.nix]` dependencies.
+# This one-way flow makes circular dependencies impossible.
 auth-service-docs = { tar = "https://docs.our-company.com/auth/{version}/docs.tar.gz", version = "from.company.auth-service" }
 
 # --- Build-Time Direct Dependencies ---
@@ -167,7 +192,7 @@ rev = "aa0ebc256a5b0540e9df53c64ef6930471c98407"
 type = "nix+git"
 name = "other-repo"
 url = "https://github.com/other/repo"
-rev = "<resolved_git_rev>"
+rev = "<git_rev_of_highest_matching_tag>"
 
 [[input]]
 type = "nix+tar"
