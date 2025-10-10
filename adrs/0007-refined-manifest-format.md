@@ -46,7 +46,6 @@ version = "0.1.0"
 company-atoms = "git@github.com:our-company/atoms"
 # A remote source with mirrors. The resolver will try them in order.
 public-registry = [ "https://registry-a.com/atoms", "https://registry-b.com/atoms" ]
-# A source for atoms within this same repository
 # A source for atoms within this same repository. The `::` syntax enables a
 # "local mirror," which is critical for an efficient development workflow in a
 # repository containing multiple, interdependent atoms. It allows the resolver
