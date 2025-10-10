@@ -58,9 +58,11 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use bstr::ByteSlice;
 use gix::ObjectId;
+use gix::protocol::handshake::Ref;
 use nix_compat::nixhash::NixHash;
-use semver::Version;
+use semver::{Version, VersionReq};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use snix_castore::blobservice::BlobService;
 use snix_castore::directoryservice::DirectoryService;
@@ -81,6 +83,14 @@ mod serde_base32;
 
 /// A type alias for a boxed error that is sendable and syncable.
 pub(crate) type BoxError = Box<dyn std::error::Error + Send + Sync>;
+
+#[derive(thiserror::Error, Debug)]
+enum LockError {
+    #[error(transparent)]
+    Generic(#[from] BoxError),
+    #[error("failed to resolve requested version")]
+    Resolve,
+}
 
 /// A type alias for the fetcher used for pinned dependencies.
 type PinFetcher = Fetcher<
@@ -205,6 +215,9 @@ pub struct PinGitDep {
     /// The Git repository URL.
     #[serde(serialize_with = "serialize_url", deserialize_with = "deserialize_url")]
     pub url: gix::Url,
+    /// The version which was resolved (if requested).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<Version>,
     /// The resolved revision (commit hash).
     pub rev: GitDigest,
     /// The path to import inside the repo.
@@ -627,17 +640,29 @@ impl GitPin {
         key: &Name,
         import: Option<PathBuf>,
         flake: bool,
-    ) -> Result<PinGitDep, BoxError> {
+    ) -> Result<PinGitDep, LockError> {
         use crate::manifest::deps::GitStrat;
         use crate::store::QueryStore;
 
-        let r = match &self.fetch {
-            GitStrat::Ref(r) => self.repo.get_ref(format!("{}:{}", r, r).as_str(), None)?,
-            GitStrat::Version(_version_req) => {
-                let query = "refs/tags/v*";
-                let _refs = self.repo.get_refs([query], None)?;
-                // TODO: finish version matching
-                todo!()
+        let (version, r) = match &self.fetch {
+            GitStrat::Ref(r) => (
+                None,
+                self.repo
+                    .get_ref(format!("{}:{}", r, r).as_str(), None)
+                    .map_err(|e| LockError::Generic(e.into()))?,
+            ),
+            GitStrat::Version(req) => {
+                let query = "refs/tags/*:refs/tags/*";
+                let refs = self
+                    .repo
+                    .get_refs([query], None)
+                    .map_err(|e| LockError::Generic(e.into()))?;
+                if let Some((v, r)) = GitPin::match_version(req, refs) {
+                    (Some(v), r)
+                } else {
+                    tracing::error!(message = "could not resolve requested version", %self.repo, version = %req);
+                    return Err(LockError::Resolve);
+                }
             },
         };
 
@@ -648,9 +673,23 @@ impl GitPin {
             name: key.to_owned(),
             url: self.repo.to_owned(),
             rev: GitDigest::Sha1(id),
+            version,
             import,
             flake,
         })
+    }
+
+    fn match_version(
+        req: &VersionReq,
+        refs: impl IntoIterator<Item = Ref>,
+    ) -> Option<(Version, Ref)> {
+        refs.into_iter()
+            .filter_map(|r| {
+                let (n, ..) = r.unpack();
+                let version = extract_and_parse_semver(n.to_str().ok()?)?;
+                req.matches(&version).then_some((version, r))
+            })
+            .max_by_key(|(ref version, _)| version.to_owned())
     }
 }
 
@@ -664,52 +703,118 @@ impl Default for Lockfile {
 }
 
 impl Lockfile {
+    const OUT_OF_SYNC: &str =
+        "out of sync dependency could not be resolved, check the version spec";
+    const RESOLUTION_ERR_MSG: &str = "unlocked dependency could not be resolved";
+
     /// Removes any dependencies from the lockfile that are no longer present in the
     /// manifest, ensuring the lockfile only contains entries that are still relevant.
-    pub(crate) fn sanitize(&mut self, manifest: &Manifest) {
+    pub(crate) async fn sanitize(&mut self, manifest: &Manifest) {
         self.deps
             .as_mut()
             .retain(|k, _| manifest.deps.contains_key(k));
-        self.synchronize(manifest);
+        self.synchronize(manifest).await;
     }
 
     /// Updates the lockfile to match the dependencies specified in the manifest.
     /// It resolves any new dependencies, updates existing ones if their version
     /// requirements have changed, and ensures the lockfile is fully consistent.
-    pub(crate) fn synchronize(&mut self, manifest: &Manifest) {
+    pub(crate) async fn synchronize(&mut self, manifest: &Manifest) {
         for (k, v) in manifest.deps.iter() {
             if !self.deps.as_ref().contains_key(k) {
                 match v {
-                    crate::manifest::deps::Dependency::Atom(atom_req) => {
+                    Dependency::Atom(atom_req) => {
                         if let Ok(dep) = atom_req.resolve(k) {
                             self.deps.as_mut().insert(k.to_owned(), Dep::Atom(dep));
                         } else {
-                            tracing::warn!(message = "unlocked dependency could not be resolved", key = %k);
+                            tracing::warn!(message = Self::RESOLUTION_ERR_MSG, key = %k, r#type = "atom");
                         };
                     },
-                    crate::manifest::deps::Dependency::Src(_) => todo!(),
-                    _ => (),
+                    Dependency::Pin(pin_req) => {
+                        if let Ok((_, dep)) = DirectPin::Straight(pin_req.to_owned())
+                            .resolve(Some(k), None, pin_req.flake)
+                            .await
+                        {
+                            self.deps.as_mut().insert(k.to_owned(), dep);
+                        } else {
+                            tracing::warn!(message = Self::RESOLUTION_ERR_MSG, key = %k, r#type = "pin");
+                        }
+                    },
+                    Dependency::TarPin(tar_req) => {
+                        if let Ok((_, dep)) = DirectPin::Tarball(tar_req.to_owned())
+                            .resolve(Some(k), tar_req.import.to_owned(), tar_req.flake)
+                            .await
+                        {
+                            self.deps.as_mut().insert(k.to_owned(), dep);
+                        } else {
+                            tracing::warn!(message = Self::RESOLUTION_ERR_MSG, key = %k, r#type = "pin+tar");
+                        }
+                    },
+                    Dependency::GitPin(git_req) => {
+                        if let Ok(dep) = git_req
+                            .resolve(k, git_req.import.to_owned(), git_req.flake)
+                            .await
+                        {
+                            self.deps.as_mut().insert(k.to_owned(), Dep::PinGit(dep));
+                        } else {
+                            tracing::warn!(message = Self::RESOLUTION_ERR_MSG, key = %k, r#type = "pin+git");
+                        }
+                    },
+                    Dependency::Src(_) => todo!(),
                 }
             } else {
                 match v {
-                    crate::manifest::deps::Dependency::Atom(atom_req) => {
+                    Dependency::Atom(atom_req) => {
                         let req = atom_req.version();
                         if let Some(Dep::Atom(dep)) = self.deps.as_ref().get(k) {
                             if !req.matches(&dep.version) || &dep.source != atom_req.store() {
-                                tracing::warn!(message = "updating out of date dependency in accordance with spec", key = %k);
+                                tracing::warn!(message = "updating out of date dependency in accordance with spec", key = %k, r#type = "atom");
                                 if let Ok(dep) = atom_req.resolve(k) {
                                     self.deps.as_mut().insert(k.to_owned(), Dep::Atom(dep));
                                 } else {
-                                    tracing::warn!(message = "out of sync dependency could not be resolved, check the version spec", key = %k);
+                                    tracing::warn!(message = Self::OUT_OF_SYNC, key = %k);
                                 };
                             }
-                        } else if let Ok(dep) = atom_req.resolve(k) {
-                            self.deps.as_mut().insert(k.to_owned(), Dep::Atom(dep));
-                        } else {
-                            tracing::warn!(message = "dependency is mislabeled as inproper type, and attempts to rectify failed", key = %k);
-                        };
+                        }
                     },
-                    crate::manifest::deps::Dependency::Src(_) => todo!(),
+                    Dependency::GitPin(git_req) => {
+                        if let Some(Dep::PinGit(dep)) = self.deps.as_ref().get(k) {
+                            let fetch = async |git_req: &GitPin, deps: &mut BTreeMap<Name, Dep>| {
+                                if let Ok(dep) = git_req
+                                    .resolve(k, git_req.import.to_owned(), git_req.flake)
+                                    .await
+                                {
+                                    deps.insert(k.to_owned(), Dep::PinGit(dep));
+                                } else {
+                                    tracing::warn!(
+                                        message = Self::OUT_OF_SYNC,
+                                        key = %k
+                                    );
+                                }
+                            };
+                            if dep.url == git_req.repo {
+                                use crate::manifest::deps::GitStrat;
+                                match git_req.fetch.to_owned() {
+                                    GitStrat::Ref(_) => {
+                                        // do nothing, we don't want to update locked refs unless
+                                        // explicitly requested
+                                    },
+                                    GitStrat::Version(version_req) => {
+                                        if dep
+                                            .version
+                                            .to_owned()
+                                            .is_none_or(|v| !version_req.matches(&v))
+                                        {
+                                            fetch(git_req, self.deps.as_mut()).await;
+                                        }
+                                    },
+                                }
+                            } else {
+                                fetch(git_req, self.deps.as_mut()).await;
+                            }
+                        }
+                    },
+                    Dependency::Src(_) => todo!(),
                     _ => (),
                 }
             }
@@ -730,6 +835,34 @@ impl<'de> Deserialize<'de> for WrappedNixHash {
         })?;
         Ok(WrappedNixHash(hash))
     }
+}
+
+use lazy_regex::{Lazy, Regex, lazy_regex};
+
+static SEMVER_REGEX: Lazy<Regex> = lazy_regex!(
+    r#"(?P<major>0|[1-9]\d*)\.(?P<minor>0|[1-9]\d*)\.(?P<patch>0|[1-9]\d*)(?:-(?P<prerelease>(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+(?P<buildmetadata>[0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?"#
+);
+
+fn extract_and_parse_semver(input: &str) -> Option<Version> {
+    let re = SEMVER_REGEX.to_owned();
+    println!("{}", input);
+    let captures = re.captures(input)?;
+
+    // Construct the SemVer string from captured groups
+    let version_str = format!(
+        "{}.{}.{}{}{}",
+        &captures["major"],
+        &captures["minor"],
+        &captures["patch"],
+        captures
+            .name("prerelease")
+            .map_or(String::new(), |m| format!("-{}", m.as_str())),
+        captures
+            .name("buildmetadata")
+            .map_or(String::new(), |m| format!("+{}", m.as_str()))
+    );
+
+    Version::parse(&version_str).ok()
 }
 
 /// Extracts a filename from a URL, suitable for use as a dependency name.

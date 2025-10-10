@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::Write;
 use std::os::unix::fs::MetadataExt;
 use std::str::FromStr;
@@ -43,10 +43,11 @@ impl MockAtom for gix::Repository {
             .tempfile_in(&atom_dir)?;
 
         let manifest = Manifest {
-            atom: Atom {
+            package: Atom {
                 tag: tag.try_into()?,
                 version: Version::from_str(version)?,
                 description: (!description.is_empty()).then_some(description.into()),
+                sets: BTreeMap::new(),
             },
             deps: Default::default(),
         };

@@ -63,7 +63,7 @@
 //! let parsed = Manifest::from_str(manifest_str).unwrap();
 //! ```
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::str::FromStr;
 
@@ -97,12 +97,42 @@ pub enum AtomError {
     Io(#[from] std::io::Error),
 }
 
+/// A strongly-typed representation of a source for an atom set.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum AtomSet {
+    /// Represents the local repository, allowing atoms to be resolved by path.
+    #[serde(rename = "::")]
+    Local,
+    /// A URL pointing to a remote repository that serves as a source for an atom set.
+    #[serde(
+        serialize_with = "deps::serialize_url",
+        deserialize_with = "deps::deserialize_url",
+        untagged
+    )]
+    Url(gix::Url),
+}
+
+/// Represents the possible values for a named atom set in the manifest.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum AtomSets {
+    /// A single source for an atom set.
+    Singleton(AtomSet),
+    /// A set of mirrors for an atom set.
+    ///
+    /// Since sets can be determined to be equivalent by their root hash, this allows a user to
+    /// provide multiple sources for the same set. The resolver will check for equivalence at
+    /// runtime by fetching the root commit from each URL. Operations like `publish` will
+    /// error if inconsistent mirrors are detected.
+    Mirrors(BTreeSet<AtomSet>),
+}
+
 /// Represents the structure of an `atom.toml` manifest file.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
-    /// The required `[atom]` table, containing core metadata.
-    pub atom: Atom,
+    /// The required `[package]` table, containing core metadata.
+    pub package: Atom,
     /// The dependencies of the atom.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub(crate) deps: HashMap<Name, deps::Dependency>,
@@ -112,10 +142,11 @@ impl Manifest {
     /// Creates a new `Manifest` with the given tag, version, and description.
     pub fn new(tag: AtomTag, version: Version, description: Option<String>) -> Self {
         Manifest {
-            atom: Atom {
+            package: Atom {
                 tag,
                 version,
                 description,
+                sets: BTreeMap::new(),
             },
             deps: HashMap::new(),
         }

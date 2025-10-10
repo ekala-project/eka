@@ -4,18 +4,20 @@
 //! file system structure. These types form the foundation of the atom format
 //! and are used throughout the crate.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use semver::Version;
 use serde::{Deserialize, Serialize};
 
-use super::id::AtomTag;
+use super::id::{AtomTag, Name};
+use crate::manifest::AtomSets;
 
 /// Represents the deserialized form of an Atom, directly constructed from the TOML manifest.
 ///
 /// This struct contains the basic metadata of an Atom but lacks the context-specific
 /// [`crate::AtomId`], which must be constructed separately.
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Atom {
     /// The verified, human-readable Unicode identifier for the Atom.
@@ -27,6 +29,10 @@ pub struct Atom {
     /// An optional description of the Atom.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+
+    /// A table of named atom sets, defining the sources for resolving atom dependencies.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub sets: BTreeMap<Name, AtomSets>,
 }
 
 /// Represents the file system paths associated with an atom.
