@@ -88,6 +88,10 @@ mod private {
     pub trait Sealed {}
 }
 
+//================================================================================================
+// Constants
+//================================================================================================
+
 const ATOM_FORMAT_VERSION: &str = "pre1.0";
 const ATOM_MANIFEST: &str = "manifest";
 const ATOM_META_REF: &str = "meta";
@@ -96,12 +100,20 @@ const ATOM_REF: &str = "atoms";
 const EMPTY_SIG: &str = "";
 const STORE_ROOT: &str = "eka";
 
+//================================================================================================
+// Statics
+//================================================================================================
+
 /// The default location where atom refs are stored.
 pub static ATOM_REFS: LazyLock<String> =
     LazyLock::new(|| format!("{}/{}", REF_ROOT.as_str(), ATOM_REF));
 static META_REFS: LazyLock<String> =
     LazyLock::new(|| format!("{}/{}", REF_ROOT.as_str(), ATOM_META_REF));
 static REF_ROOT: LazyLock<String> = LazyLock::new(|| format!("refs/{}", STORE_ROOT));
+
+//================================================================================================
+// Types
+//================================================================================================
 
 /// Contains backend-specific content information for reporting results to the user.
 pub enum Content {
@@ -143,6 +155,10 @@ type PublishOutcome<R> = MaybeSkipped<Record<R>>;
 ///
 /// The map links an [`AtomTag`] to the file path of its manifest.
 type ValidAtoms = HashMap<AtomTag, PathBuf>;
+
+//================================================================================================
+// Traits
+//================================================================================================
 
 /// A builder for a [`Publish`] implementation.
 ///
@@ -226,6 +242,10 @@ trait StateValidator<R> {
     /// Validates the state of the atom source.
     fn validate(publisher: &Self::Publisher) -> Result<ValidAtoms, Self::Error>;
 }
+
+//================================================================================================
+// Impls
+//================================================================================================
 
 impl<R> Record<R> {
     /// Returns a reference to the [`AtomId`] in the record.

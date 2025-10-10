@@ -70,25 +70,12 @@ use serde::{Deserialize, Serialize, Serializer};
 use thiserror::Error;
 use unic_ucd_category::GeneralCategory;
 
-#[cfg(test)]
-mod tests;
-
-/// The maximum allowed length of an atom identifier in bytes.
 const ID_MAX: usize = 128;
-
-/// A constant representing the root tag identifier.
 pub(crate) const ROOT_TAG: &str = "__ROOT";
 
-/// A type alias for `AtomTag` used in contexts requiring a validated identifier.
-pub type Name = AtomTag;
-
-/// A validated string suitable for use as an atom's `tag`.
-///
-/// `AtomTag` ensures that the identifier conforms to specific validation rules,
-/// providing a safe and descriptive label for an atom within its origin.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(try_from = "String")]
-pub struct AtomTag(String);
+//================================================================================================
+// Types
+//================================================================================================
 
 /// A struct that couples an atom's tag to its origin.
 ///
@@ -101,17 +88,13 @@ pub struct AtomId<R> {
     tag: AtomTag,
 }
 
-/// Represents the BLAKE3 hash of an `AtomId`.
+/// A validated string suitable for use as an atom's `tag`.
 ///
-/// This struct holds a 32-byte BLAKE3 hash, serving as a cryptographically
-/// secure and globally unique identifier for an atom.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct IdHash<'id, T> {
-    /// The 32-byte BLAKE3 hash value.
-    hash: [u8; 32],
-    /// A reference to the `AtomId` that was hashed.
-    id: &'id AtomId<T>,
-}
+/// `AtomTag` ensures that the identifier conforms to specific validation rules,
+/// providing a safe and descriptive label for an atom within its origin.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "String")]
+pub struct AtomTag(String);
 
 /// An enumeration of errors that can occur during atom tag validation.
 ///
@@ -135,6 +118,25 @@ pub enum Error {
     #[error("An Atom id cannot be more than {} bytes", ID_MAX)]
     TooLong,
 }
+
+/// Represents the BLAKE3 hash of an `AtomId`.
+///
+/// This struct holds a 32-byte BLAKE3 hash, serving as a cryptographically
+/// secure and globally unique identifier for an atom.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct IdHash<'id, T> {
+    /// The 32-byte BLAKE3 hash value.
+    hash: [u8; 32],
+    /// A reference to the `AtomId` that was hashed.
+    id: &'id AtomId<T>,
+}
+
+/// A type alias for `AtomTag` used in contexts requiring a validated identifier.
+pub type Name = AtomTag;
+
+//================================================================================================
+// Traits
+//================================================================================================
 
 /// A trait for computing the BLAKE3 hash of an `AtomId`.
 ///
@@ -167,6 +169,10 @@ pub trait Origin<R> {
     /// This function will return an error if the calculation fails.
     fn calculate_origin(&self) -> Result<R, Self::Error>;
 }
+
+//================================================================================================
+// Impls
+//================================================================================================
 
 impl<R> AtomId<R> {
     /// Returns a reference to the atom's Unicode identifier.
@@ -309,9 +315,28 @@ impl Deref for AtomTag {
     }
 }
 
+impl<T> Deref for IdHash<'_, T> {
+    type Target = [u8; 32];
+
+    fn deref(&self) -> &Self::Target {
+        &self.hash
+    }
+}
+
 impl fmt::Display for AtomTag {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
+    }
+}
+
+impl<'a, R> Display for IdHash<'a, R> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = base32::encode(crate::BASE32, &self.hash);
+        if let Some(max_width) = f.precision() {
+            write!(f, "{s:.max_width$}")
+        } else {
+            f.write_str(&s)
+        }
     }
 }
 
@@ -359,21 +384,9 @@ impl TryFrom<String> for AtomTag {
     }
 }
 
-impl<'a, R> Display for IdHash<'a, R> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = base32::encode(crate::BASE32, &self.hash);
-        if let Some(max_width) = f.precision() {
-            write!(f, "{s:.max_width$}")
-        } else {
-            f.write_str(&s)
-        }
-    }
-}
+//================================================================================================
+// Tests
+//================================================================================================
 
-impl<T> Deref for IdHash<'_, T> {
-    type Target = [u8; 32];
-
-    fn deref(&self) -> &Self::Target {
-        &self.hash
-    }
-}
+#[cfg(test)]
+mod tests;

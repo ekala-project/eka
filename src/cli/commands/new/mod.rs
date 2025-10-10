@@ -13,6 +13,10 @@ use atom::{AtomTag, Manifest};
 use clap::Parser;
 use semver::Version;
 
+//================================================================================================
+// Types
+//================================================================================================
+
 /// The `new` subcommand.
 #[derive(Parser, Debug)]
 #[command(arg_required_else_help = true, next_help_heading = "New Options")]
@@ -29,6 +33,10 @@ pub struct Args {
     #[arg(short, long)]
     tag: Option<AtomTag>,
 }
+
+//================================================================================================
+// Functions
+//================================================================================================
 
 /// The main entry point for the `new` subcommand.
 pub(super) fn run(args: Args) -> Result<()> {

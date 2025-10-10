@@ -14,6 +14,10 @@ use tracing_indicatif::style::ProgressStyle;
 
 use super::PublishArgs;
 
+//================================================================================================
+// Types
+//================================================================================================
+
 /// Git-specific arguments for the `publish` subcommand.
 #[derive(Parser, Debug)]
 #[command(next_help_heading = "Git Options")]
@@ -29,6 +33,10 @@ pub(crate) struct GitArgs {
     #[arg(long, short, default_value = "HEAD", name = "REVSPEC")]
     spec: String,
 }
+
+//================================================================================================
+// Functions
+//================================================================================================
 
 /// The main entry point for the Git-specific `publish` logic.
 #[tracing::instrument(skip_all)]

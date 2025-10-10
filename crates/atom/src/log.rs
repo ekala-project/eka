@@ -8,6 +8,10 @@ use tracing::Span;
 use tracing_indicatif::span_ext::IndicatifSpanExt;
 use tracing_indicatif::style::ProgressStyle;
 
+//================================================================================================
+// Functions
+//================================================================================================
+
 /// Calculates the best size from an iterator's size hint.
 ///
 /// This function prefers the upper bound of a size hint if it exists,

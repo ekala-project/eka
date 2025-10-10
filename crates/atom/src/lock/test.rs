@@ -7,6 +7,10 @@ use super::*;
 /// A sample lockfile for testing purposes.
 const TOML_LOCK: &str = include_str!("test/atom.lock");
 
+//================================================================================================
+// Functions
+//================================================================================================
+
 /// Tests that a valid lockfile can be parsed and an invalid one is rejected.
 #[test]
 fn parse_lock() -> anyhow::Result<()> {

@@ -6,6 +6,10 @@ use atom::store::git;
 use gix::ThreadSafeRepository;
 use thiserror::Error;
 
+//================================================================================================
+// Types
+//================================================================================================
+
 /// Represents the detected version control system.
 #[non_exhaustive]
 #[derive(Clone, Debug)]
@@ -28,6 +32,10 @@ pub(crate) enum Error {
     #[error(transparent)]
     Discover(#[from] Box<gix::discover::Error>),
 }
+
+//================================================================================================
+// Functions
+//================================================================================================
 
 /// Detects the version control system in the current directory.
 pub(super) async fn detect() -> Result<Detected, Error> {

@@ -61,6 +61,7 @@ use std::sync::Arc;
 use bstr::ByteSlice;
 use gix::ObjectId;
 use gix::protocol::handshake::Ref;
+use lazy_regex::{Lazy, Regex, lazy_regex};
 use nix_compat::nixhash::NixHash;
 use semver::{Version, VersionReq};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -81,24 +82,17 @@ use crate::{AtomId, Manifest};
 
 mod serde_base32;
 
-/// A type alias for a boxed error that is sendable and syncable.
-pub(crate) type BoxError = Box<dyn std::error::Error + Send + Sync>;
+//================================================================================================
+// Statics
+//================================================================================================
 
-#[derive(thiserror::Error, Debug)]
-enum LockError {
-    #[error(transparent)]
-    Generic(#[from] BoxError),
-    #[error("failed to resolve requested version")]
-    Resolve,
-}
+static SEMVER_REGEX: Lazy<Regex> = lazy_regex!(
+    r#"(?P<major>0|[1-9]\d*)\.(?P<minor>0|[1-9]\d*)\.(?P<patch>0|[1-9]\d*)(?:-(?P<prerelease>(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+(?P<buildmetadata>[0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?"#
+);
 
-/// A type alias for the fetcher used for pinned dependencies.
-type PinFetcher = Fetcher<
-    Arc<dyn BlobService>,
-    Arc<dyn DirectoryService>,
-    Arc<dyn PathInfoService>,
-    SimpleRenderer<Arc<dyn BlobService>, Arc<dyn DirectoryService>>,
->;
+//================================================================================================
+// Types
+//================================================================================================
 
 /// Represents a locked atom dependency, referencing a verifiable repository slice.
 ///
@@ -126,6 +120,30 @@ pub struct AtomDep {
     id: AtomDigest,
 }
 
+/// Represents the location of an atom, either as a URL or a relative path.
+///
+/// This enum is used to specify where an atom can be found, supporting both
+/// remote Git repositories and local relative paths within a repository.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Eq)]
+pub enum AtomLocation {
+    /// A URL pointing to a Git repository containing the atom.
+    ///
+    /// When this variant is used, the atom will be fetched from the specified
+    /// Git repository URL. If not provided, defaults to the current repository.
+    #[serde(
+        rename = "url",
+        serialize_with = "serialize_url",
+        deserialize_with = "deserialize_url"
+    )]
+    Url(gix::url::Url),
+    /// A relative path within the repository where the atom is located.
+    ///
+    /// When this variant is used, the atom is located at the specified path
+    /// relative to the current atom. If not provided, defaults to the root.
+    #[serde(rename = "path")]
+    Path(PathBuf),
+}
+
 /// Represents a locked build-time source, such as a registry or configuration.
 ///
 /// This struct is used for sources that are fetched during the build process,
@@ -141,6 +159,58 @@ pub struct BuildSrc {
     /// The hash for verification.
     hash: WrappedNixHash,
 }
+
+/// Enum representing the different types of locked dependencies, serialized as tagged TOML tables.
+///
+/// This enum provides a type-safe way to represent different kinds of dependencies
+/// in the lockfile, ensuring that each dependency type has the correct fields
+/// and validation at compile time.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+#[serde(tag = "type")]
+pub enum Dep {
+    /// An atom dependency variant.
+    ///
+    /// Represents a dependency on another atom, identified by its ID, version,
+    /// and Git revision.
+    #[serde(rename = "atom")]
+    Atom(AtomDep),
+    /// A direct pin to an external source variant.
+    ///
+    /// Represents a dependency pinned to a specific URL with integrity verification.
+    /// Used for dependencies that are not atoms but need to be fetched from external sources.
+    #[serde(rename = "pin")]
+    Pin(PinDep),
+    /// A Git-specific pin variant.
+    ///
+    /// Represents a dependency pinned to a specific Git repository and commit.
+    /// Similar to Pin but specifically for Git repositories.
+    #[serde(rename = "pin+git")]
+    PinGit(PinGitDep),
+    /// A tarball pin variant.
+    ///
+    /// Represents a dependency pinned to a tarball or archive file.
+    /// Used for dependencies distributed as compressed archives.
+    #[serde(rename = "pin+tar")]
+    PinTar(PinTarDep),
+    /// A cross-atom source reference variant.
+    ///
+    /// Represents a pin dependency that is sourced from another atom, enabling
+    /// composition of complex systems from simpler atom components.
+    #[serde(rename = "pin+from")]
+    From(FromDep),
+    /// A reference to a build source.
+    ///
+    /// Represents a source that needs to be fetched and available during the
+    /// build process, such as source code or configuration file.
+    #[serde(rename = "build")]
+    Build(BuildSrc),
+}
+
+/// A wrapper for `BTreeMap` that ensures consistent ordering for serialization
+/// and minimal diffs in the lockfile. It maps dependency names to their locked
+/// representations.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct DepMap<Deps>(BTreeMap<Name, Deps>);
 
 /// Represents a cross-atom source reference, acquiring a dependency from another atom.
 ///
@@ -161,6 +231,21 @@ pub struct FromDep {
     /// The path to import inside the tarball.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub import: Option<PathBuf>,
+}
+
+/// Represents different types of Git commit hashes.
+///
+/// This enum supports both SHA-1 and SHA-256 hashes, which are serialized
+/// as untagged values in TOML for maximum compatibility.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Eq)]
+#[serde(untagged)]
+pub enum GitDigest {
+    /// A SHA-1 commit hash.
+    #[serde(rename = "sha1")]
+    Sha1(#[serde(with = "hex")] [u8; 20]),
+    /// A SHA-256 commit hash.
+    #[serde(rename = "sha256")]
+    Sha256(#[serde(with = "hex")] [u8; 32]),
 }
 
 /// The root structure for the lockfile, containing resolved dependencies and sources.
@@ -249,105 +334,6 @@ pub struct PinTarDep {
     pub flake: bool,
 }
 
-/// Represents the BLAKE-3 digest of an atom's identity.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Eq)]
-struct AtomDigest(#[serde(with = "serde_base32")] [u8; 32]);
-
-/// A wrapper for `BTreeMap` that ensures consistent ordering for serialization
-/// and minimal diffs in the lockfile. It maps dependency names to their locked
-/// representations.
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) struct DepMap<Deps>(BTreeMap<Name, Deps>);
-
-/// A wrapper around `NixHash` to provide custom serialization behavior for TOML.
-#[derive(Debug, PartialEq, PartialOrd, Eq, Clone, Serialize)]
-pub(crate) struct WrappedNixHash(pub NixHash);
-
-/// Represents the location of an atom, either as a URL or a relative path.
-///
-/// This enum is used to specify where an atom can be found, supporting both
-/// remote Git repositories and local relative paths within a repository.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Eq)]
-pub enum AtomLocation {
-    /// A URL pointing to a Git repository containing the atom.
-    ///
-    /// When this variant is used, the atom will be fetched from the specified
-    /// Git repository URL. If not provided, defaults to the current repository.
-    #[serde(
-        rename = "url",
-        serialize_with = "serialize_url",
-        deserialize_with = "deserialize_url"
-    )]
-    Url(gix::url::Url),
-    /// A relative path within the repository where the atom is located.
-    ///
-    /// When this variant is used, the atom is located at the specified path
-    /// relative to the current atom. If not provided, defaults to the root.
-    #[serde(rename = "path")]
-    Path(PathBuf),
-}
-
-/// Enum representing the different types of locked dependencies, serialized as tagged TOML tables.
-///
-/// This enum provides a type-safe way to represent different kinds of dependencies
-/// in the lockfile, ensuring that each dependency type has the correct fields
-/// and validation at compile time.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
-#[serde(tag = "type")]
-pub enum Dep {
-    /// An atom dependency variant.
-    ///
-    /// Represents a dependency on another atom, identified by its ID, version,
-    /// and Git revision.
-    #[serde(rename = "atom")]
-    Atom(AtomDep),
-    /// A direct pin to an external source variant.
-    ///
-    /// Represents a dependency pinned to a specific URL with integrity verification.
-    /// Used for dependencies that are not atoms but need to be fetched from external sources.
-    #[serde(rename = "pin")]
-    Pin(PinDep),
-    /// A Git-specific pin variant.
-    ///
-    /// Represents a dependency pinned to a specific Git repository and commit.
-    /// Similar to Pin but specifically for Git repositories.
-    #[serde(rename = "pin+git")]
-    PinGit(PinGitDep),
-    /// A tarball pin variant.
-    ///
-    /// Represents a dependency pinned to a tarball or archive file.
-    /// Used for dependencies distributed as compressed archives.
-    #[serde(rename = "pin+tar")]
-    PinTar(PinTarDep),
-    /// A cross-atom source reference variant.
-    ///
-    /// Represents a pin dependency that is sourced from another atom, enabling
-    /// composition of complex systems from simpler atom components.
-    #[serde(rename = "pin+from")]
-    From(FromDep),
-    /// A reference to a build source.
-    ///
-    /// Represents a source that needs to be fetched and available during the
-    /// build process, such as source code or configuration file.
-    #[serde(rename = "build")]
-    Build(BuildSrc),
-}
-
-/// Represents different types of Git commit hashes.
-///
-/// This enum supports both SHA-1 and SHA-256 hashes, which are serialized
-/// as untagged values in TOML for maximum compatibility.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Eq)]
-#[serde(untagged)]
-pub enum GitDigest {
-    /// A SHA-1 commit hash.
-    #[serde(rename = "sha1")]
-    Sha1(#[serde(with = "hex")] [u8; 20]),
-    /// A SHA-256 commit hash.
-    #[serde(rename = "sha256")]
-    Sha256(#[serde(with = "hex")] [u8; 32]),
-}
-
 /// The resolution mode for generating the lockfile.
 ///
 /// This enum controls how dependencies are resolved when generating a lockfile,
@@ -371,11 +357,42 @@ pub enum ResolutionMode {
     Deep,
 }
 
+/// A wrapper around `NixHash` to provide custom serialization behavior for TOML.
+#[derive(Debug, PartialEq, PartialOrd, Eq, Clone, Serialize)]
+pub(crate) struct WrappedNixHash(pub NixHash);
+
+/// A type alias for a boxed error that is sendable and syncable.
+pub(crate) type BoxError = Box<dyn std::error::Error + Send + Sync>;
+
+/// Represents the BLAKE-3 digest of an atom's identity.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Eq)]
+struct AtomDigest(#[serde(with = "serde_base32")] [u8; 32]);
+
+#[derive(thiserror::Error, Debug)]
+enum LockError {
+    #[error(transparent)]
+    Generic(#[from] BoxError),
+    #[error("failed to resolve requested version")]
+    Resolve,
+}
+
 /// An enum to handle different URL types for filename extraction.
 enum Urls<'a> {
     Url(&'a Url),
     Git(&'a gix::Url),
 }
+
+/// A type alias for the fetcher used for pinned dependencies.
+type PinFetcher = Fetcher<
+    Arc<dyn BlobService>,
+    Arc<dyn DirectoryService>,
+    Arc<dyn PathInfoService>,
+    SimpleRenderer<Arc<dyn BlobService>, Arc<dyn DirectoryService>>,
+>;
+
+//================================================================================================
+// Impls
+//================================================================================================
 
 impl AtomReq {
     /// Resolves an `AtomReq` to a fully specified `AtomDep` by querying the
@@ -837,11 +854,9 @@ impl<'de> Deserialize<'de> for WrappedNixHash {
     }
 }
 
-use lazy_regex::{Lazy, Regex, lazy_regex};
-
-static SEMVER_REGEX: Lazy<Regex> = lazy_regex!(
-    r#"(?P<major>0|[1-9]\d*)\.(?P<minor>0|[1-9]\d*)\.(?P<patch>0|[1-9]\d*)(?:-(?P<prerelease>(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+(?P<buildmetadata>[0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?"#
-);
+//================================================================================================
+// Functions
+//================================================================================================
 
 fn extract_and_parse_semver(input: &str) -> Option<Version> {
     let re = SEMVER_REGEX.to_owned();
@@ -901,6 +916,10 @@ fn get_url_filename(url: &Urls) -> String {
         },
     }
 }
+
+//================================================================================================
+// Tests
+//================================================================================================
 
 #[cfg(test)]
 mod test;

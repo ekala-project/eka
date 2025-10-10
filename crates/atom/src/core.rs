@@ -13,6 +13,10 @@ use serde::{Deserialize, Serialize};
 use super::id::{AtomTag, Name};
 use crate::manifest::AtomSets;
 
+//================================================================================================
+// Types
+//================================================================================================
+
 /// Represents the deserialized form of an Atom, directly constructed from the TOML manifest.
 ///
 /// This struct contains the basic metadata of an Atom but lacks the context-specific
@@ -50,6 +54,10 @@ where
     /// Path to the atom's content directory
     content: P,
 }
+
+//================================================================================================
+// Impls
+//================================================================================================
 
 impl AtomPaths<PathBuf> {
     /// Creates a new `AtomPaths` instance from a given path.

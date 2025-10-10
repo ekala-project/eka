@@ -77,8 +77,9 @@ use crate::{Atom, AtomTag};
 
 pub mod deps;
 
-/// A specialized result type for manifest operations.
-pub type AtomResult<T> = Result<T, AtomError>;
+//================================================================================================
+// Types
+//================================================================================================
 
 /// An error that can occur when parsing or handling an atom manifest.
 #[derive(Error, Debug)]
@@ -137,6 +138,13 @@ pub struct Manifest {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub(crate) deps: HashMap<Name, deps::Dependency>,
 }
+
+/// A specialized result type for manifest operations.
+pub type AtomResult<T> = Result<T, AtomError>;
+
+//================================================================================================
+// Impls
+//================================================================================================
 
 impl Manifest {
     /// Creates a new `Manifest` with the given tag, version, and description.

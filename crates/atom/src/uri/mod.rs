@@ -70,9 +70,6 @@
 //! - Invalid version specifications
 //! - Missing required components
 
-#[cfg(test)]
-mod tests;
-
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::Display;
@@ -94,7 +91,18 @@ use thiserror::Error;
 use super::id::AtomTag;
 use crate::id::Error;
 
+#[cfg(test)]
+mod tests;
+
+//================================================================================================
+// Statics
+//================================================================================================
+
 static ALIASES: LazyLock<Aliases> = LazyLock::new(|| Aliases(config::CONFIG.aliases()));
+
+//================================================================================================
+// Types
+//================================================================================================
 
 /// A URL that may contain an alias to be resolved.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Default)]
@@ -186,6 +194,12 @@ struct UrlRef<'a> {
     /// A URL fragment which may contain an alias to be later expanded
     frag: Option<&'a str>,
 }
+
+type UrlPrefix<'a> = (Option<&'a str>, Option<&'a str>, Option<&'a str>);
+
+//================================================================================================
+// Impls
+//================================================================================================
 
 impl AliasedUrl {
     /// Returns a reference to the optional git ref.
@@ -543,6 +557,10 @@ impl<'a> UrlRef<'a> {
     }
 }
 
+//================================================================================================
+// Functions
+//================================================================================================
+
 fn empty_none<'a>((rest, opt): (&'a str, Option<&'a str>)) -> (&'a str, Option<&'a str>) {
     (rest, opt.and_then(not_empty))
 }
@@ -624,8 +642,6 @@ fn parse_port(input: &str) -> IResult<&str, Option<(&str, &str)>> {
         digit1,
     )))(input)
 }
-
-type UrlPrefix<'a> = (Option<&'a str>, Option<&'a str>, Option<&'a str>);
 
 fn parse_url(url: &str) -> IResult<&str, UrlPrefix<'_>> {
     let (rest, (scheme, user_pass)) = tuple((scheme, split_at))(url)?;

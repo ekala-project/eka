@@ -12,6 +12,10 @@ use crate::cli::store::Detected;
 
 mod git;
 
+//================================================================================================
+// Types
+//================================================================================================
+
 /// The `resolve` subcommand.
 #[derive(Parser, Debug)]
 #[command(arg_required_else_help = true)]
@@ -33,6 +37,10 @@ struct StoreArgs {
     #[command(flatten)]
     git: git::GitArgs,
 }
+
+//================================================================================================
+// Functions
+//================================================================================================
 
 /// The main entry point for the `resolve` subcommand.
 pub(super) fn run(_store: Detected, _args: Args) -> Result<()> {

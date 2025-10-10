@@ -6,9 +6,6 @@
 //! is contained here, as well as the type representing the [`Root`] of history used for an
 //! [`crate::AtomId`].
 
-#[cfg(test)]
-pub(crate) mod test;
-
 use std::borrow::Cow;
 use std::io;
 use std::ops::Deref;
@@ -29,12 +26,27 @@ use crate::AtomTag;
 use crate::id::Origin;
 use crate::store::{Init, NormalizeStorePath, QueryStore, QueryVersion};
 
+#[cfg(test)]
+pub(crate) mod test;
+
+//================================================================================================
+// Constants
+//================================================================================================
+
 pub(super) const V1_ROOT: &str = "refs/tags/ekala/root/v1";
 const V1_ROOT_SEMVER: &str = "1.0.0";
+
+//================================================================================================
+// Statics
+//================================================================================================
 
 static DEFAULT_REMOTE: OnceLock<Cow<str>> = OnceLock::new();
 /// Provide a lazily instantiated static reference to the git repository.
 static REPO: OnceLock<Option<ThreadSafeRepository>> = OnceLock::new();
+
+//================================================================================================
+// Types
+//================================================================================================
 
 /// An error encountered during initialization or other git store operations.
 #[derive(ThisError, Debug)]
@@ -118,6 +130,14 @@ pub enum Error {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Root(ObjectId);
 
+type AtomQuery = (AtomTag, Version, ObjectId);
+type ProgressRange = std::ops::RangeInclusive<prodash::progress::key::Level>;
+type Refs = Vec<super::UnpackedRef<ObjectId>>;
+
+//================================================================================================
+// Traits
+//================================================================================================
+
 trait EkalaRemote {
     type Error;
     const ANONYMOUS: &str = "<unamed>";
@@ -126,6 +146,10 @@ trait EkalaRemote {
         self.try_symbol().unwrap_or(Self::ANONYMOUS)
     }
 }
+
+//================================================================================================
+// Impls
+//================================================================================================
 
 impl AsRef<[u8]> for Root {
     fn as_ref(&self) -> &[u8] {
@@ -310,7 +334,6 @@ impl NormalizeStorePath for Repository {
     }
 }
 
-type AtomQuery = (AtomTag, Version, ObjectId);
 impl Origin<Root> for std::vec::IntoIter<AtomQuery> {
     type Error = Error;
 
@@ -586,9 +609,12 @@ impl super::UnpackRef<ObjectId> for Ref {
     }
 }
 
-type Refs = Vec<super::UnpackedRef<ObjectId>>;
 impl<'repo> QueryVersion<Ref, ObjectId, Refs, Box<dyn Transport + Send>> for gix::Remote<'repo> {}
 impl QueryVersion<Ref, ObjectId, Refs, Box<dyn Transport + Send>> for gix::Url {}
+
+//================================================================================================
+// Functions
+//================================================================================================
 
 /// Return a static reference to the default remote configured for pushing
 pub fn default_remote() -> &'static str {
@@ -648,7 +674,6 @@ pub fn run_git_command(args: &[&str]) -> io::Result<Vec<u8>> {
     }
 }
 
-type ProgressRange = std::ops::RangeInclusive<prodash::progress::key::Level>;
 const STANDARD_RANGE: ProgressRange = 2..=2;
 
 fn setup_line_renderer(

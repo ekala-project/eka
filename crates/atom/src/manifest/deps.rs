@@ -63,7 +63,7 @@ use crate::uri::{AliasedUrl, Uri};
 use crate::{Lockfile, Manifest};
 
 //================================================================================================
-// Structs & Enums
+// Types
 //================================================================================================
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]

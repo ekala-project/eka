@@ -14,6 +14,10 @@ mod new;
 mod publish;
 mod resolve;
 
+//================================================================================================
+// Types
+//================================================================================================
+
 /// The subcommands for the Eka CLI.
 #[derive(Subcommand)]
 #[allow(clippy::large_enum_variant)]
@@ -44,6 +48,10 @@ pub(super) enum Commands {
     /// structured lock file format.
     Resolve(resolve::Args),
 }
+
+//================================================================================================
+// Functions
+//================================================================================================
 
 /// The main entry point for the Eka CLI.
 pub async fn run(args: Args) -> anyhow::Result<()> {
