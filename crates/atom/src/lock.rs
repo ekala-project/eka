@@ -290,6 +290,8 @@ enum LockError {
     Generic(#[from] BoxError),
     #[error("failed to resolve requested version")]
     Resolve,
+    #[error("manifest is in an inconsistent state")]
+    Inconsistent,
 }
 
 /// An enum to handle different URL types for filename extraction.
@@ -741,12 +743,53 @@ impl Lockfile {
         "out of sync dependency could not be resolved, check the version spec";
     const RESOLUTION_ERR_MSG: &str = "unlocked dependency could not be resolved";
 
-    /// checks declared package sets for integrity, ensures that every
-    pub(crate) async fn check_sets(
+    /// Verifies the integrity of declared package sets and collects atom references.
+    ///
+    /// This function performs several critical checks to ensure the consistency and
+    /// integrity of the package sets defined in the manifest:
+    ///
+    /// 1.  **Root Consistency**: It ensures that every URL within a named mirror set
+    ///     points to the same underlying repository by verifying their advertised root hashes.
+    /// 2.  **Set Uniqueness**: It guarantees that a given repository URL does not belong
+    ///     to more than one mirror set, preventing ambiguity.
+    /// 3.  **Version and Revision Coherency**: It aggregates all atoms from each mirror,
+    ///     ensuring that no two mirrors advertise the same atom version with a different
+    ///     Git revision, which could indicate tampering or misconfiguration.
+    ///
+    /// # Arguments
+    ///
+    /// * `manifest` - A reference to the `Manifest` containing the package sets to be checked.
+    /// * `repo` - A thread-safe repository instance for handling local Git operations.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing a tuple with three elements on success:
+    ///
+    /// * `HashMap<Name, BTreeSet<UnpackedRef<gix::ObjectId>>>`: A map where each key is the
+    ///   name of a package set, and the value is a set of all unique atoms found across its mirrors.
+    /// * `HashMap<Root, AtomTag>`: A map from a repository's root hash to its corresponding
+    ///   set name, used for efficient lookups during manifest synchronization.
+    /// * `HashMap<gix::Url, Box<dyn Transport + Send>>`: A map of open Git transport
+    ///   connections for reuse in subsequent operations.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `BoxError` if any of the following conditions are met:
+    /// - A repository is found in more than one mirror set.
+    /// - The mirrors for a given set do not all point to the same root hash.
+    /// - An atom is advertised with the same version but different revisions across mirrors.
+    pub(crate) async fn get_and_check_sets(
         &mut self,
         manifest: &Manifest,
         repo: &ThreadSafeRepository,
-    ) -> Result<(), BoxError> {
+    ) -> Result<
+        (
+            HashMap<Name, BTreeSet<UnpackedRef<gix::ObjectId>>>,
+            HashMap<Root, AtomTag>,
+            HashMap<gix::Url, Box<dyn Transport + std::marker::Send>>,
+        ),
+        BoxError,
+    > {
         use crate::id::Origin;
         use crate::manifest::AtomSet;
         let repo = repo.to_thread_local();
@@ -759,13 +802,23 @@ impl Lockfile {
                             roots: &mut HashMap<Name, Root>| {
             let prev = names.insert(root, k.to_owned());
             if prev.as_ref() != Some(k) || prev.is_some() {
-                // same set found in different named set
-                return Err(todo!());
+                tracing::error!(
+                    message = "a repository exists in more than one mirror set",
+                    set.a = %k,
+                    set.b = ?prev,
+                    set.hash = %*root
+                );
+                return Err(LockError::Inconsistent.into());
             }
             let prev = roots.insert(k.to_owned(), root);
             if prev.as_ref() != Some(&root) || prev.is_some() {
-                // different set found in the same named set
-                return Err(todo!());
+                tracing::error!(
+                    message = "the mirrors for this set do not all point at the same set",
+                    set.name = %k,
+                    set.a = %*root,
+                    set.b = ?prev,
+                );
+                return Err(LockError::Inconsistent.into());
             }
             Ok::<_, BoxError>(())
         };
@@ -786,7 +839,7 @@ impl Lockfile {
                     let mut transport = url.get_transport().ok();
                     let atoms = url.get_atoms(transport.as_mut())?;
                     let root = atoms.calculate_origin()?;
-                    let res = (transport, atoms, root, k);
+                    let res = (transport, atoms, root, k, url);
                     Ok::<_, BoxError>(res)
                 };
                 tasks.spawn(task);
@@ -806,15 +859,27 @@ impl Lockfile {
 
         let mut atom_sets: HashMap<Name, BTreeSet<AtomQuery>> =
             HashMap::with_capacity(manifest.package.sets.len());
+        let mut transports: HashMap<gix::Url, Box<dyn Transport + Send>> = HashMap::new();
         for res in tasks.join_all().await.into_iter() {
-            let (transport, atoms, root, k) = res?;
+            let (transport, atoms, root, k, url) = res?;
             sanity_check(&k, root, &mut names, &mut roots)?;
+            if let Some(t) = transport {
+                transports.insert(url.to_owned(), t);
+            }
             if let Some(existing_atoms) = atom_sets.get_mut(&k) {
                 for a in atoms {
                     if let Some(UnpackedRef(.., rev)) = existing_atoms.get(&a) {
                         if rev != &a.2 {
-                            // mirror contains different revision for same atom at same version
-                            return Err(todo!());
+                            tracing::error!(
+                                message = "mirrors for the same set are advertising an atom at \
+                                           the same version but different revisions. This could \
+                                           be the result of possible tampering. Remove the faulty \
+                                           mirror to continue.",
+                                checking.url = %url.to_string(),
+                                atom.tag = %a.0,
+                                atom.version = %a.1
+                            );
+                            return Err(LockError::Inconsistent.into());
                         }
                     } else {
                         existing_atoms.insert(a);
@@ -824,7 +889,7 @@ impl Lockfile {
                 atom_sets.insert(k.to_owned(), atoms.collect());
             };
         }
-        todo!()
+        Ok((atom_sets, names, transports))
     }
 
     /// Removes any dependencies from the lockfile that are no longer present in the
