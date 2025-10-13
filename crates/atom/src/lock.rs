@@ -54,15 +54,15 @@
 //! - **Strict field validation** with `#[serde(deny_unknown_fields)]`
 //! - **Type-safe dependency resolution** preventing invalid configurations
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 use std::ops::Deref;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use bstr::ByteSlice;
+use gix::ObjectId;
 use gix::protocol::handshake::Ref;
 use gix::protocol::transport::client::Transport;
-use gix::{ObjectId, ThreadSafeRepository};
 use lazy_regex::{Lazy, Regex, lazy_regex};
 use nix_compat::nixhash::NixHash;
 use semver::{Version, VersionReq};
@@ -72,16 +72,14 @@ use snix_castore::directoryservice::DirectoryService;
 use snix_glue::fetchers::Fetcher;
 use snix_store::nar::SimpleRenderer;
 use snix_store::pathinfoservice::PathInfoService;
-use tokio::task::JoinSet;
 use url::Url;
 
 use crate::id::{AtomTag, Name};
-use crate::manifest::AtomSets;
 use crate::manifest::deps::{
     AtomReq, GitSpec, NixFetch, NixGit, NixReq, NixUrl, deserialize_url, serialize_url,
 };
 use crate::store::git::{AtomQuery, Root};
-use crate::store::{QueryStore, QueryVersion, UnpackedRef};
+use crate::store::{QueryStore, QueryVersion};
 use crate::uri::Uri;
 use crate::{AtomId, Manifest};
 
@@ -753,206 +751,6 @@ impl Lockfile {
     const OUT_OF_SYNC: &str =
         "out of sync dependency could not be resolved, check the version spec";
     const RESOLUTION_ERR_MSG: &str = "unlocked dependency could not be resolved";
-
-    /// Verifies the integrity of declared package sets and collects atom references.
-    ///
-    /// This function performs several critical checks to ensure the consistency and
-    /// integrity of the package sets defined in the manifest:
-    ///
-    /// 1. **Root Consistency**: It ensures that every URL within a named mirror set points to the
-    ///    same underlying repository by verifying their advertised root hashes.
-    /// 2. **Set Uniqueness**: It guarantees that a given repository URL does not belong to more
-    ///    than one mirror set, preventing ambiguity.
-    /// 3. **Version and Revision Coherency**: It aggregates all atoms from each mirror, ensuring
-    ///    that no two mirrors advertise the same atom version with a different Git revision, which
-    ///    could indicate tampering or misconfiguration.
-    ///
-    /// # Arguments
-    ///
-    /// * `manifest` - A reference to the `Manifest` containing the package sets to be checked.
-    /// * `repo` - A thread-safe repository instance for handling local Git operations.
-    ///
-    /// # Returns
-    ///
-    /// A `Result` containing a tuple with three elements on success:
-    ///
-    /// * `HashMap<Name, BTreeSet<UnpackedRef<gix::ObjectId>>>`: A map where each key is the name of
-    ///   a package set, and the value is a set of all unique atoms found across its mirrors.
-    /// * `HashMap<Root, AtomTag>`: A map from a repository's root hash to its corresponding set
-    ///   name, used for efficient lookups during manifest synchronization.
-    /// * `HashMap<gix::Url, Box<dyn Transport + Send>>`: A map of open Git transport connections
-    ///   for reuse in subsequent operations.
-    ///
-    /// # Errors
-    ///
-    /// Returns a `BoxError` if any of the following conditions are met:
-    /// - A repository is found in more than one mirror set.
-    /// - The mirrors for a given set do not all point to the same root hash.
-    /// - An atom is advertised with the same version but different revisions across mirrors.
-    pub(crate) async fn get_and_check_sets(
-        &mut self,
-        manifest: &Manifest,
-        repo: &ThreadSafeRepository,
-    ) -> Result<
-        (
-            HashMap<Name, BTreeSet<UnpackedRef<gix::ObjectId>>>,
-            HashMap<Root, AtomTag>,
-            HashMap<gix::Url, Box<dyn Transport + std::marker::Send>>,
-        ),
-        BoxError,
-    > {
-        use crate::manifest::AtomSets;
-
-        let repo = repo.to_thread_local();
-        let mut names: HashMap<Root, Name> = HashMap::new();
-        let mut roots: HashMap<Name, Root> = HashMap::new();
-        let mut tasks = JoinSet::new();
-
-        for (k, v) in manifest.package.sets.iter() {
-            match v {
-                AtomSets::Singleton(mirror) => {
-                    self.process_mirror(k, mirror, &repo, &mut tasks, &mut names, &mut roots)?
-                },
-                AtomSets::Mirrors(mirrors) => {
-                    for m in mirrors.iter() {
-                        self.process_mirror(k, m, &repo, &mut tasks, &mut names, &mut roots)?
-                    }
-                },
-            }
-        }
-
-        let mut atom_sets: HashMap<Name, BTreeSet<AtomQuery>> =
-            HashMap::with_capacity(manifest.package.sets.len());
-        let mut transports: HashMap<gix::Url, Box<dyn Transport + Send>> = HashMap::new();
-        while let Some(res) = tasks.join_next().await {
-            Self::process_remote_mirror_result(
-                res?,
-                &mut names,
-                &mut roots,
-                &mut atom_sets,
-                &mut transports,
-            )?;
-        }
-
-        Ok((atom_sets, names, transports))
-    }
-
-    /// Processes a single mirror, either local or remote, and initiates consistency checks.
-    ///
-    /// For local mirrors, it calculates the root hash directly. For remote mirrors,
-    /// it spawns an asynchronous task to fetch repository data and perform checks.
-    fn process_mirror<'a>(
-        &self,
-        k: &'a Name,
-        mirror: &'a crate::manifest::AtomSet,
-        repo: &'a gix::Repository,
-        tasks: &mut JoinSet<MirrorResult>,
-        names: &mut HashMap<Root, Name>,
-        roots: &mut HashMap<Name, Root>,
-    ) -> Result<(), BoxError> {
-        use crate::id::Origin;
-        use crate::manifest::AtomSet;
-
-        match mirror {
-            AtomSet::Local => {
-                let commit = repo
-                    .rev_parse_single("HEAD")
-                    .map(|s| repo.find_commit(s))
-                    .map_err(Box::new)??;
-                let root = commit.calculate_origin()?;
-                Self::check_set_consistency(k, root, names, roots)?;
-                Ok(())
-            },
-            AtomSet::Url(url) => {
-                let url = url.to_owned();
-                let k = k.to_owned();
-                tasks.spawn(async move {
-                    let mut transport = url.get_transport().ok();
-                    let atoms = url.get_atoms(transport.as_mut())?;
-                    let root = atoms.calculate_origin()?;
-                    Ok((transport, atoms, root, k, url))
-                });
-                Ok(())
-            },
-        }
-    }
-
-    /// Handles the result of an asynchronous remote mirror check.
-    ///
-    /// This function processes the data fetched from a remote mirror, performs
-    /// consistency checks, and aggregates the results into the provided hashmaps.
-    fn process_remote_mirror_result(
-        result: MirrorResult,
-        names: &mut HashMap<Root, Name>,
-        roots: &mut HashMap<Name, Root>,
-        atom_sets: &mut HashMap<Name, BTreeSet<AtomQuery>>,
-        transports: &mut HashMap<gix::Url, Box<dyn Transport + Send>>,
-    ) -> Result<(), BoxError> {
-        let (transport, atoms, root, k, url) = result?;
-        Self::check_set_consistency(&k, root, names, roots)?;
-        if let Some(t) = transport {
-            transports.insert(url.to_owned(), t);
-        }
-
-        if let Some(existing_atoms) = atom_sets.get_mut(&k) {
-            for a in atoms {
-                if let Some(UnpackedRef(.., rev)) = existing_atoms.get(&a) {
-                    if rev != &a.2 {
-                        tracing::error!(
-                            message = "mirrors for the same set are advertising an atom at \
-                                       the same version but different revisions. This could \
-                                       be the result of possible tampering. Remove the faulty \
-                                       mirror to continue.",
-                            checking.url = %url.to_string(),
-                            atom.tag = %a.0,
-                            atom.version = %a.1
-                        );
-                        return Err(LockError::Inconsistent.into());
-                    }
-                } else {
-                    existing_atoms.insert(a);
-                };
-            }
-        } else {
-            atom_sets.insert(k.to_owned(), atoms.collect());
-        };
-
-        Ok(())
-    }
-
-    /// Ensures that a given package set is consistent across all its mirrors.
-    ///
-    /// This check verifies two conditions:
-    /// 1. A repository root hash is not associated with more than one package set name.
-    /// 2. A package set name is not associated with more than one repository root hash.
-    fn check_set_consistency(
-        k: &Name,
-        root: Root,
-        names: &mut HashMap<Root, Name>,
-        roots: &mut HashMap<Name, Root>,
-    ) -> Result<(), BoxError> {
-        let prev = names.insert(root, k.to_owned());
-        if prev.is_some() && prev.as_ref() != Some(k) {
-            tracing::error!(
-                message = "a repository exists in more than one mirror set",
-                set.a = %k,
-                set.b = ?prev,
-                set.hash = %*root
-            );
-            return Err(LockError::Inconsistent.into());
-        }
-        let prev = roots.insert(k.to_owned(), root);
-        if prev.is_some() && prev.as_ref() != Some(&root) {
-            tracing::error!(
-                message = "the mirrors for this set do not all point at the same set",
-                set.name = %k,
-                set.a = %*root,
-                set.b = ?prev,
-            );
-            return Err(LockError::Inconsistent.into());
-        }
-        Ok(())
-    }
 
     /// Removes any dependencies from the lockfile that are no longer present in the
     /// manifest, ensuring the lockfile only contains entries that are still relevant,

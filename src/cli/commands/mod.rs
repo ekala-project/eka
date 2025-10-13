@@ -57,7 +57,7 @@ pub(super) enum Commands {
 pub async fn run(args: Args) -> anyhow::Result<()> {
     let store = store::detect();
     match args.command {
-        Commands::Add(args) => add::run(args).await?,
+        Commands::Add(args) => add::run(store.await?, args).await?,
         Commands::New(args) => new::run(args)?,
         Commands::Publish(args) => {
             if args.init {

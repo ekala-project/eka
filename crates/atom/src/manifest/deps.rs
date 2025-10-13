@@ -53,6 +53,7 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use bstr::{BString, ByteSlice};
+use gix::ThreadSafeRepository;
 use semver::VersionReq;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -60,6 +61,7 @@ use toml_edit::DocumentMut;
 use url::Url;
 
 use crate::id::{AtomTag, Name};
+use crate::manifest::sets::{ResolvedSets, SetResolver};
 use crate::uri::{AliasedUrl, Uri};
 use crate::{Lockfile, Manifest};
 
@@ -163,6 +165,7 @@ pub struct ManifestWriter {
     path: PathBuf,
     doc: TypedDocument<Manifest>,
     lock: Lockfile,
+    resolved_sets: ResolvedSets,
 }
 
 /// Represents the underlying type of Nix dependency
@@ -400,7 +403,7 @@ impl NixReq {
 impl ManifestWriter {
     /// Constructs a new `ManifestWriter`, ensuring that the manifest and lock file constraints
     /// are respected.
-    pub async fn new(path: &Path) -> Result<Self, DocError> {
+    pub async fn new(repo: &ThreadSafeRepository, path: &Path) -> Result<Self, DocError> {
         use std::fs;
         let path = if path.file_name() == Some(OsStr::new(crate::MANIFEST_NAME.as_str())) {
             path.into()
@@ -412,6 +415,9 @@ impl ManifestWriter {
             tracing::error!(message = "No atom exists", path = %path.display());
         })?;
         let (doc, manifest) = TypedDocument::new(&toml_str)?;
+        let resolved_sets = SetResolver::new(repo, &manifest)
+            .get_and_check_sets()
+            .await?;
 
         let mut lock = if let Ok(lock_str) = fs::read_to_string(&lock_path) {
             toml_edit::de::from_str(&lock_str)?
@@ -420,7 +426,12 @@ impl ManifestWriter {
         };
         lock.sanitize(&manifest).await;
 
-        Ok(ManifestWriter { doc, lock, path })
+        Ok(ManifestWriter {
+            doc,
+            lock,
+            path,
+            resolved_sets,
+        })
     }
 
     /// Adds a user-requested atom URI to the manifest and lock files, ensuring they remain in sync.
