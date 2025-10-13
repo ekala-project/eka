@@ -12,6 +12,7 @@ nom               = "^7"
 path-clean        = "^1"
 unic-ucd-category = "^0.9"
 
+either.workspace            = true
 lazy-regex.workspace        = true
 prodash.workspace           = true
 semver.workspace            = true

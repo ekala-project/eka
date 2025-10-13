@@ -93,7 +93,8 @@ pub mod git;
 //================================================================================================
 
 /// Type alias for unpacked atom reference information.
-type UnpackedRef<Id> = (AtomTag, Version, Id);
+#[derive(Clone, Debug, Eq)]
+pub struct UnpackedRef<Id>(pub AtomTag, pub Version, pub Id);
 
 //================================================================================================
 // Traits
@@ -302,13 +303,13 @@ where
         req: &VersionReq,
     ) -> Option<(Version, Id)> {
         atoms
-            .filter_map(|(t, v, id)| (&t == tag && req.matches(&v)).then_some((v, id)))
+            .filter_map(|UnpackedRef(t, v, id)| (&t == tag && req.matches(&v)).then_some((v, id)))
             .max_by_key(|(ref version, _)| version.to_owned())
     }
 
     /// Processes an iterator of atoms to find the root commit of the remote repository.
     fn process_root(mut atoms: <C as IntoIterator>::IntoIter) -> Option<Id> {
-        atoms.find_map(|(n, _, id)| (n.is_root()).then_some(id))
+        atoms.find_map(|UnpackedRef(n, _, id)| (n.is_root()).then_some(id))
     }
 
     /// Finds the highest version of an atom matching the given version requirement.
@@ -366,10 +367,13 @@ where
                 (l, None) => l,
                 (_, Some(u)) => u,
             };
-            iter.fold(HashMap::with_capacity(s), |mut acc, (t, v, id)| {
-                acc.insert(t, (v, id));
-                acc
-            })
+            iter.fold(
+                HashMap::with_capacity(s),
+                |mut acc, UnpackedRef(t, v, id)| {
+                    acc.insert(t, (v, id));
+                    acc
+                },
+            )
         } else {
             HashMap::new()
         }
@@ -397,4 +401,35 @@ pub trait UnpackRef<Id> {
     fn unpack_atom_ref(&self) -> Option<UnpackedRef<Id>>;
     /// Attempts to find the root reference in the store.
     fn find_root_ref(&self) -> Option<Id>;
+}
+
+//================================================================================================
+// Impls
+//================================================================================================
+
+/// We purposefully avoid comparing version so we can update sets with new versions easily.
+impl<Id: PartialEq> PartialEq for UnpackedRef<Id> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0 && self.1 == other.1
+    }
+}
+
+impl<Id: Ord> Ord for UnpackedRef<Id> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        match self.0.cmp(&other.0) {
+            std::cmp::Ordering::Equal => {},
+            ord => return ord,
+        }
+        self.1.cmp(&other.1)
+    }
+}
+
+impl<Id: PartialOrd> PartialOrd for UnpackedRef<Id> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        match self.0.partial_cmp(&other.0) {
+            Some(core::cmp::Ordering::Equal) => {},
+            ord => return ord,
+        }
+        self.1.partial_cmp(&other.1)
+    }
 }

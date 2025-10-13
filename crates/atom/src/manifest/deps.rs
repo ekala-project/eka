@@ -46,10 +46,11 @@
 //! validation and prevent typos in manifest files. Optional fields are properly
 //! handled with `skip_serializing_if` to keep the TOML output clean.
 
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
 use bstr::{BString, ByteSlice};
 use semver::VersionReq;
@@ -66,30 +67,25 @@ use crate::{Lockfile, Manifest};
 // Types
 //================================================================================================
 
+type AtomFrom = HashMap<Name, HashMap<AtomTag, VersionReq>>;
+
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
 #[serde(deny_unknown_fields)]
 /// Represents a locked atom dependency, referencing a verifiable repository slice.
 pub struct AtomReq {
-    /// The tag of the atom, used if the dependency name in the manifest
-    /// differs from the atom's actual tag.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tag: Option<AtomTag>,
     /// The semantic version requirement for the atom (e.g., "^1.0.0").
     version: VersionReq,
-    /// The Git URL or local path where the atom's repository can be found.
-    #[serde(serialize_with = "serialize_url", deserialize_with = "deserialize_url")]
-    store: gix::url::Url,
 }
 
 /// Represents the hashing strategy for the build-time fetch
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
-pub enum BuildStrat {
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, PartialOrd, Ord)]
+pub(crate) enum BuildStrat {
     /// The fetched file will be marked as executable
     #[serde(rename = "exec")]
-    Exec(bool),
+    Exec,
     /// The tag file is a tarball which will be unpacked before hashing
     #[serde(rename = "unpack")]
-    Unpack(bool),
+    Unpack,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -108,14 +104,15 @@ pub enum Dependency {
     Src(NixSrc),
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Default)]
 #[serde(deny_unknown_fields)]
 /// The dependencies specified in the manifest
 pub struct Dependency2 {
     /// Specify atom dependencies from a specific set outlined in `[package.sets]`.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    from: BTreeMap<Name, BTreeMap<AtomTag, VersionReq>>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    from: AtomFrom,
     /// Direct dependencies not in the atom format.
+    #[serde(default, skip_serializing_if = "DirectDeps::is_empty")]
     direct: DirectDeps,
 }
 
@@ -265,7 +262,7 @@ pub struct ManifestWriter {
 /// Represents the underlying type of Nix dependency
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
 #[serde(untagged)]
-pub enum NixDep {
+pub enum NixReq {
     /// A nix eval-time fetch
     Fetch(NixFetch),
     /// A nix eval-time git fetch
@@ -281,14 +278,13 @@ pub struct NixFetch {
     /// The URL of the resource.
     #[serde(flatten)]
     pub url: NixUrl,
-    /// An optional version, tied to a concrete, resolved version of an atom.
+    /// An optional path to a resolved atom, tied to its concrete resolved version.
     ///
-    /// Only relevant if the Url contains a `"{version}"` place-holder in its string
-    /// representation.
+    /// Only relevant if the Url contains a `"__VERSION__"` place-holder in its path component.
     ///
     /// This field is omitted from serialization if None.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub version: Option<String>,
+    pub from: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -312,9 +308,9 @@ pub struct NixGit {
 /// Represents a dependency which is fetched at build time as an FOD.
 pub struct NixSrc {
     /// The URL from which to fetch the build-time source.
-    build: Url,
-    #[serde(flatten, default, skip_serializing_if = "strat_is_not")]
-    strat: BuildStrat,
+    pub(crate) build: Url,
+    #[serde(flatten, skip_serializing_if = "Option::is_none")]
+    pub(crate) strat: Option<BuildStrat>,
 }
 
 /// Represents the field name in a Nix dependency, which determines how it will be fetched
@@ -363,11 +359,11 @@ pub struct TarPin {
 }
 
 /// Represents different possible types of direct dependencies, i.e. those in the atom format
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Default)]
 #[serde(deny_unknown_fields)]
-struct DirectDeps {
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    nix: BTreeMap<Name, NixDep>,
+pub(crate) struct DirectDeps {
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    nix: HashMap<Name, NixReq>,
 }
 
 /// A newtype wrapper to tie a `DocumentMut` to a specific serializable type `T`.
@@ -400,20 +396,34 @@ impl AsMut<AtomReq> for AtomReq {
     }
 }
 
+impl AsMut<Dependency2> for Dependency2 {
+    fn as_mut(&mut self) -> &mut Dependency2 {
+        self
+    }
+}
+
 impl<T: Serialize> AsMut<DocumentMut> for TypedDocument<T> {
     fn as_mut(&mut self) -> &mut DocumentMut {
         &mut self.inner
     }
 }
 
+impl FromStr for GitSpec {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if let Ok(req) = VersionReq::parse(s) {
+            Ok(GitSpec::Version(req))
+        } else {
+            Ok(GitSpec::Ref(s.to_string()))
+        }
+    }
+}
+
 impl AtomReq {
     /// Creates a new `AtomReq` with the specified version requirement and location.
-    pub fn new(version: VersionReq, store: gix::url::Url, tag: Option<AtomTag>) -> Self {
-        Self {
-            version,
-            store,
-            tag,
-        }
+    pub fn new(version: VersionReq) -> Self {
+        Self { version }
     }
 
     /// Returns a reference to the version requirement.
@@ -425,63 +435,96 @@ impl AtomReq {
     pub fn set_version(&mut self, version: VersionReq) {
         self.version = version
     }
+}
 
-    /// Returns a reference to the store location.
-    pub fn store(&self) -> &gix::url::Url {
-        &self.store
+impl Dependency2 {
+    pub(super) fn new() -> Self {
+        Dependency2 {
+            from: HashMap::new(),
+            direct: DirectDeps::new(),
+        }
     }
 
-    /// Returns a reference to the atom tag, if specified.
-    pub fn tag(&self) -> Option<&AtomTag> {
-        self.tag.as_ref()
+    pub(super) fn is_empty(&self) -> bool {
+        self.from.is_empty() && self.direct.is_empty()
+    }
+
+    pub(crate) fn from(&self) -> &AtomFrom {
+        &self.from
+    }
+
+    pub(crate) fn direct(&self) -> &DirectDeps {
+        &self.direct
     }
 }
 
-impl DirectPin {
+impl DirectDeps {
+    fn new() -> Self {
+        Self {
+            nix: HashMap::new(),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.nix.is_empty()
+    }
+
+    pub(crate) fn nix(&self) -> &HashMap<Name, NixReq> {
+        &self.nix
+    }
+}
+
+impl NixReq {
     /// Determines the type of `DirectPin` from a given URL and other parameters.
     fn determine(
         url: &AliasedUrl,
-        import: Option<&PathBuf>,
-        flake: bool,
+        git: Option<GitSpec>,
+        tar: Option<bool>,
+        build: bool,
+        unpack: Option<bool>,
+        exec: bool,
     ) -> Result<Self, DocError> {
-        let r = url.r#ref();
+        let from = url.from();
         let url = url.url();
-        let pin = if url.scheme == gix::url::Scheme::File {
-            // TODO: handle file paths to sources
-            todo!()
-        } else if let Some(r) = r {
-            let maybe_req = VersionReq::parse(r);
-            let fetch = if let Ok(req) = maybe_req {
-                GitStrat::Version(req)
-            } else {
-                GitStrat::Ref(r.to_owned())
-            };
-            DirectPin::Git(GitPin {
-                repo: url.to_owned(),
-                fetch,
-                flake,
-                import: import.map(ToOwned::to_owned),
-            })
-        } else {
-            let path = url.path.to_path()?;
-            if path.extension() == Some(OsStr::new("tar"))
+        let path = url.path.to_path_lossy();
+        let is_tar = || {
+            tar.is_some_and(|b| b)
+                || path.extension() == Some(OsStr::new("tar"))
                 || path
                     .file_name()
                     .is_some_and(|f| f.to_str().is_some_and(|f| f.contains(".tar.")))
-            {
-                DirectPin::Tarball(TarPin {
-                    tar: url.to_string().parse()?,
-                    flake,
-                    import: import.map(ToOwned::to_owned),
-                })
-            } else {
-                DirectPin::Straight(StraightPin {
-                    pin: url.to_string().parse()?,
-                    flake,
-                })
-            }
         };
-        Ok(pin)
+
+        let dep = if url.scheme == gix::url::Scheme::File {
+            // TODO: handle file paths to sources; requires anonymous atoms
+            todo!()
+        } else if url.scheme == gix::url::Scheme::Ssh
+            || git.is_some()
+            || path.extension() == Some(OsStr::new("git"))
+        {
+            NixReq::Git(NixGit {
+                git: url.to_owned(),
+                spec: git,
+            })
+        } else if build {
+            NixReq::Build(NixSrc {
+                build: url.to_string().parse()?,
+                strat: (unpack != Some(false) && is_tar() || unpack.is_some_and(|b| b))
+                    .then_some(BuildStrat::Unpack)
+                    .or(exec.then_some(BuildStrat::Exec)),
+            })
+        } else if tar != Some(false) && is_tar() {
+            NixReq::Fetch(NixFetch {
+                url: NixUrl::Tar(url.to_string().parse()?),
+                from: from.map(ToOwned::to_owned),
+            })
+        } else {
+            NixReq::Fetch(NixFetch {
+                url: NixUrl::Url(url.to_string().parse()?),
+                from: from.map(ToOwned::to_owned),
+            })
+        };
+        Ok(dep)
     }
 }
 
@@ -512,53 +555,19 @@ impl ManifestWriter {
     }
 
     /// Adds a user-requested atom URI to the manifest and lock files, ensuring they remain in sync.
-    pub fn add_uri(&mut self, uri: Uri, key: Option<Name>) -> Result<(), DocError> {
+    pub fn add_uri(&mut self, uri: Uri, set: Option<Name>) -> Result<(), DocError> {
         use crate::lock::Dep;
 
-        let tag = uri.tag();
-        let maybe_version = uri.version();
-        let url = uri.url();
+        let (atom_req, lock_entry) = uri.resolve(None).map_err(Box::new)?;
 
-        let req = if let Some(v) = maybe_version {
-            v
-        } else {
-            &VersionReq::STAR
-        };
+        let dep = Dependency::Atom(atom_req);
 
-        let key = if let Some(key) = key {
-            key
-        } else {
-            tag.to_owned()
-        };
+        let tag = lock_entry.tag().to_owned();
+        let id = lock_entry.id().to_owned();
 
-        if let Some(url) = url {
-            let mut atom = AtomReq::new(
-                req.to_owned(),
-                url.to_owned(),
-                (&key != tag).then(|| tag.to_owned()),
-            );
-            let lock_entry = atom.resolve(&key).map_err(Box::new)?;
-
-            if maybe_version.is_none() {
-                let version = VersionReq::parse(lock_entry.version.to_string().as_str())?;
-                atom.set_version(version);
-            };
-
-            let dep = Dependency::Atom(atom);
-
-            self.doc.write_dep(key.as_str(), &dep)?;
-            if self
-                .lock
-                .deps
-                .as_mut()
-                .insert(key.to_owned(), Dep::Atom(lock_entry))
-                .is_some()
-            {
-                tracing::warn!("updating lock entry for `{}`", key);
-            }
-        } else {
-            // search locally for atom tag
-            todo!()
+        self.doc.write_dep(&tag, &dep)?;
+        if !self.lock.deps.as_mut().insert(Dep::Atom(lock_entry)) {
+            tracing::warn!(message = "updating lock entry", atom.id = %id);
         }
 
         Ok(())
@@ -569,27 +578,18 @@ impl ManifestWriter {
         &mut self,
         url: AliasedUrl,
         key: Option<Name>,
-        import: Option<PathBuf>,
-        flake: bool,
+        git: Option<GitSpec>,
+        tar: Option<bool>,
+        build: bool,
+        unpack: Option<bool>,
+        exec: bool,
     ) -> Result<(), DocError> {
-        let direct = DirectPin::determine(&url, import.as_ref(), flake)?;
-        let (key, lock_entry) = direct.resolve(key.as_ref(), import, flake).await?;
+        let dep = NixReq::determine(&url, git, tar, build, unpack, exec)?;
+        let (key, lock_entry) = dep.resolve(key.as_ref()).await?;
 
-        let dep = match direct {
-            DirectPin::Straight(straight_pin) => Dependency::Pin(straight_pin),
-            DirectPin::Tarball(tar_pin) => Dependency::TarPin(tar_pin),
-            DirectPin::Git(git_pin) => Dependency::GitPin(git_pin),
-        };
-
-        self.doc.write_dep(&key, &dep)?;
-        if self
-            .lock
-            .deps
-            .as_mut()
-            .insert(key.to_owned(), lock_entry)
-            .is_some()
-        {
-            tracing::warn!("updating lock entry for `{}`", key);
+        self.doc.write_dep(&key, todo!())?;
+        if self.lock.deps.as_mut().insert(lock_entry) {
+            tracing::warn!(message = "updating lock entry", direct.nix = %key);
         }
         Ok(())
     }
@@ -679,13 +679,6 @@ where
 /// A helper function for `serde(skip_serializing_if)` to omit `false` boolean values.
 pub(crate) fn not(b: &bool) -> bool {
     !b
-}
-
-fn strat_is_not(strat: &BuildStrat) -> bool {
-    match strat {
-        BuildStrat::Exec(b) => not(b),
-        BuildStrat::Unpack(b) => not(b),
-    }
 }
 
 /// Serializes a `gix::url::Url` to a string.

@@ -78,6 +78,7 @@ use std::str::FromStr;
 use std::sync::LazyLock;
 
 use gix::Url;
+use lazy_regex::{Lazy, Regex};
 use nom::branch::alt;
 use nom::bytes::complete::{tag, take_until};
 use nom::character::complete::digit1;
@@ -99,6 +100,7 @@ mod tests;
 //================================================================================================
 
 static ALIASES: LazyLock<Aliases> = LazyLock::new(|| Aliases(config::CONFIG.aliases()));
+static ATOM_VERSION_REGEX: Lazy<Regex> = lazy_regex::lazy_regex!(r#"\{(?P<atom>[^.}]+\.[^.}]+)\}"#);
 
 //================================================================================================
 // Types
@@ -109,7 +111,7 @@ static ALIASES: LazyLock<Aliases> = LazyLock::new(|| Aliases(config::CONFIG.alia
 #[cfg_attr(test, derive(Serialize, Deserialize))]
 pub struct AliasedUrl {
     url: Url,
-    r#ref: Option<String>,
+    from: Option<String>,
 }
 
 /// Represents the parsed components of an Atom URI.
@@ -123,17 +125,6 @@ pub struct Uri {
     tag: AtomTag,
     /// The requested Atom version.
     version: Option<VersionReq>,
-}
-
-/// Represents either an Atom URI or an aliased URL component.
-///
-/// When built through the `FromStr` implementation, aliases are resolved.
-#[derive(Debug, Clone)]
-pub enum UriOrUrl {
-    /// Atom URI variant
-    Atom(Uri),
-    /// URL variant
-    Pin(AliasedUrl),
 }
 
 /// An error encountered when constructing the concrete types from an Atom URI.
@@ -202,29 +193,19 @@ type UrlPrefix<'a> = (Option<&'a str>, Option<&'a str>, Option<&'a str>);
 //================================================================================================
 
 impl AliasedUrl {
-    /// Returns a reference to the optional git ref.
-    pub fn r#ref(&self) -> Option<&String> {
-        self.r#ref.as_ref()
+    pub(crate) fn url(&self) -> &Url {
+        &self.url
     }
 
-    /// Returns a reference to the underlying URL.
-    pub fn url(&self) -> &Url {
-        &self.url
+    pub(crate) fn from(&self) -> Option<&String> {
+        self.from.as_ref()
     }
 }
 
-impl Display for AliasedUrl {
+impl std::fmt::Display for AliasedUrl {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let AliasedUrl { url, r#ref } = self;
-        if let Some(r) = r#ref {
-            if r.is_empty() {
-                url.fmt(f)
-            } else {
-                write!(f, "{}^{}", url, r)
-            }
-        } else {
-            url.fmt(f)
-        }
+        let AliasedUrl { url, .. } = self;
+        write!(f, "{}", url)
     }
 }
 
@@ -232,19 +213,14 @@ impl FromStr for AliasedUrl {
     type Err = UriError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let r#ref: Option<String>;
-        let url_str: &str;
-        if let Some((f, r)) = s.split_once('^') {
-            r#ref = Some(r.to_owned());
-            url_str = f;
-        } else {
-            r#ref = None;
-            url_str = s;
+        let re = ATOM_VERSION_REGEX.replace(s, "__VERSION__");
+        let mut from = None;
+        if let Some(cap) = ATOM_VERSION_REGEX.captures(s) {
+            from = Some(cap["atom"].to_owned());
         }
-        let url = UrlRef::from(url_str);
-        let url = url.to_url()?;
+        let url = UrlRef::from(re.as_ref()).to_url()?;
 
-        Ok(AliasedUrl { url, r#ref })
+        Ok(AliasedUrl { url, from })
     }
 }
 
@@ -355,27 +331,6 @@ impl<'a> TryFrom<&'a str> for Uri {
 
     fn try_from(s: &'a str) -> Result<Self, Self::Error> {
         s.parse()
-    }
-}
-
-impl Display for UriOrUrl {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            UriOrUrl::Atom(uri) => uri.fmt(f),
-            UriOrUrl::Pin(url) => url.fmt(f),
-        }
-    }
-}
-
-impl FromStr for UriOrUrl {
-    type Err = UriError;
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        if s.contains("::") {
-            s.parse::<Uri>().map(UriOrUrl::Atom)
-        } else {
-            s.parse::<AliasedUrl>().map(UriOrUrl::Pin)
-        }
     }
 }
 

@@ -4,7 +4,7 @@
 //! file system structure. These types form the foundation of the atom format
 //! and are used throughout the crate.
 
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use semver::Version;
@@ -35,8 +35,8 @@ pub struct Atom {
     pub description: Option<String>,
 
     /// A table of named atom sets, defining the sources for resolving atom dependencies.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub sets: BTreeMap<Name, AtomSets>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub sets: HashMap<Name, AtomSets>,
 }
 
 /// Represents the file system paths associated with an atom.

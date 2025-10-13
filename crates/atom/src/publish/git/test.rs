@@ -55,7 +55,7 @@ impl MockAtom for gix::Repository {
                 tag: tag.try_into()?,
                 version: Version::from_str(version)?,
                 description: (!description.is_empty()).then_some(description.into()),
-                sets: BTreeMap::new(),
+                sets: HashMap::new(),
             },
             deps: Default::default(),
         };

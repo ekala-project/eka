@@ -63,7 +63,7 @@
 //! let parsed = Manifest::from_str(manifest_str).unwrap();
 //! ```
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::str::FromStr;
 
@@ -72,7 +72,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use toml_edit::{DocumentMut, de};
 
-use crate::id::Name;
+use crate::manifest::deps::Dependency2;
 use crate::{Atom, AtomTag};
 
 pub mod deps;
@@ -135,8 +135,8 @@ pub struct Manifest {
     /// The required `[package]` table, containing core metadata.
     pub package: Atom,
     /// The dependencies of the atom.
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub(crate) deps: HashMap<Name, deps::Dependency>,
+    #[serde(default, skip_serializing_if = "Dependency2::is_empty")]
+    pub(crate) deps: Dependency2,
 }
 
 /// A specialized result type for manifest operations.
@@ -154,9 +154,9 @@ impl Manifest {
                 tag,
                 version,
                 description,
-                sets: BTreeMap::new(),
+                sets: HashMap::new(),
             },
-            deps: HashMap::new(),
+            deps: Dependency2::new(),
         }
     }
 
@@ -176,6 +176,10 @@ impl Manifest {
         } else {
             Err(AtomError::Missing)
         }
+    }
+
+    pub(crate) fn deps(&self) -> &Dependency2 {
+        &self.deps
     }
 }
 

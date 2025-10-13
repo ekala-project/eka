@@ -7,10 +7,9 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use atom::id::Name;
+use atom::manifest::deps::GitSpec;
 use atom::uri::{AliasedUrl, Uri};
 use clap::{Parser, Subcommand};
-
-mod git;
 
 //================================================================================================
 // Types
@@ -30,46 +29,96 @@ pub struct Args {
     path: PathBuf,
     /// The atom URI to add as a dependency.
     #[clap(required = true)]
-    uri: Option<Uri>,
-    /// The TOML key inserted into the dependency, serving as the name of the dependency in the
-    /// source. Useful for avoiding conflicts (e.g. two different atoms with the same tag).
-    #[clap(long, short, global = true)]
-    key: Option<Name>,
-    #[command(flatten)]
-    store: StoreArgs,
+    uri: Option<Uri>, /* a required optional is used so that the subcommand properly negates it
+                       * without causing a parser failure */
+    /// The name of the package set to add this source to inside the manifest. Defaults to the last
+    /// path segment if not specified.
+    set: Option<Name>,
     #[command(subcommand)]
-    pin: Option<PinCommand>,
+    sub: Option<AddSubs>,
 }
 
-/// Arguments for pinning a dependency to a specific URL.
+/// Arguments for adding a dependency via Nix's builtin fetcher API.
 #[derive(Parser, Debug)]
-#[command(arg_required_else_help = true, next_help_heading = "Pin Options")]
-pub struct PinArgs {
-    /// The pinned URL to add as a dependency.
+#[command(arg_required_else_help = true, next_help_heading = "Nix Options")]
+pub struct NixArgs {
+    /// The URL to add as a dependency.
+    ///
+    /// By default, a call to `builtins.fetchurl` is used, unless one of the following flags
+    /// is passed.
+    ///
+    /// For convenience, user defined aliases will be expanded just as they are with atom uris.
     url: AliasedUrl,
-    /// Optional path to call `import` inside of the pinned resource. If not specified, the root of
-    /// of the pin is assumed. The actual strategy for calling import depends on the libary being
-    /// invoked. This flag is ignored for single file inputs (since their is no other path to
-    /// import).
+    /// The TOML key inserted into the manifest, serving as the name of the dependency in the
+    /// source. Useful if the desired name differs from the default, which is the final path
+    /// component of the URL.
     #[clap(long, short)]
-    import_path: Option<PathBuf>,
-    /// Whether the pin should be imported as a Nix flake.
-    #[clap(long, short)]
-    flake: bool,
+    key: Option<Name>,
+    /// Uses the `builtins.fetchGit` fetcher. If the url scheme is ssh, or the path ends in
+    /// ".git", this flag is assumed and overrides the others.
+    ///
+    /// Accepts either a git refspec or a semantic version request. If neither is passed,
+    /// the revision of the `HEAD` ref will be resolved.
+    ///
+    /// Version requests are resolved intelligently compared against the git tags in the repo which
+    /// conform to semantic version constraints, returning the highest match of the users request.
+    #[clap(long, conflicts_with_all = ["build", "tar"], default_missing_value = "HEAD")]
+    git: Option<GitSpec>,
+    /// Use the `builtins.fetchTarball` fetcher. If the url contains a `.tar` extension, this
+    /// flag is assumed, but can be disabled with `--tar=false` to fetch with `builtins.fetchurl`.
+    #[clap(long, conflicts_with_all = ["build", "git"])]
+    tar: Option<bool>,
+    /// Uses the special builtin `<nix/fetchurl.nix>` fetcher to defer fetching to buildtime. This
+    /// is primarily useful for dependencies that don't require evaluation, but are strictly build
+    /// inputs.
+    ///
+    /// This is preferable as build time fetches are parallelized and don't block the evaluator;
+    /// improving overall performance.
+    ///
+    /// However, it can actually *harm* performance to fetch evaluation dependencies at build time,
+    /// as the evaluator must block to perform the build so it can read the value from it.
+    ///
+    /// It's important, then, to use this with the proper intent, and understand the difference.
+    #[clap(
+        long,
+        conflicts_with_all = ["git", "tar"],
+        default_value_if("exec", "true", Some("true")),
+        default_value_if("unpack", "true", Some("true"))
+    )]
+    build: bool,
+    /// Implies the `--build` flag, and will pass the `executable = true` flag to `<nix/fetchurl>`,
+    /// marking the resulting store path as an executable file. This flag will be ignored if the
+    /// url path contains a `.tar` extension and `unpack=false` is not explicitly passed.
+    #[clap(long, requires = "build", conflicts_with = "unpack")]
+    exec: bool,
+    /// Implies the `--build` flag, and will pass `unpack = true` to `<nix/fetchurl>`. This
+    /// will be assumed if the `--build` flag is passed, and the url path contains a `.tar`
+    /// extension. You can disable this auto-detection behavior by passing `--unpack=false`.
+    #[clap(long, requires = "build", conflicts_with = "exec")]
+    unpack: Option<bool>,
+}
+
+#[derive(Parser, Debug)]
+#[command(arg_required_else_help = true)]
+pub struct DirectArgs {
+    #[command(subcommand)]
+    sub: DirectSubs,
 }
 
 #[derive(Subcommand, Debug)]
-enum PinCommand {
-    /// Add dependencies from a given URL to the manifest.
+enum AddSubs {
+    /// Add dependencies directly leveraging a backend specific API.
+    ///
+    /// This command requires an additional subcommand to specify the backend.
+    Direct(DirectArgs),
+}
+#[derive(Subcommand, Debug)]
+enum DirectSubs {
+    /// Add dependencies from a given URL to the manifest using the builtin Nix fetchers API
+    /// directly.
     ///
     /// This command takes a URL and updates the manifest and lock with the result.
-    Pin(PinArgs),
-}
-
-#[derive(Parser, Debug)]
-struct StoreArgs {
-    #[command(flatten)]
-    git: git::GitArgs,
+    Nix(NixArgs),
 }
 
 //================================================================================================
@@ -80,12 +129,23 @@ struct StoreArgs {
 pub(super) async fn run(args: Args) -> Result<()> {
     let mut writer = atom::ManifestWriter::new(&args.path).await?;
 
-    if let Some(PinCommand::Pin(pin_args)) = args.pin {
+    if let Some(AddSubs::Direct(DirectArgs {
+        sub: DirectSubs::Nix(args),
+    })) = args.sub
+    {
         writer
-            .add_url(pin_args.url, args.key, pin_args.import_path, pin_args.flake)
+            .add_url(
+                args.url,
+                args.key,
+                args.git,
+                args.tar,
+                args.build,
+                args.unpack,
+                args.exec,
+            )
             .await?;
     } else {
-        writer.add_uri(args.uri.unwrap(), args.key)?;
+        writer.add_uri(args.uri.unwrap(), args.set)?;
     }
 
     writer.write_atomic()?;

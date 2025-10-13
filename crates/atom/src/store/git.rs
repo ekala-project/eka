@@ -24,7 +24,7 @@ use thiserror::Error as ThisError;
 
 use crate::AtomTag;
 use crate::id::Origin;
-use crate::store::{Init, NormalizeStorePath, QueryStore, QueryVersion};
+use crate::store::{Init, NormalizeStorePath, QueryStore, QueryVersion, UnpackedRef};
 
 #[cfg(test)]
 pub(crate) mod test;
@@ -120,6 +120,9 @@ pub enum Error {
     /// A transparent wrapper for a [`Box<gix::reference::edit::Error>`]
     #[error(transparent)]
     WriteRef(#[from] Box<gix::reference::edit::Error>),
+    /// A transparent wrapper for a [`Box<gix::reference::edit::Error>`]
+    #[error(transparent)]
+    Semver(#[from] semver::Error),
 }
 
 /// The wrapper type for the underlying type which will be used to represent
@@ -127,10 +130,10 @@ pub enum Error {
 /// representing the original commit made in the repositories history.
 ///
 /// The wrapper helps disambiguate at the type level between object ids and the root id.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Root(ObjectId);
 
-type AtomQuery = (AtomTag, Version, ObjectId);
+pub(crate) type AtomQuery = UnpackedRef<ObjectId>;
 type ProgressRange = std::ops::RangeInclusive<prodash::progress::key::Level>;
 type Refs = Vec<super::UnpackedRef<ObjectId>>;
 
@@ -590,7 +593,7 @@ impl super::UnpackRef<ObjectId> for Ref {
     fn unpack_atom_ref(&self) -> Option<super::UnpackedRef<ObjectId>> {
         let maybe_root = self.find_root_ref();
         if let Some(root) = maybe_root {
-            return Some((
+            return Some(UnpackedRef(
                 AtomTag::root_tag(),
                 Version::parse(V1_ROOT_SEMVER).ok()?,
                 root,
@@ -605,7 +608,7 @@ impl super::UnpackRef<ObjectId> for Ref {
         let tag = AtomTag::try_from(a_str).ok()?;
         let id = p.or(t).map(ToOwned::to_owned)?;
 
-        Some((tag, version, id))
+        Some(UnpackedRef(tag, version, id))
     }
 }
 

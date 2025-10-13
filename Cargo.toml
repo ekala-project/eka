@@ -15,6 +15,7 @@ strip         = true
 
 anyhow.workspace             = true
 clap.workspace               = true
+either.workspace             = true
 gix.workspace                = true
 semver.workspace             = true
 tempfile.workspace           = true
@@ -42,6 +43,7 @@ clap = { version = "^4", features = [
   "wrap_help",
   "unstable-markdown",
 ] }
+either = { version = "1.15.0", features = ["serde"] }
 insta = { version = "^1", features = ["yaml"] }
 semver = { version = "^1", features = ["serde"] }
 serde = { version = "^1", features = ["derive"] }
