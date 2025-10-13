@@ -403,7 +403,7 @@ impl NixReq {
 impl ManifestWriter {
     /// Constructs a new `ManifestWriter`, ensuring that the manifest and lock file constraints
     /// are respected.
-    pub async fn new(repo: &ThreadSafeRepository, path: &Path) -> Result<Self, DocError> {
+    pub async fn new(repo: Option<&ThreadSafeRepository>, path: &Path) -> Result<Self, DocError> {
         use std::fs;
         let path = if path.file_name() == Some(OsStr::new(crate::MANIFEST_NAME.as_str())) {
             path.into()

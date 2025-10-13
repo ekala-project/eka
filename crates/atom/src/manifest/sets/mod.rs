@@ -14,6 +14,8 @@ use crate::store::git::{AtomQuery, Root};
 enum Error {
     #[error("manifest is in an inconsistent state")]
     Inconsistent,
+    #[error("You are not inside a structured local set, `::` has no meaning as a mirror")]
+    NoLocal,
 }
 
 pub struct ResolvedSets {
@@ -24,7 +26,7 @@ pub struct ResolvedSets {
 
 pub(crate) struct SetResolver<'a> {
     manifest: &'a Manifest,
-    repo: gix::Repository,
+    repo: Option<gix::Repository>,
     names: HashMap<Root, Name>,
     roots: HashMap<Name, Root>,
     tasks: JoinSet<MirrorResult>,
@@ -45,11 +47,11 @@ type MirrorResult = Result<
 
 impl<'a> SetResolver<'a> {
     /// Creates a new `SetResolver` to validate the package sets in a manifest.
-    pub(crate) fn new(repo: &ThreadSafeRepository, manifest: &'a Manifest) -> Self {
+    pub(crate) fn new(repo: Option<&ThreadSafeRepository>, manifest: &'a Manifest) -> Self {
         let len = manifest.package.sets.len();
         Self {
             manifest,
-            repo: repo.to_thread_local(),
+            repo: repo.map(|r| r.to_thread_local()),
             names: HashMap::with_capacity(len),
             roots: HashMap::with_capacity(len),
             tasks: JoinSet::new(),
@@ -122,15 +124,18 @@ impl<'a> SetResolver<'a> {
 
         match mirror {
             AtomSet::Local => {
-                let root = {
-                    let commit = self
-                        .repo
-                        .rev_parse_single("HEAD")
-                        .map(|s| self.repo.find_commit(s))
-                        .map_err(Box::new)??;
-                    commit.calculate_origin()?
-                };
-                self.check_set_consistency(k, root)?;
+                if let Some(repo) = self.repo.as_ref() {
+                    let root = {
+                        let commit = repo
+                            .rev_parse_single("HEAD")
+                            .map(|s| repo.find_commit(s))
+                            .map_err(Box::new)??;
+                        commit.calculate_origin()?
+                    };
+                    self.check_set_consistency(k, root)?;
+                } else {
+                    return Err(Error::NoLocal.into());
+                }
                 Ok(())
             },
             AtomSet::Url(url) => {

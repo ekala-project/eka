@@ -288,8 +288,6 @@ enum LockError {
     Generic(#[from] BoxError),
     #[error("failed to resolve requested version")]
     Resolve,
-    #[error("manifest is in an inconsistent state")]
-    Inconsistent,
 }
 
 /// An enum to handle different URL types for filename extraction.

@@ -124,29 +124,31 @@ enum DirectSubs {
 
 /// The main entry point for the `add` subcommand.
 pub(super) async fn run(store: Detected, args: Args) -> Result<()> {
-    if let Detected::Git(repo) = store {
-        let mut writer = atom::ManifestWriter::new(repo, &args.path).await?;
+    let repo = match store {
+        Detected::Git(repo) => Some(repo),
+        Detected::None => None,
+    };
+    let mut writer = atom::ManifestWriter::new(repo, &args.path).await?;
 
-        if let Some(AddSubs::Direct(DirectArgs {
-            sub: DirectSubs::Nix(args),
-        })) = args.sub
-        {
-            writer
-                .add_url(
-                    args.url,
-                    args.key,
-                    args.git,
-                    args.tar,
-                    args.build,
-                    args.unpack,
-                )
-                .await?;
-        } else {
-            writer.add_uri(args.uri.unwrap(), args.set)?;
-        }
-
-        writer.write_atomic()?;
+    if let Some(AddSubs::Direct(DirectArgs {
+        sub: DirectSubs::Nix(args),
+    })) = args.sub
+    {
+        writer
+            .add_url(
+                args.url,
+                args.key,
+                args.git,
+                args.tar,
+                args.build,
+                args.unpack,
+            )
+            .await?;
+    } else {
+        writer.add_uri(args.uri.unwrap(), args.set)?;
     }
+
+    writer.write_atomic()?;
 
     Ok(())
 }
