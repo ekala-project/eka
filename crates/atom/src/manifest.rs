@@ -72,7 +72,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use toml_edit::{DocumentMut, de};
 
-use crate::manifest::deps::Dependency2;
+use crate::manifest::deps::Dependency;
 use crate::{Atom, AtomTag};
 
 pub mod deps;
@@ -135,8 +135,8 @@ pub struct Manifest {
     /// The required `[package]` table, containing core metadata.
     pub package: Atom,
     /// The dependencies of the atom.
-    #[serde(default, skip_serializing_if = "Dependency2::is_empty")]
-    pub(crate) deps: Dependency2,
+    #[serde(default, skip_serializing_if = "Dependency::is_empty")]
+    pub(crate) deps: Dependency,
 }
 
 /// A specialized result type for manifest operations.
@@ -156,7 +156,7 @@ impl Manifest {
                 description,
                 sets: HashMap::new(),
             },
-            deps: Dependency2::new(),
+            deps: Dependency::new(),
         }
     }
 
@@ -178,7 +178,7 @@ impl Manifest {
         }
     }
 
-    pub(crate) fn deps(&self) -> &Dependency2 {
+    pub(crate) fn deps(&self) -> &Dependency {
         &self.deps
     }
 }

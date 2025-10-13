@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::io::Write;
 use std::os::unix::fs::MetadataExt;
 use std::str::FromStr;

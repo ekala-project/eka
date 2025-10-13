@@ -77,55 +77,16 @@ pub struct AtomReq {
     version: VersionReq,
 }
 
-/// Represents the hashing strategy for the build-time fetch
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, PartialOrd, Ord)]
-pub(crate) enum BuildStrat {
-    /// The fetched file will be marked as executable
-    #[serde(rename = "exec")]
-    Exec,
-    /// The tag file is a tarball which will be unpacked before hashing
-    #[serde(rename = "unpack")]
-    Unpack,
-}
-
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
-#[serde(untagged)]
-/// The dependencies specified in the manifest
-pub enum Dependency {
-    /// An atom dependency variant.
-    Atom(AtomReq),
-    /// A direct pin to an external source variant.
-    Pin(StraightPin),
-    /// A tarball pin to an external source variant.
-    TarPin(TarPin),
-    /// A git pin to an external source variant.
-    GitPin(GitPin),
-    /// A dependency fetched at build-time as an FOD.
-    Src(NixSrc),
-}
-
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Default)]
 #[serde(deny_unknown_fields)]
 /// The dependencies specified in the manifest
-pub struct Dependency2 {
+pub struct Dependency {
     /// Specify atom dependencies from a specific set outlined in `[package.sets]`.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     from: AtomFrom,
     /// Direct dependencies not in the atom format.
     #[serde(default, skip_serializing_if = "DirectDeps::is_empty")]
     direct: DirectDeps,
-}
-
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
-#[serde(untagged)]
-/// Represents the two types of direct pins.
-pub enum DirectPin {
-    /// A simple pin, with an optional unpack field.
-    Straight(StraightPin),
-    /// A pin pointing to a tarball which will be unpacked before hashing.
-    Tarball(TarPin),
-    /// A git pin, with a ref or version.
-    Git(GitPin),
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -166,33 +127,6 @@ pub enum DocError {
     Error(#[from] crate::lock::BoxError),
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
-#[serde(deny_unknown_fields)]
-/// Represents a direct git pin to an external source.
-///
-/// This struct is used when a dependency is pinned directly to a Git repository.
-pub struct GitPin {
-    /// The URL of the Git repository.
-    #[serde(serialize_with = "serialize_url", deserialize_with = "deserialize_url")]
-    pub repo: gix::Url,
-    /// The fetching strategy, either by a specific ref (branch, tag, commit)
-    /// or by resolving a semantic version tag.
-    #[serde(flatten)]
-    pub fetch: GitStrat,
-    /// A bool representing whether the pin represents a Nix flake, changing the behavior of the
-    /// `import` field, if so.
-    ///
-    /// This field is omitted from serialization if false.
-    #[serde(default, skip_serializing_if = "not")]
-    pub flake: bool,
-    /// An optional relative path within the fetched source, used to import Nix expressions; the
-    /// precise behavior of which depends on whether or not the pin is a flake.
-    ///
-    /// This field is omitted from serialization if None.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub import: Option<PathBuf>,
-}
-
 /// Represents the manner in which we resolve a rev for this git fetch
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
 pub enum GitSpec {
@@ -202,34 +136,6 @@ pub enum GitSpec {
     /// We will resolve a version from the available tags resembling a semantic version.
     #[serde(rename = "version")]
     Version(VersionReq),
-}
-
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
-/// Represents the two types of git fetch strategies.
-pub enum GitStrat {
-    #[serde(rename = "ref")]
-    /// The refspec (e.g. branch or tag) of the source (for git-type pins).
-    Ref(String),
-    #[serde(rename = "version")]
-    /// The version requirement of the source (for git-type pins).
-    Version(VersionReq),
-}
-
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
-#[serde(deny_unknown_fields)]
-/// Represents an indirect pin referencing a dependency from another atom.
-///
-/// This struct is used when a dependency is sourced from another atom,
-/// enabling composition of complex systems from simpler atom components.
-pub struct IndirectPin {
-    /// The tag of the atom from which to source the dependency.
-    pub from: AtomTag,
-    /// The name of the dependency to acquire from the source atom. If `None`,
-    /// it defaults to the name of the current dependency.
-    ///
-    /// This field is omitted from serialization if None.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub set: Option<String>,
 }
 
 /// A writer for `atom.toml` manifests that ensures the `atom.lock` file is kept in sync.
@@ -309,8 +215,8 @@ pub struct NixGit {
 pub struct NixSrc {
     /// The URL from which to fetch the build-time source.
     pub(crate) build: Url,
-    #[serde(flatten, skip_serializing_if = "Option::is_none")]
-    pub(crate) strat: Option<BuildStrat>,
+    #[serde(default, skip_serializing_if = "not")]
+    pub(crate) unpack: bool,
 }
 
 /// Represents the field name in a Nix dependency, which determines how it will be fetched
@@ -322,40 +228,6 @@ pub enum NixUrl {
     /// A straight url which will be fetched and hashed directly
     #[serde(rename = "url")]
     Url(Url),
-}
-
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
-#[serde(deny_unknown_fields)]
-/// Represents a simple pin, with an optional unpack field.
-pub struct StraightPin {
-    /// The URL of the pinned resource.
-    pub pin: Url,
-    /// A bool representing whether the pin represents a Nix flake, changing the behavior of the
-    /// `import` field, if so.
-    ///
-    /// This field is omitted from serialization if false.
-    #[serde(default, skip_serializing_if = "not")]
-    pub flake: bool,
-}
-
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
-#[serde(deny_unknown_fields)]
-/// Represents a pin to a tarball, with an optional unpack field.
-pub struct TarPin {
-    /// The URL of the tarball resource.
-    pub tar: Url,
-    /// A bool representing whether the pin represents a Nix flake, changing the behavior of the
-    /// `import` field, if so.
-    ///
-    /// This field is omitted from serialization if false.
-    #[serde(default, skip_serializing_if = "not")]
-    pub flake: bool,
-    /// An optional relative path within the fetched source, used to import Nix expressions; the
-    /// precise behavior of which depends on whether or not the pin is a flake.
-    ///
-    /// This field is omitted from serialization if None.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub import: Option<PathBuf>,
 }
 
 /// Represents different possible types of direct dependencies, i.e. those in the atom format
@@ -396,8 +268,8 @@ impl AsMut<AtomReq> for AtomReq {
     }
 }
 
-impl AsMut<Dependency2> for Dependency2 {
-    fn as_mut(&mut self) -> &mut Dependency2 {
+impl AsMut<Dependency> for Dependency {
+    fn as_mut(&mut self) -> &mut Dependency {
         self
     }
 }
@@ -437,9 +309,9 @@ impl AtomReq {
     }
 }
 
-impl Dependency2 {
+impl Dependency {
     pub(super) fn new() -> Self {
-        Dependency2 {
+        Dependency {
             from: HashMap::new(),
             direct: DirectDeps::new(),
         }
@@ -482,7 +354,6 @@ impl NixReq {
         tar: Option<bool>,
         build: bool,
         unpack: Option<bool>,
-        exec: bool,
     ) -> Result<Self, DocError> {
         let from = url.from();
         let url = url.url();
@@ -509,9 +380,7 @@ impl NixReq {
         } else if build {
             NixReq::Build(NixSrc {
                 build: url.to_string().parse()?,
-                strat: (unpack != Some(false) && is_tar() || unpack.is_some_and(|b| b))
-                    .then_some(BuildStrat::Unpack)
-                    .or(exec.then_some(BuildStrat::Exec)),
+                unpack: unpack != Some(false) && is_tar() || unpack.is_some_and(|b| b),
             })
         } else if tar != Some(false) && is_tar() {
             NixReq::Fetch(NixFetch {
@@ -560,12 +429,10 @@ impl ManifestWriter {
 
         let (atom_req, lock_entry) = uri.resolve(None).map_err(Box::new)?;
 
-        let dep = Dependency::Atom(atom_req);
-
         let tag = lock_entry.tag().to_owned();
         let id = lock_entry.id().to_owned();
 
-        self.doc.write_dep(&tag, &dep)?;
+        // self.doc.write_dep(&tag, &dep)?;
         if !self.lock.deps.as_mut().insert(Dep::Atom(lock_entry)) {
             tracing::warn!(message = "updating lock entry", atom.id = %id);
         }
@@ -582,9 +449,8 @@ impl ManifestWriter {
         tar: Option<bool>,
         build: bool,
         unpack: Option<bool>,
-        exec: bool,
     ) -> Result<(), DocError> {
-        let dep = NixReq::determine(&url, git, tar, build, unpack, exec)?;
+        let dep = NixReq::determine(&url, git, tar, build, unpack)?;
         let (key, lock_entry) = dep.resolve(key.as_ref()).await?;
 
         self.doc.write_dep(&key, todo!())?;

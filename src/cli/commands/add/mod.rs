@@ -86,11 +86,6 @@ pub struct NixArgs {
         default_value_if("unpack", "true", Some("true"))
     )]
     build: bool,
-    /// Implies the `--build` flag, and will pass the `executable = true` flag to `<nix/fetchurl>`,
-    /// marking the resulting store path as an executable file. This flag will be ignored if the
-    /// url path contains a `.tar` extension and `unpack=false` is not explicitly passed.
-    #[clap(long, requires = "build", conflicts_with = "unpack")]
-    exec: bool,
     /// Implies the `--build` flag, and will pass `unpack = true` to `<nix/fetchurl>`. This
     /// will be assumed if the `--build` flag is passed, and the url path contains a `.tar`
     /// extension. You can disable this auto-detection behavior by passing `--unpack=false`.
@@ -141,7 +136,6 @@ pub(super) async fn run(args: Args) -> Result<()> {
                 args.tar,
                 args.build,
                 args.unpack,
-                args.exec,
             )
             .await?;
     } else {

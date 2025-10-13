@@ -78,8 +78,7 @@ use url::Url;
 use crate::id::{AtomTag, Name};
 use crate::manifest::AtomSets;
 use crate::manifest::deps::{
-    AtomReq, BuildStrat, Dependency, GitSpec, NixFetch, NixGit, NixReq, NixUrl,
-    deserialize_url, serialize_url,
+    AtomReq, GitSpec, NixFetch, NixGit, NixReq, NixUrl, deserialize_url, serialize_url,
 };
 use crate::store::git::{AtomQuery, Root};
 use crate::store::{QueryStore, QueryVersion, UnpackedRef};
@@ -104,7 +103,7 @@ static SEMVER_REGEX: Lazy<Regex> = lazy_regex!(
 ///
 /// This struct captures all the information needed to uniquely identify and
 /// fetch a specific version of an atom from a Git repository.
-#[derive(Serialize, Deserialize, Debug, Eq, Clone, PartialOrd, Ord)]
+#[derive(Serialize, Deserialize, Debug, Eq, Clone)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AtomDep {
     /// The unique identifier of the atom.
@@ -119,36 +118,12 @@ pub(crate) struct AtomDep {
     id: AtomDigest,
 }
 
-/// Represents the location of an atom, either as a URL or a relative path.
-///
-/// This enum is used to specify where an atom can be found, supporting both
-/// remote Git repositories and local relative paths within a repository.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Eq)]
-pub enum AtomLocation {
-    /// A URL pointing to a Git repository containing the atom.
-    ///
-    /// When this variant is used, the atom will be fetched from the specified
-    /// Git repository URL. If not provided, defaults to the current repository.
-    #[serde(
-        rename = "url",
-        serialize_with = "serialize_url",
-        deserialize_with = "deserialize_url"
-    )]
-    Url(gix::url::Url),
-    /// A relative path within the repository where the atom is located.
-    ///
-    /// When this variant is used, the atom is located at the specified path
-    /// relative to the current atom. If not provided, defaults to the root.
-    #[serde(rename = "path")]
-    Path(PathBuf),
-}
-
 /// Represents a locked build-time source, such as a registry or configuration.
 ///
 /// This struct is used for sources that are fetched during the build process,
 /// such as package registries or configuration files that need to be available
 /// at build time.
-#[derive(Serialize, Deserialize, Debug, Eq, Clone, PartialOrd, Ord)]
+#[derive(Serialize, Deserialize, Debug, Eq, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct BuildSrc {
     /// The name of the source.
@@ -166,7 +141,7 @@ pub struct BuildSrc {
 /// and validation at compile time.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, PartialOrd, Ord)]
 #[serde(tag = "type")]
-pub enum Dep {
+pub(crate) enum Dep {
     /// An atom dependency variant.
     ///
     /// Represents a dependency on another atom, identified by its ID, version,
@@ -204,27 +179,6 @@ pub enum Dep {
 /// representations.
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct DepMap<Deps: Ord>(BTreeSet<Deps>);
-
-/// Represents a cross-atom source reference, acquiring a dependency from another atom.
-///
-/// This struct enables atoms to reference dependencies from other atoms,
-/// creating a composition mechanism for building complex systems from simpler parts.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
-#[serde(deny_unknown_fields)]
-pub struct FromDep {
-    /// The name of the sourced dependency.
-    pub name: Name,
-    /// The atom ID from which to source.
-    from: AtomDigest,
-    /// The name of the dependency to acquire from the 'from' atom (defaults to `name`).
-    ///
-    /// This field is omitted from serialization if None.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    set: Option<Name>,
-    /// The path to import inside the tarball.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub import: Option<PathBuf>,
-}
 
 /// Represents different types of Git commit hashes.
 ///
@@ -267,7 +221,7 @@ pub struct Lockfile {
 ///
 /// This struct is used for dependencies that are pinned to specific URLs
 /// with integrity verification through cryptographic hashes.
-#[derive(Serialize, Deserialize, Debug, Eq, Clone, PartialOrd, Ord)]
+#[derive(Serialize, Deserialize, Debug, Eq, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct NixDep {
     /// The name of the pinned source.
@@ -282,7 +236,7 @@ pub struct NixDep {
 ///
 /// This struct is used for dependencies that are pinned to specific Git
 /// repositories and commits, providing both URL and revision information.
-#[derive(Serialize, Deserialize, Debug, Eq, Clone, PartialOrd, Ord)]
+#[derive(Serialize, Deserialize, Debug, Eq, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct NixGitDep {
     /// The name of the pinned Git source.
@@ -301,7 +255,7 @@ pub struct NixGitDep {
 ///
 /// This struct is used for dependencies that are distributed as tarballs
 /// or archives, with integrity verification through cryptographic hashes.
-#[derive(Serialize, Deserialize, Debug, Eq, Clone, PartialOrd, Ord)]
+#[derive(Serialize, Deserialize, Debug, Eq, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct NixTarDep {
     /// The name of the tar source.
@@ -310,29 +264,6 @@ pub struct NixTarDep {
     pub url: Url,
     /// The hash of the tarball.
     hash: WrappedNixHash,
-}
-
-/// The resolution mode for generating the lockfile.
-///
-/// This enum controls how dependencies are resolved when generating a lockfile,
-/// determining whether to lock only direct dependencies or recursively resolve
-/// all transitive dependencies.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ResolutionMode {
-    /// Shallow resolution: Lock only direct dependencies.
-    ///
-    /// In this mode, only the immediate dependencies declared in the manifest
-    /// are resolved and locked. Transitive dependencies are not included in
-    /// the lockfile, making it faster but less comprehensive.
-    #[serde(rename = "shallow")]
-    Shallow,
-    /// Deep resolution: Recursively lock all transitive dependencies (future).
-    ///
-    /// In this mode, all dependencies and their dependencies are recursively
-    /// resolved and locked, ensuring complete reproducibility but requiring
-    /// more time and resources. This feature is planned for future implementation.
-    #[serde(rename = "deep")]
-    Deep,
 }
 
 /// A wrapper around `NixHash` to provide custom serialization behavior for TOML.
@@ -498,29 +429,104 @@ impl<T: Ord> DepMap<T> {
     }
 }
 
-impl Dependency {
-    // Do we need this actually?
-    // pub(crate) async fn resolve(&self, key: Option<&Name>) -> Result<Dep, BoxError> {
-    //     use crate::manifest::deps::{DirectPin, PinType};
-    //     let fetcher = Dependency::get_fetcher();
-    //     match self {
-    //         Dependency::Atom(atom_req) => Ok(Dep::Atom(atom_req.resolve(key)?)),
-    //         Dependency::Pin(pin_req) => match &pin_req.kind {
-    //             PinType::Direct(direct_pin) => {
-    //                 let (_, dep) = direct_pin.resolve(key, import).await?;
-    //                 Ok(dep)
-    //             },
-    //             PinType::Indirect(indirect_pin) => Ok(Dep::From(FromDep {
-    //                 name: key.to_owned(),
-    //                 from: indirect_pin.from.to_owned(),
-    //                 set: indirect_pin.set.to_owned(),
-    //                 import: pin_req.import.to_owned(),
-    //             })),
-    //         },
-    //         Dependency::Src(_src_req) => todo!(),
-    //     }
-    // }
+/// We enforce equality of a locked atom only by its cryptographic identity. This ensures that no
+/// more than one copy of a unique atom can exist in the lock at any given time. This will be
+/// important for sane dependency resolution of transitives in the future, and also makes updating
+/// the lock more efficient, since we can just insert an updated atom into the BTreeSet and it will
+/// be replaced even if it has a newer version.
+impl PartialEq for AtomDep {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
 
+impl Ord for AtomDep {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.id.cmp(&other.id)
+    }
+}
+
+impl PartialOrd for AtomDep {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// We only want nix dependencies to be compared by name, so that there is no possibility of a
+/// duplicate in the set, just as every key in the manifest must be unique.
+impl PartialEq for NixDep {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+    }
+}
+
+impl PartialOrd for NixDep {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for NixDep {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.name.cmp(&other.name)
+    }
+}
+
+impl PartialEq for NixGitDep {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+    }
+}
+
+impl PartialOrd for NixGitDep {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for NixGitDep {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.name.cmp(&other.name)
+    }
+}
+
+impl PartialEq for NixTarDep {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+    }
+}
+
+impl PartialOrd for NixTarDep {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for NixTarDep {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.name.cmp(&other.name)
+    }
+}
+
+impl PartialEq for BuildSrc {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+    }
+}
+
+impl PartialOrd for BuildSrc {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for BuildSrc {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.name.cmp(&other.name)
+    }
+}
+
+impl NixReq {
     pub(crate) async fn get_fetcher() -> Result<PinFetcher, BoxError> {
         use snix_castore::{blobservice, directoryservice};
         use snix_glue::fetchers::Fetcher;
@@ -546,46 +552,7 @@ impl Dependency {
             Some(cache_root.join("fetcher.redb")),
         ))
     }
-}
 
-/// We enforce equality of a locked atom only by its cryptographic identity. This ensures that no
-/// more than one copy of a unique atom can exist in the lock at any given time. This will be
-/// important for sane dependency resolution of transitives in the future, and also makes updating
-/// the lock more efficient, since we can just insert an updated atom into the BTreeSet and it will
-/// be replaced even if it has a newer version.
-impl PartialEq for AtomDep {
-    fn eq(&self, other: &Self) -> bool {
-        self.id == other.id
-    }
-}
-
-/// We only want nix dependencies to be compared by name, so that there is no possibility of a
-/// duplicate in the set, just as every key in the manifest must be unique.
-impl PartialEq for NixDep {
-    fn eq(&self, other: &Self) -> bool {
-        self.name == other.name
-    }
-}
-
-impl PartialEq for NixGitDep {
-    fn eq(&self, other: &Self) -> bool {
-        self.name == other.name
-    }
-}
-
-impl PartialEq for NixTarDep {
-    fn eq(&self, other: &Self) -> bool {
-        self.name == other.name
-    }
-}
-
-impl PartialEq for BuildSrc {
-    fn eq(&self, other: &Self) -> bool {
-        self.name == other.name
-    }
-}
-
-impl NixReq {
     pub(crate) async fn resolve(&self, key: Option<&Name>) -> Result<(Name, Dep), BoxError> {
         use snix_glue::fetchers::Fetch;
 
@@ -617,7 +584,7 @@ impl NixReq {
                     url: url.to_owned(),
                     exp_hash: None,
                 };
-                let fetcher = Dependency::get_fetcher();
+                let fetcher = NixReq::get_fetcher();
 
                 let (_, _, hash, _) = fetcher.await?.ingest_and_persist(key, args).await?;
 
@@ -638,7 +605,7 @@ impl NixReq {
                     url: url.to_owned(),
                     exp_nar_sha256: None,
                 };
-                let fetcher = Dependency::get_fetcher();
+                let fetcher = NixReq::get_fetcher();
 
                 let (_, _, hash, _) = fetcher.await?.ingest_and_persist(key, args).await?;
                 Ok((
@@ -654,22 +621,18 @@ impl NixReq {
                 return Ok((key.to_owned(), Dep::NixGit(nix_git.resolve(key).await?)));
             },
             NixReq::Build(build_src) => {
-                let args = match build_src.strat {
-                    Some(BuildStrat::Exec) => Fetch::Executable {
-                        url: build_src.build.to_owned(),
-                        // probably is gonna break shit
-                        hash: NixHash::Sha256([0u8; 32]),
-                    },
-                    Some(BuildStrat::Unpack) => Fetch::Tarball {
+                let args = if build_src.unpack {
+                    Fetch::Tarball {
                         url: build_src.build.to_owned(),
                         exp_nar_sha256: None,
-                    },
-                    None => Fetch::URL {
+                    }
+                } else {
+                    Fetch::URL {
                         url: build_src.build.to_owned(),
                         exp_hash: None,
-                    },
+                    }
                 };
-                let fetcher = Dependency::get_fetcher();
+                let fetcher = NixReq::get_fetcher();
 
                 let (_, _, hash, _) = fetcher.await?.ingest_and_persist(key, args).await?;
                 Ok((

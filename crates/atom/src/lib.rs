@@ -71,7 +71,7 @@ use std::sync::LazyLock;
 
 pub use self::core::Atom;
 pub use self::id::{AtomId, AtomTag, Compute, Origin};
-pub use self::lock::{Lockfile, ResolutionMode};
+pub use self::lock::Lockfile;
 pub use self::manifest::Manifest;
 pub use self::manifest::deps::ManifestWriter;
 pub use self::publish::ATOM_REFS;
