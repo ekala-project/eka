@@ -22,9 +22,10 @@ use gix::{Commit, ObjectId, Repository, ThreadSafeRepository};
 use semver::Version;
 use thiserror::Error as ThisError;
 
-use crate::AtomTag;
 use crate::id::Origin;
-use crate::store::{Init, NormalizeStorePath, QueryStore, QueryVersion, UnpackedRef};
+use crate::lock::GitDigest;
+use crate::store::{Init, NormalizeStorePath, QueryStore, QueryVersion, UnpackRef, UnpackedRef};
+use crate::{AtomId, AtomTag};
 
 #[cfg(test)]
 pub(crate) mod test;
@@ -130,12 +131,12 @@ pub enum Error {
 /// representing the original commit made in the repositories history.
 ///
 /// The wrapper helps disambiguate at the type level between object ids and the root id.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Root(ObjectId);
 
-pub(crate) type AtomQuery = UnpackedRef<ObjectId>;
+pub(crate) type AtomQuery = UnpackedRef<ObjectId, Root>;
 type ProgressRange = std::ops::RangeInclusive<prodash::progress::key::Level>;
-type Refs = Vec<super::UnpackedRef<ObjectId>>;
+type Refs = Vec<super::UnpackedRef<ObjectId, Root>>;
 
 //================================================================================================
 // Traits
@@ -341,9 +342,32 @@ impl Origin<Root> for std::vec::IntoIter<AtomQuery> {
     type Error = Error;
 
     fn calculate_origin(&self) -> Result<Root, Self::Error> {
-        let root = <gix::Url as QueryVersion<_, _, _, _>>::process_root(self.to_owned())
-            .ok_or(Error::RootNotFound)?;
-        Ok(Root(root))
+        let mut iter = self.clone();
+        iter.try_fold(None, |first, item| match first {
+            Some(r) if &r == item.id.root() => Ok(first),
+            None => Ok(Some(item.id.root().to_owned())),
+            _ => Err(Error::RootInconsistent),
+        })
+        .and_then(|x| x.ok_or(Error::RootNotFound))
+    }
+}
+
+impl From<GitDigest> for Root {
+    fn from(value: GitDigest) -> Self {
+        let oid = match value {
+            GitDigest::Sha1(b) => ObjectId::Sha1(b),
+            // TODO: implement when gix gets sha256 support
+            GitDigest::Sha256(_) => todo!(),
+        };
+        Root(oid)
+    }
+}
+
+impl Origin<Root> for Root {
+    type Error = ();
+
+    fn calculate_origin(&self) -> Result<Root, Self::Error> {
+        Ok(self.to_owned())
     }
 }
 
@@ -377,7 +401,7 @@ impl super::QueryStore<Ref, Box<dyn Transport + Send>> for gix::Url {
         targets: impl IntoIterator<Item = Spec>,
         transport: Option<&mut Box<dyn Transport + Send>>,
     ) -> std::result::Result<
-        impl std::iter::IntoIterator<Item = Ref>,
+        Vec<Ref>,
         <Self as super::QueryStore<Ref, Box<dyn Transport + Send>>>::Error,
     >
     where
@@ -502,7 +526,7 @@ impl<'repo> super::QueryStore<Ref, Box<dyn Transport + Send>> for gix::Remote<'r
         references: impl IntoIterator<Item = Spec>,
         transport: Option<&mut Box<dyn Transport + Send>>,
     ) -> std::result::Result<
-        impl IntoIterator<Item = Ref>,
+        Vec<Ref>,
         <Self as super::QueryStore<Ref, Box<dyn Transport + Send>>>::Error,
     >
     where
@@ -576,29 +600,22 @@ impl<'repo> super::QueryStore<Ref, Box<dyn Transport + Send>> for gix::Remote<'r
     }
 }
 
-impl super::UnpackRef<ObjectId> for Ref {
-    fn find_root_ref(&self) -> Option<ObjectId> {
+impl super::UnpackRef<ObjectId, Root> for Ref {
+    fn find_root_ref(&self) -> Option<Root> {
         if let Ref::Direct {
             full_ref_name: name,
             object: id,
         } = self
         {
             if name == V1_ROOT {
-                return Some(id.to_owned());
+                return Some(Root(id.to_owned()));
             }
         }
         None
     }
 
-    fn unpack_atom_ref(&self) -> Option<super::UnpackedRef<ObjectId>> {
-        let maybe_root = self.find_root_ref();
-        if let Some(root) = maybe_root {
-            return Some(UnpackedRef(
-                AtomTag::root_tag(),
-                Version::parse(V1_ROOT_SEMVER).ok()?,
-                root,
-            ));
-        }
+    fn unpack_atom_ref(&self, root: Option<&Root>) -> Option<super::UnpackedRef<ObjectId, Root>> {
+        let root = root?;
         let (n, t, p) = self.unpack();
         let mut path = PathBuf::from(n.to_string());
         let v_str = path.file_name()?.to_str()?;
@@ -608,12 +625,19 @@ impl super::UnpackRef<ObjectId> for Ref {
         let tag = AtomTag::try_from(a_str).ok()?;
         let id = p.or(t).map(ToOwned::to_owned)?;
 
-        Some(UnpackedRef(tag, version, id))
+        Some(UnpackedRef {
+            id: AtomId::construct(&*root, tag).ok()?,
+            version,
+            rev: id,
+        })
     }
 }
 
-impl<'repo> QueryVersion<Ref, ObjectId, Refs, Box<dyn Transport + Send>> for gix::Remote<'repo> {}
-impl QueryVersion<Ref, ObjectId, Refs, Box<dyn Transport + Send>> for gix::Url {}
+impl<'repo> QueryVersion<Ref, ObjectId, Refs, Box<dyn Transport + Send>, Root>
+    for gix::Remote<'repo>
+{
+}
+impl QueryVersion<Ref, ObjectId, Refs, Box<dyn Transport + Send>, Root> for gix::Url {}
 
 //================================================================================================
 // Functions

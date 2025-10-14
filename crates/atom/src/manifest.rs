@@ -76,7 +76,7 @@ use crate::manifest::deps::Dependency;
 use crate::{Atom, AtomTag};
 
 pub mod deps;
-mod sets;
+pub(crate) mod sets;
 
 //================================================================================================
 // Types

@@ -117,19 +117,20 @@ pub enum Error {
     /// The atom identifier exceeds the maximum allowed length.
     #[error("An Atom id cannot be more than {} bytes", ID_MAX)]
     TooLong,
+    /// Constructing atom digest from base32 string failed
+    #[error("Invalid Base32 string")]
+    InvalidBase32,
+    /// Wrong byte array size for blake-3 sum
+    #[error("Expected 32 bytes for BLAKE3 hash")]
+    Blake3Bytes,
 }
 
 /// Represents the BLAKE3 hash of an `AtomId`.
 ///
 /// This struct holds a 32-byte BLAKE3 hash, serving as a cryptographically
 /// secure and globally unique identifier for an atom.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct IdHash<'id, T> {
-    /// The 32-byte BLAKE3 hash value.
-    hash: [u8; 32],
-    /// A reference to the `AtomId` that was hashed.
-    id: &'id AtomId<T>,
-}
+#[derive(Copy, Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct AtomDigest([u8; 32]);
 
 /// A type alias for `AtomTag` used in contexts requiring a validated identifier.
 pub type Name = AtomTag;
@@ -152,7 +153,7 @@ pub trait Compute<'id, T>: Borrow<[u8]> {
     ///
     /// An `IdHash` containing the 32-byte BLAKE3 hash and a reference to the
     /// original `AtomId`.
-    fn compute_hash(&'id self) -> IdHash<'id, T>;
+    fn compute_hash(&'id self) -> AtomDigest;
 }
 
 /// A trait for constructing new instances of an `AtomId`.
@@ -279,17 +280,14 @@ impl<T> Borrow<[u8]> for AtomId<T> {
 }
 
 impl<'id, R: AsRef<[u8]>> Compute<'id, R> for AtomId<R> {
-    fn compute_hash(&'id self) -> IdHash<'id, R> {
+    fn compute_hash(&'id self) -> AtomDigest {
         use blake3::Hasher;
 
         let key = blake3::derive_key("AtomId", self.origin.as_ref());
 
         let mut hasher = Hasher::new_keyed(&key);
         hasher.update(self.tag.as_bytes());
-        IdHash {
-            hash: *hasher.finalize().as_bytes(),
-            id: self,
-        }
+        AtomDigest(*hasher.finalize().as_bytes())
     }
 }
 
@@ -315,11 +313,11 @@ impl Deref for AtomTag {
     }
 }
 
-impl<T> Deref for IdHash<'_, T> {
+impl Deref for AtomDigest {
     type Target = [u8; 32];
 
     fn deref(&self) -> &Self::Target {
-        &self.hash
+        &self.0
     }
 }
 
@@ -329,14 +327,51 @@ impl fmt::Display for AtomTag {
     }
 }
 
-impl<'a, R> Display for IdHash<'a, R> {
+impl Display for AtomDigest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = base32::encode(crate::BASE32, &self.hash);
+        let s = base32::encode(crate::BASE32, &self.0);
         if let Some(max_width) = f.precision() {
             write!(f, "{s:.max_width$}")
         } else {
             f.write_str(&s)
         }
+    }
+}
+
+impl FromStr for AtomDigest {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let array: [u8; 32] = base32::decode(crate::BASE32, s)
+            .ok_or(Error::InvalidBase32)
+            .and_then(|bytes| bytes.try_into().map_err(|_| Error::Blake3Bytes))?;
+        Ok(AtomDigest(array))
+    }
+}
+
+impl<'de> Deserialize<'de> for AtomDigest {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let base32 = String::deserialize(deserializer)?;
+        base32.parse().map_err(|e| serde::de::Error::custom(e))
+    }
+}
+
+impl Serialize for AtomDigest {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let base32 = self.to_string();
+        serializer.serialize_str(&base32)
+    }
+}
+
+impl<R: AsRef<[u8]>> From<AtomId<R>> for AtomDigest {
+    fn from(value: AtomId<R>) -> Self {
+        value.compute_hash()
     }
 }
 
@@ -349,12 +384,13 @@ impl FromStr for AtomTag {
     }
 }
 
-impl<R> Serialize for AtomId<R> {
+impl<R: AsRef<[u8]>> Serialize for AtomId<R> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        self.tag.serialize(serializer)
+        let hash = self.compute_hash().to_string();
+        serializer.serialize_str(&hash)
     }
 }
 

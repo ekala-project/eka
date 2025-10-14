@@ -54,6 +54,7 @@
 //! - **Strict field validation** with `#[serde(deny_unknown_fields)]`
 //! - **Type-safe dependency resolution** preventing invalid configurations
 
+use std::borrow::Borrow;
 use std::collections::BTreeSet;
 use std::ops::Deref;
 use std::path::PathBuf;
@@ -66,7 +67,7 @@ use gix::protocol::transport::client::Transport;
 use lazy_regex::{Lazy, Regex, lazy_regex};
 use nix_compat::nixhash::NixHash;
 use semver::{Version, VersionReq};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize};
 use snix_castore::blobservice::BlobService;
 use snix_castore::directoryservice::DirectoryService;
 use snix_glue::fetchers::Fetcher;
@@ -74,16 +75,14 @@ use snix_store::nar::SimpleRenderer;
 use snix_store::pathinfoservice::PathInfoService;
 use url::Url;
 
-use crate::id::{AtomTag, Name};
+use crate::id::{AtomDigest, AtomTag, Name};
 use crate::manifest::deps::{
     AtomReq, GitSpec, NixFetch, NixGit, NixReq, NixUrl, deserialize_url, serialize_url,
 };
 use crate::store::git::{AtomQuery, Root};
 use crate::store::{QueryStore, QueryVersion};
 use crate::uri::Uri;
-use crate::{AtomId, Manifest};
-
-mod serde_base32;
+use crate::{AtomId, Origin};
 
 //================================================================================================
 // Statics
@@ -182,7 +181,7 @@ pub(crate) struct DepMap<Deps: Ord>(BTreeSet<Deps>);
 ///
 /// This enum supports both SHA-1 and SHA-256 hashes, which are serialized
 /// as untagged values in TOML for maximum compatibility.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Eq, PartialOrd, Ord)]
+#[derive(Copy, Serialize, Deserialize, Debug, PartialEq, Clone, Eq, PartialOrd, Ord)]
 #[serde(untagged)]
 pub enum GitDigest {
     /// A SHA-1 commit hash.
@@ -271,17 +270,6 @@ pub(crate) struct WrappedNixHash(pub NixHash);
 /// A type alias for a boxed error that is sendable and syncable.
 pub(crate) type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
-/// Represents the BLAKE-3 digest of an atom's identity.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Eq, PartialOrd, Ord)]
-pub(crate) struct AtomDigest(#[serde(with = "serde_base32")] [u8; 32]);
-
-impl std::fmt::Display for AtomDigest {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let d = toml_edit::ser::to_string(&self).map_err(|_| std::fmt::Error)?;
-        write!(f, "{}", d)
-    }
-}
-
 #[derive(thiserror::Error, Debug)]
 enum LockError {
     #[error(transparent)]
@@ -320,6 +308,14 @@ impl AtomDep {
     pub(crate) fn id(&self) -> &AtomDigest {
         &self.id
     }
+
+    pub(crate) fn rev(&self) -> GitDigest {
+        self.rev
+    }
+
+    pub(crate) fn set(&self) -> GitDigest {
+        self.set
+    }
 }
 
 impl Uri {
@@ -340,11 +336,9 @@ impl Uri {
         if url.is_some_and(|u| u.scheme != gix::url::Scheme::File) {
             let url = url.unwrap();
             let atoms = url.get_atoms(transport)?;
-            let ObjectId::Sha1(root) =
-                <gix::Url as QueryVersion<_, _, _, _>>::process_root(atoms.to_owned())
-                    .ok_or(crate::store::git::Error::RootNotFound)?;
+            let ObjectId::Sha1(root) = *atoms.calculate_origin()?;
             let (version, oid) =
-                <gix::url::Url as QueryVersion<_, _, _, _>>::process_highest_match(
+                <gix::url::Url as QueryVersion<_, _, _, _, _>>::process_highest_match(
                     atoms.clone(),
                     tag,
                     &self.version_req(),
@@ -646,14 +640,6 @@ impl NixReq {
     }
 }
 
-impl From<AtomId<Root>> for AtomDigest {
-    fn from(value: AtomId<Root>) -> Self {
-        use crate::Compute;
-
-        Self(*value.compute_hash())
-    }
-}
-
 impl From<ObjectId> for GitDigest {
     fn from(id: ObjectId) -> Self {
         match id {
@@ -744,127 +730,6 @@ type MirrorResult = Result<
     ),
     BoxError,
 >;
-
-impl Lockfile {
-    const OUT_OF_SYNC: &str =
-        "out of sync dependency could not be resolved, check the version spec";
-    const RESOLUTION_ERR_MSG: &str = "unlocked dependency could not be resolved";
-
-    /// Removes any dependencies from the lockfile that are no longer present in the
-    /// manifest, ensuring the lockfile only contains entries that are still relevant,
-    /// then calls into synchronization logic to ensure consistency.
-    pub(crate) async fn sanitize(&mut self, manifest: &Manifest) {
-        self.deps.as_mut().retain(|dep| match dep {
-            Dep::Atom(atom_dep) => manifest.deps().from().contains_key(atom_dep.deref()),
-            Dep::Nix(nix) => manifest.deps().direct().nix().contains_key(nix.name()),
-            Dep::NixGit(nix_git) => manifest.deps().direct().nix().contains_key(&nix_git.name),
-            Dep::NixTar(nix_tar) => manifest.deps().direct().nix().contains_key(&nix_tar.name),
-            Dep::NixSrc(build_src) => manifest.deps().direct().nix().contains_key(&build_src.name),
-        });
-        // self.synchronize(manifest).await;
-    }
-
-    /// Updates the lockfile to match the dependencies specified in the manifest.
-    /// It resolves any new dependencies, updates existing ones if their version
-    /// requirements have changed, and ensures the lockfile is fully consistent.
-    pub(crate) async fn synchronize(&mut self, manifest: &Manifest) {
-        todo!()
-    }
-    //     for (k, v) in manifest.deps.iter() {
-    //         if !self.deps.as_ref().contains_key(k) {
-    //             match v {
-    //                 Dependency::Atom(atom_req) => {
-    //                     if let Ok(dep) = atom_req.resolve(k) {
-    //                         self.deps.as_mut().insert(k.to_owned(), Dep::Atom(dep));
-    //                     } else {
-    //                         tracing::warn!(message = Self::RESOLUTION_ERR_MSG, key = %k, r#type =
-    // "atom");                     };
-    //                 },
-    //                 Dependency::Pin(pin_req) => {
-    //                     if let Ok((_, dep)) = DirectPin::Straight(pin_req.to_owned())
-    //                         .resolve(Some(k))
-    //                         .await
-    //                     {
-    //                         self.deps.as_mut().insert(k.to_owned(), dep);
-    //                     } else {
-    //                         tracing::warn!(message = Self::RESOLUTION_ERR_MSG, key = %k, r#type =
-    // "pin");                     }
-    //                 },
-    //                 Dependency::TarPin(tar_req) => {
-    //                     if let Ok((_, dep)) = DirectPin::Tarball(tar_req.to_owned())
-    //                         .resolve(Some(k))
-    //                         .await
-    //                     {
-    //                         self.deps.as_mut().insert(k.to_owned(), dep);
-    //                     } else {
-    //                         tracing::warn!(message = Self::RESOLUTION_ERR_MSG, key = %k, r#type =
-    // "pin+tar");                     }
-    //                 },
-    //                 Dependency::GitPin(git_req) => {
-    //                     if let Ok(dep) = git_req.resolve(k).await {
-    //                         self.deps.as_mut().insert(k.to_owned(), Dep::NixGit(dep));
-    //                     } else {
-    //                         tracing::warn!(message = Self::RESOLUTION_ERR_MSG, key = %k, r#type =
-    // "pin+git");                     }
-    //                 },
-    //                 Dependency::Src(_) => todo!(),
-    //             }
-    //         } else {
-    //             match v {
-    //                 Dependency::Atom(atom_req) => {
-    //                     let req = atom_req.version();
-    //                     if let Some(Dep::Atom(dep)) = self.deps.as_ref().get(k) {
-    //                         if !req.matches(&dep.version) || &dep.set != atom_req.store() {
-    //                             tracing::warn!(message = "updating out of date dependency in
-    // accordance with spec", key = %k, r#type = "atom");                             if let
-    // Ok(dep) = atom_req.resolve(k) {
-    // self.deps.as_mut().insert(Dep::Atom(dep));                             } else {
-    //                                 tracing::warn!(message = Self::OUT_OF_SYNC, key = %k);
-    //                             };
-    //                         }
-    //                     }
-    //                 },
-    //                 Dependency::GitPin(git_req) => {
-    //                     if let Some(Dep::NixGit(dep)) = self.deps.as_ref().get(k) {
-    //                         let fetch = async |git_req: &GitPin, deps: &mut BTreeSet<Dep>| {
-    //                             if let Ok(dep) = git_req.resolve(k).await {
-    //                                 deps.insert(Dep::NixGit(dep));
-    //                             } else {
-    //                                 tracing::warn!(
-    //                                     message = Self::OUT_OF_SYNC,
-    //                                     key = %k
-    //                                 );
-    //                             }
-    //                         };
-    //                         if dep.url == git_req.repo {
-    //                             use crate::manifest::deps::GitStrat;
-    //                             match git_req.fetch.to_owned() {
-    //                                 GitStrat::Ref(_) => {
-    //                                     // do nothing, we don't want to update locked refs unless
-    //                                     // explicitly requested
-    //                                 },
-    //                                 GitStrat::Version(version_req) => {
-    //                                     if dep
-    //                                         .version
-    //                                         .to_owned()
-    //                                         .is_none_or(|v| !version_req.matches(&v))
-    //                                     {
-    //                                         fetch(&git_req, self.deps.as_mut()).await;
-    //                                     }
-    //                                 },
-    //                             }
-    //                         } else {
-    //                             fetch(&git_req, self.deps.as_mut()).await;
-    //                         }
-    //                     }
-    //                 },
-    //                 Dependency::Src(_) => todo!(),
-    //                 _ => (),
-    //             }
-    //         }
-    //     }
-    // }
-}
 
 impl NixDep {
     pub(crate) fn name(&self) -> &Name {

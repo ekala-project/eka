@@ -1,14 +1,15 @@
 use std::collections::{BTreeSet, HashMap};
 
-use gix::ThreadSafeRepository;
 use gix::protocol::transport::client::Transport;
+use gix::{ObjectId, ThreadSafeRepository};
+use semver::Version;
 use tokio::task::JoinSet;
 
-use crate::Manifest;
-use crate::id::Name;
+use crate::id::{AtomDigest, Name};
 use crate::lock::BoxError;
 use crate::store::UnpackedRef;
 use crate::store::git::{AtomQuery, Root};
+use crate::{AtomId, Compute, Manifest};
 
 #[derive(thiserror::Error, Debug)]
 enum Error {
@@ -19,10 +20,17 @@ enum Error {
 }
 
 pub struct ResolvedSets {
-    pub atom_sets: HashMap<Name, BTreeSet<AtomQuery>>,
+    pub atom_sets: ResolvedAtomSets<ObjectId, Root>,
     pub names: HashMap<Root, Name>,
     pub transports: HashMap<gix::Url, Box<dyn Transport + Send>>,
 }
+
+struct ResolvedAtom<Id, R> {
+    unpacked: UnpackedRef<Id, R>,
+    remotes: BTreeSet<gix::Url>,
+}
+
+type ResolvedAtomSets<Id, R> = HashMap<AtomId<R>, HashMap<Version, ResolvedAtom<Id, R>>>;
 
 pub(crate) struct SetResolver<'a> {
     manifest: &'a Manifest,
@@ -30,7 +38,7 @@ pub(crate) struct SetResolver<'a> {
     names: HashMap<Root, Name>,
     roots: HashMap<Name, Root>,
     tasks: JoinSet<MirrorResult>,
-    atom_sets: HashMap<Name, BTreeSet<AtomQuery>>,
+    atom_sets: ResolvedAtomSets<ObjectId, Root>,
     transports: HashMap<gix::Url, Box<dyn Transport + Send>>,
 }
 
@@ -55,7 +63,7 @@ impl<'a> SetResolver<'a> {
             names: HashMap::with_capacity(len),
             roots: HashMap::with_capacity(len),
             tasks: JoinSet::new(),
-            atom_sets: HashMap::with_capacity(manifest.package.sets.len()),
+            atom_sets: HashMap::with_capacity(len * 10),
             transports: HashMap::with_capacity(len * 3),
         }
     }
@@ -140,12 +148,12 @@ impl<'a> SetResolver<'a> {
             },
             AtomSet::Url(url) => {
                 let url = url.to_owned();
-                let k = k.to_owned();
+                let set_name = k.to_owned();
                 self.tasks.spawn(async move {
                     let mut transport = url.get_transport().ok();
                     let atoms = url.get_atoms(transport.as_mut())?;
                     let root = atoms.calculate_origin()?;
-                    Ok((transport, atoms, root, k, url))
+                    Ok((transport, atoms, root, set_name, url))
                 });
                 Ok(())
             },
@@ -157,14 +165,19 @@ impl<'a> SetResolver<'a> {
     /// This function processes the data fetched from a remote mirror, performs
     /// consistency checks, and aggregates the results into the provided hashmaps.
     fn process_remote_mirror_result(&mut self, result: MirrorResult) -> Result<(), BoxError> {
-        let (transport, atoms, root, k, url) = result?;
-        self.check_set_consistency(&k, root)?;
+        let (transport, atoms, root, set_name, url) = result?;
+        self.check_set_consistency(&set_name, root)?;
         if let Some(t) = transport {
             self.transports.insert(url.to_owned(), t);
         }
 
+        let cap = self.atom_sets.capacity();
+        let len = atoms.len();
+        if cap < len {
+            self.atom_sets.reserve(len - cap);
+        }
         for atom in atoms {
-            self.check_and_insert_atom(atom, &k, &url)?;
+            self.check_and_insert_atom(atom, len, &url)?;
         }
 
         Ok(())
@@ -176,28 +189,55 @@ impl<'a> SetResolver<'a> {
     /// has the same revision for the same version.
     fn check_and_insert_atom(
         &mut self,
-        atom @ UnpackedRef(_, _, rev): AtomQuery,
-        set_name: &Name,
+        atom: AtomQuery,
+        size: usize,
         mirror_url: &gix::Url,
     ) -> Result<(), BoxError> {
-        let existing_atoms = self.atom_sets.entry(set_name.to_owned()).or_default();
+        use std::collections::hash_map::Entry;
+        let entry = self
+            .atom_sets
+            .entry(atom.id.to_owned())
+            .or_insert(HashMap::with_capacity(size));
+        match entry.entry(atom.version.to_owned()) {
+            Entry::Occupied(mut entry) => {
+                let existing = entry.get();
+                if existing.unpacked.rev == atom.rev {
+                    entry.get_mut().remotes.insert(mirror_url.to_owned());
+                } else {
+                    let existing_mirrors: Vec<_> =
+                        existing.remotes.iter().map(|url| url.to_string()).collect();
+                    tracing::error!(
+                        message = "mirrors for the same set are advertising an atom at \
+                                   the same version but different revisions. This could \
+                                   be the result of possible tampering. Remove the faulty \
+                                   mirror to continue.",
+                        existing.mirrors = %toml_edit::ser::to_string(&existing_mirrors)?,
+                        existing.rev = %existing.unpacked.rev,
+                        conflicting.url = %mirror_url.to_string(),
+                        conflicting.tag = %atom.id,
+                        conflicting.version = %atom.version,
+                        conflicting.rev = %atom.rev,
+                    );
+                    return Err(Error::Inconsistent.into());
+                }
+            },
+            Entry::Vacant(entry) => {
+                entry.insert(ResolvedAtom {
+                    unpacked: atom,
+                    remotes: BTreeSet::from([mirror_url.to_owned()]),
+                });
+            },
+        }
+        // .and_modify(|e| {
+        //     e.remotes.insert(mirror_url.to_owned());
+        // })
+        // .or_insert(ResolvedAtom {
+        //     version,
+        //     rev,
+        //     remotes: BTreeSet::from([mirror_url.to_owned()]),
+        //     digest: id.compute_hash(),
+        // });
 
-        if let Some(UnpackedRef(.., r)) = existing_atoms.get(&atom) {
-            if r != &rev {
-                tracing::error!(
-                    message = "mirrors for the same set are advertising an atom at \
-                               the same version but different revisions. This could \
-                               be the result of possible tampering. Remove the faulty \
-                               mirror to continue.",
-                    checking.url = %mirror_url.to_string(),
-                    atom.tag = %atom.0,
-                    atom.version = %atom.1
-                );
-                return Err(Error::Inconsistent.into());
-            }
-        } else {
-            existing_atoms.insert(atom);
-        };
         Ok(())
     }
 

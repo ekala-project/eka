@@ -61,7 +61,9 @@ use toml_edit::DocumentMut;
 use url::Url;
 
 use crate::id::{AtomTag, Name};
+use crate::lock::Dep;
 use crate::manifest::sets::{ResolvedSets, SetResolver};
+use crate::store::git::Root;
 use crate::uri::{AliasedUrl, Uri};
 use crate::{Lockfile, Manifest};
 
@@ -401,6 +403,10 @@ impl NixReq {
 }
 
 impl ManifestWriter {
+    const OUT_OF_SYNC: &str =
+        "out of sync dependency could not be resolved, check the version spec";
+    const RESOLUTION_ERR_MSG: &str = "unlocked dependency could not be resolved";
+
     /// Constructs a new `ManifestWriter`, ensuring that the manifest and lock file constraints
     /// are respected.
     pub async fn new(repo: Option<&ThreadSafeRepository>, path: &Path) -> Result<Self, DocError> {
@@ -419,19 +425,164 @@ impl ManifestWriter {
             .get_and_check_sets()
             .await?;
 
-        let mut lock = if let Ok(lock_str) = fs::read_to_string(&lock_path) {
+        let lock = if let Ok(lock_str) = fs::read_to_string(&lock_path) {
             toml_edit::de::from_str(&lock_str)?
         } else {
             Lockfile::default()
         };
-        lock.sanitize(&manifest).await;
-
-        Ok(ManifestWriter {
+        let mut writer = ManifestWriter {
             doc,
             lock,
             path,
             resolved_sets,
-        })
+        };
+        writer.reconcile(&manifest).await;
+        Ok(writer)
+    }
+
+    /// Runs the sanitization process, and then the synchronization process to ensure a fully
+    /// consistent manifest and lock. This function is called in the `ManifestWriter` constructor
+    /// to ensure that we are never operating on a stale manifest.
+    async fn reconcile(&mut self, manifest: &Manifest) {
+        self.sanitize(manifest);
+        self.synchronize(manifest).await;
+    }
+
+    /// Removes any dependencies from the lockfile that are no longer present in the
+    /// manifest, ensuring the lockfile only contains entries that are still relevant,
+    /// then calls into synchronization logic to ensure consistency.
+    fn sanitize(&mut self, manifest: &Manifest) {
+        self.lock.deps.as_mut().retain(|dep| match dep {
+            Dep::Atom(atom_dep) => {
+                // TODO: in the future, the type stored in the AtomDep should be a generic root type
+                let root = Root::from(atom_dep.set());
+                if let Some(name) = self.resolved_sets.names.get(&root) {
+                    if let Some(set) = manifest.deps().from().get(name) {
+                        set.contains_key(atom_dep.tag())
+                    } else {
+                        false
+                    };
+                }
+                false
+            },
+            Dep::Nix(nix) => manifest.deps().direct().nix().contains_key(nix.name()),
+            Dep::NixGit(nix_git) => manifest.deps().direct().nix().contains_key(&nix_git.name),
+            Dep::NixTar(nix_tar) => manifest.deps().direct().nix().contains_key(&nix_tar.name),
+            Dep::NixSrc(build_src) => manifest.deps().direct().nix().contains_key(&build_src.name),
+        });
+        // self.synchronize(manifest).await;
+    }
+
+    /// Updates the lockfile to match the dependencies specified in the manifest.
+    /// It resolves any new dependencies, updates existing ones if their version
+    /// requirements have changed, and ensures the lockfile is fully consistent.
+    pub(crate) async fn synchronize(&mut self, manifest: &Manifest) {
+        for (name, set) in manifest.deps().from() {
+            // getting the resolved atom set based on the set in the manifest we are iterating
+            // over
+            if let Some(resolved) = self.resolved_sets.atom_sets.get(&name) {
+                for (atom, dep) in set {
+                    // if !self.lock.deps.as_ref().contains(value) {}
+                }
+            } else {
+                tracing::warn!("foo");
+            }
+        }
+        //     for (k, v) in manifest.deps.iter() {
+        //         if !self.deps.as_ref().contains_key(k) {
+        //             match v {
+        //                 Dependency::Atom(atom_req) => {
+        //                     if let Ok(dep) = atom_req.resolve(k) {
+        //                         self.deps.as_mut().insert(k.to_owned(), Dep::Atom(dep));
+        //                     } else {
+        //                         tracing::warn!(message = Self::RESOLUTION_ERR_MSG, key = %k,
+        // r#type = "atom");                     };
+        //                 },
+        //                 Dependency::Pin(pin_req) => {
+        //                     if let Ok((_, dep)) = DirectPin::Straight(pin_req.to_owned())
+        //                         .resolve(Some(k))
+        //                         .await
+        //                     {
+        //                         self.deps.as_mut().insert(k.to_owned(), dep);
+        //                     } else {
+        //                         tracing::warn!(message = Self::RESOLUTION_ERR_MSG, key = %k,
+        // r#type = "pin");                     }
+        //                 },
+        //                 Dependency::TarPin(tar_req) => {
+        //                     if let Ok((_, dep)) = DirectPin::Tarball(tar_req.to_owned())
+        //                         .resolve(Some(k))
+        //                         .await
+        //                     {
+        //                         self.deps.as_mut().insert(k.to_owned(), dep);
+        //                     } else {
+        //                         tracing::warn!(message = Self::RESOLUTION_ERR_MSG, key = %k,
+        // r#type = "pin+tar");                     }
+        //                 },
+        //                 Dependency::GitPin(git_req) => {
+        //                     if let Ok(dep) = git_req.resolve(k).await {
+        //                         self.deps.as_mut().insert(k.to_owned(), Dep::NixGit(dep));
+        //                     } else {
+        //                         tracing::warn!(message = Self::RESOLUTION_ERR_MSG, key = %k,
+        // r#type = "pin+git");                     }
+        //                 },
+        //                 Dependency::Src(_) => todo!(),
+        //             }
+        //         } else {
+        //             match v {
+        //                 Dependency::Atom(atom_req) => {
+        //                     let req = atom_req.version();
+        //                     if let Some(Dep::Atom(dep)) = self.deps.as_ref().get(k) {
+        //                         if !req.matches(&dep.version) || &dep.set != atom_req.store() {
+        //                             tracing::warn!(message = "updating out of date dependency in
+        // accordance with spec", key = %k, r#type = "atom");                             if let
+        // Ok(dep) = atom_req.resolve(k) {
+        // self.deps.as_mut().insert(Dep::Atom(dep));                             } else {
+        //                                 tracing::warn!(message = Self::OUT_OF_SYNC, key = %k);
+        //                             };
+        //                         }
+        //                     }
+        //                 },
+        //                 Dependency::GitPin(git_req) => {
+        //                     if let Some(Dep::NixGit(dep)) = self.deps.as_ref().get(k) {
+        //                         let fetch = async |git_req: &GitPin, deps: &mut BTreeSet<Dep>| {
+        //                             if let Ok(dep) = git_req.resolve(k).await {
+        //                                 deps.insert(Dep::NixGit(dep));
+        //                             } else {
+        //                                 tracing::warn!(
+        //                                     message = Self::OUT_OF_SYNC,
+        //                                     key = %k
+        //                                 );
+        //                             }
+        //                         };
+        //                         if dep.url == git_req.repo {
+        //                             use crate::manifest::deps::GitStrat;
+        //                             match git_req.fetch.to_owned() {
+        //                                 GitStrat::Ref(_) => {
+        //                                     // do nothing, we don't want to update locked refs
+        // unless                                     // explicitly requested
+        //                                 },
+        //                                 GitStrat::Version(version_req) => {
+        //                                     if dep
+        //                                         .version
+        //                                         .to_owned()
+        //                                         .is_none_or(|v| !version_req.matches(&v))
+        //                                     {
+        //                                         fetch(&git_req, self.deps.as_mut()).await;
+        //                                     }
+        //                                 },
+        //                             }
+        //                         } else {
+        //                             fetch(&git_req, self.deps.as_mut()).await;
+        //                         }
+        //                     }
+        //                 },
+        //                 Dependency::Src(_) => todo!(),
+        //                 _ => (),
+        //             }
+        //         }
+        //     }
+        // }
+        todo!()
     }
 
     /// Adds a user-requested atom URI to the manifest and lock files, ensuring they remain in sync.
