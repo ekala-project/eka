@@ -355,7 +355,7 @@ impl<'de> Deserialize<'de> for AtomDigest {
         D: serde::Deserializer<'de>,
     {
         let base32 = String::deserialize(deserializer)?;
-        base32.parse().map_err(|e| serde::de::Error::custom(e))
+        base32.parse().map_err(serde::de::Error::custom)
     }
 }
 

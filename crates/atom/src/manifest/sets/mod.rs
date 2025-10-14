@@ -1,15 +1,16 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use gix::protocol::transport::client::Transport;
 use gix::{ObjectId, ThreadSafeRepository};
-use semver::Version;
+use semver::{Version, VersionReq};
 use tokio::task::JoinSet;
 
-use crate::id::{AtomDigest, Name};
-use crate::lock::BoxError;
+use crate::id::Name;
+use crate::lock::{AtomDep, BoxError, Dep, GitDigest, SetDetails};
+use crate::manifest::AtomSet;
 use crate::store::UnpackedRef;
 use crate::store::git::{AtomQuery, Root};
-use crate::{AtomId, Compute, Manifest};
+use crate::{AtomId, Manifest};
 
 #[derive(thiserror::Error, Debug)]
 enum Error {
@@ -19,18 +20,19 @@ enum Error {
     NoLocal,
 }
 
-pub struct ResolvedSets {
-    pub atom_sets: ResolvedAtomSets<ObjectId, Root>,
-    pub names: HashMap<Root, Name>,
-    pub transports: HashMap<gix::Url, Box<dyn Transport + Send>>,
+pub(crate) struct ResolvedSets {
+    pub(crate) atoms: ResolvedAtoms<ObjectId, Root>,
+    pub(crate) roots: HashMap<Name, Root>,
+    transports: HashMap<gix::Url, Box<dyn Transport + Send>>,
+    details: BTreeMap<GitDigest, SetDetails>,
 }
 
-struct ResolvedAtom<Id, R> {
+pub(crate) struct ResolvedAtom<Id, R> {
     unpacked: UnpackedRef<Id, R>,
     remotes: BTreeSet<gix::Url>,
 }
 
-type ResolvedAtomSets<Id, R> = HashMap<AtomId<R>, HashMap<Version, ResolvedAtom<Id, R>>>;
+type ResolvedAtoms<Id, R> = HashMap<AtomId<R>, HashMap<Version, ResolvedAtom<Id, R>>>;
 
 pub(crate) struct SetResolver<'a> {
     manifest: &'a Manifest,
@@ -38,7 +40,8 @@ pub(crate) struct SetResolver<'a> {
     names: HashMap<Root, Name>,
     roots: HashMap<Name, Root>,
     tasks: JoinSet<MirrorResult>,
-    atom_sets: ResolvedAtomSets<ObjectId, Root>,
+    atoms: ResolvedAtoms<ObjectId, Root>,
+    sets: BTreeMap<GitDigest, SetDetails>,
     transports: HashMap<gix::Url, Box<dyn Transport + Send>>,
 }
 
@@ -63,8 +66,9 @@ impl<'a> SetResolver<'a> {
             names: HashMap::with_capacity(len),
             roots: HashMap::with_capacity(len),
             tasks: JoinSet::new(),
-            atom_sets: HashMap::with_capacity(len * 10),
+            atoms: HashMap::with_capacity(len * 10),
             transports: HashMap::with_capacity(len * 3),
+            sets: BTreeMap::new(),
         }
     }
 
@@ -111,9 +115,10 @@ impl<'a> SetResolver<'a> {
         }
 
         Ok(ResolvedSets {
-            atom_sets: self.atom_sets,
-            names: self.names,
+            atoms: self.atoms,
             transports: self.transports,
+            roots: self.roots,
+            details: self.sets,
         })
     }
 
@@ -123,7 +128,7 @@ impl<'a> SetResolver<'a> {
     /// it spawns an asynchronous task to fetch repository data and perform checks.
     fn process_mirror(
         &mut self,
-        k: &'a Name,
+        name: &'a Name,
         mirror: &'a crate::manifest::AtomSet,
     ) -> Result<(), BoxError> {
         use crate::id::Origin;
@@ -140,7 +145,8 @@ impl<'a> SetResolver<'a> {
                             .map_err(Box::new)??;
                         commit.calculate_origin()?
                     };
-                    self.check_set_consistency(k, root)?;
+                    self.check_set_consistency(name, root)?;
+                    self.update_sets(name, root, AtomSet::Local);
                 } else {
                     return Err(Error::NoLocal.into());
                 }
@@ -148,7 +154,7 @@ impl<'a> SetResolver<'a> {
             },
             AtomSet::Url(url) => {
                 let url = url.to_owned();
-                let set_name = k.to_owned();
+                let set_name = name.to_owned();
                 self.tasks.spawn(async move {
                     let mut transport = url.get_transport().ok();
                     let atoms = url.get_atoms(transport.as_mut())?;
@@ -160,6 +166,19 @@ impl<'a> SetResolver<'a> {
         }
     }
 
+    fn update_sets(&mut self, name: &Name, root: Root, set: AtomSet) {
+        let digest = GitDigest::from(*root);
+        self.sets
+            .entry(digest)
+            .and_modify(|e| {
+                e.mirrors.insert(set.to_owned());
+            })
+            .or_insert(SetDetails {
+                name: name.to_owned(),
+                mirrors: BTreeSet::from([set]),
+            });
+    }
+
     /// Handles the result of an asynchronous remote mirror check.
     ///
     /// This function processes the data fetched from a remote mirror, performs
@@ -167,14 +186,15 @@ impl<'a> SetResolver<'a> {
     fn process_remote_mirror_result(&mut self, result: MirrorResult) -> Result<(), BoxError> {
         let (transport, atoms, root, set_name, url) = result?;
         self.check_set_consistency(&set_name, root)?;
+        self.update_sets(&set_name, root, AtomSet::Url(url.to_owned()));
         if let Some(t) = transport {
             self.transports.insert(url.to_owned(), t);
         }
 
-        let cap = self.atom_sets.capacity();
+        let cap = self.atoms.capacity();
         let len = atoms.len();
         if cap < len {
-            self.atom_sets.reserve(len - cap);
+            self.atoms.reserve(len - cap);
         }
         for atom in atoms {
             self.check_and_insert_atom(atom, len, &url)?;
@@ -195,7 +215,7 @@ impl<'a> SetResolver<'a> {
     ) -> Result<(), BoxError> {
         use std::collections::hash_map::Entry;
         let entry = self
-            .atom_sets
+            .atoms
             .entry(atom.id.to_owned())
             .or_insert(HashMap::with_capacity(size));
         match entry.entry(atom.version.to_owned()) {
@@ -268,5 +288,42 @@ impl<'a> SetResolver<'a> {
             return Err(Error::Inconsistent.into());
         }
         Ok(())
+    }
+}
+
+impl ResolvedSets {
+    pub(crate) fn roots(&self) -> &HashMap<Name, Root> {
+        &self.roots
+    }
+
+    pub(crate) fn atoms_mut(&mut self) -> &mut ResolvedAtoms<ObjectId, Root> {
+        &mut self.atoms
+    }
+
+    pub(crate) fn atoms(&self) -> &ResolvedAtoms<ObjectId, Root> {
+        &self.atoms
+    }
+
+    pub(crate) fn details(&self) -> &BTreeMap<GitDigest, SetDetails> {
+        &self.details
+    }
+
+    pub(crate) fn resolve_atom(&self, id: &AtomId<Root>, req: &VersionReq) -> Option<Dep> {
+        let versions = self.atoms.get(id)?;
+        if let Some((_, atom)) = versions
+            .iter()
+            .filter(|(v, _)| req.matches(v))
+            .max_by_key(|(ref version, _)| version.to_owned())
+        {
+            Some(Dep::Atom(AtomDep::from(atom.unpack().to_owned())))
+        } else {
+            None
+        }
+    }
+}
+
+impl<Id, R> ResolvedAtom<Id, R> {
+    pub(crate) fn unpack(&self) -> &UnpackedRef<Id, R> {
+        &self.unpacked
     }
 }

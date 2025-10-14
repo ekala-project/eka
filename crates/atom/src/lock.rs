@@ -54,8 +54,7 @@
 //! - **Strict field validation** with `#[serde(deny_unknown_fields)]`
 //! - **Type-safe dependency resolution** preventing invalid configurations
 
-use std::borrow::Borrow;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Deref;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -67,7 +66,7 @@ use gix::protocol::transport::client::Transport;
 use lazy_regex::{Lazy, Regex, lazy_regex};
 use nix_compat::nixhash::NixHash;
 use semver::{Version, VersionReq};
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use snix_castore::blobservice::BlobService;
 use snix_castore::directoryservice::DirectoryService;
 use snix_glue::fetchers::Fetcher;
@@ -76,13 +75,14 @@ use snix_store::pathinfoservice::PathInfoService;
 use url::Url;
 
 use crate::id::{AtomDigest, AtomTag, Name};
+use crate::manifest::AtomSet;
 use crate::manifest::deps::{
     AtomReq, GitSpec, NixFetch, NixGit, NixReq, NixUrl, deserialize_url, serialize_url,
 };
 use crate::store::git::{AtomQuery, Root};
-use crate::store::{QueryStore, QueryVersion};
+use crate::store::{QueryStore, QueryVersion, UnpackedRef};
 use crate::uri::Uri;
-use crate::{AtomId, Origin};
+use crate::{AtomId, Compute, Origin};
 
 //================================================================================================
 // Statics
@@ -100,7 +100,7 @@ static SEMVER_REGEX: Lazy<Regex> = lazy_regex!(
 ///
 /// This struct captures all the information needed to uniquely identify and
 /// fetch a specific version of an atom from a Git repository.
-#[derive(Serialize, Deserialize, Debug, Eq, Clone)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, PartialOrd, Ord)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AtomDep {
     /// The unique identifier of the atom.
@@ -120,7 +120,7 @@ pub(crate) struct AtomDep {
 /// This struct is used for sources that are fetched during the build process,
 /// such as package registries or configuration files that need to be available
 /// at build time.
-#[derive(Serialize, Deserialize, Debug, Eq, Clone)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, PartialOrd, Ord)]
 #[serde(deny_unknown_fields)]
 pub struct BuildSrc {
     /// The name of the source.
@@ -171,11 +171,13 @@ pub(crate) enum Dep {
     NixSrc(BuildSrc),
 }
 
+type DepKey<R> = either::Either<AtomId<R>, Name>;
+
 /// A wrapper for `BTreeMap` that ensures consistent ordering for serialization
 /// and minimal diffs in the lockfile. It maps dependency names to their locked
 /// representations.
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct DepMap<Deps: Ord>(BTreeSet<Deps>);
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct DepMap<R, Deps: Ord>(BTreeMap<DepKey<R>, Deps>);
 
 /// Represents different types of Git commit hashes.
 ///
@@ -192,6 +194,13 @@ pub enum GitDigest {
     Sha256(#[serde(with = "hex")] [u8; 32]),
 }
 
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq, PartialOrd, Ord)]
+/// The set of locked mirrors from the manifest
+pub struct SetDetails {
+    pub(crate) name: Name,
+    pub(crate) mirrors: BTreeSet<AtomSet>,
+}
+
 /// The root structure for the lockfile, containing resolved dependencies and sources.
 ///
 /// This struct represents the complete lockfile format used by atom to capture
@@ -206,19 +215,21 @@ pub struct Lockfile {
     /// This field allows for future evolution of the lockfile format while
     /// maintaining backward compatibility.
     pub version: u8,
+
+    pub(crate) sets: BTreeMap<GitDigest, SetDetails>,
     /// The list of locked dependencies (absent or empty if none).
     ///
     /// This field contains all the resolved dependencies with their exact
     /// versions and revisions. It is omitted from serialization if None or empty.
     #[serde(default, skip_serializing_if = "DepMap::is_empty")]
-    pub(crate) deps: DepMap<Dep>,
+    pub(crate) deps: DepMap<Root, Dep>,
 }
 
 /// Represents a direct pin to an external source, such as a URL or tarball.
 ///
 /// This struct is used for dependencies that are pinned to specific URLs
 /// with integrity verification through cryptographic hashes.
-#[derive(Serialize, Deserialize, Debug, Eq, Clone)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, PartialOrd, Ord)]
 #[serde(deny_unknown_fields)]
 pub struct NixDep {
     /// The name of the pinned source.
@@ -233,7 +244,7 @@ pub struct NixDep {
 ///
 /// This struct is used for dependencies that are pinned to specific Git
 /// repositories and commits, providing both URL and revision information.
-#[derive(Serialize, Deserialize, Debug, Eq, Clone)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, PartialOrd, Ord)]
 #[serde(deny_unknown_fields)]
 pub struct NixGitDep {
     /// The name of the pinned Git source.
@@ -252,7 +263,7 @@ pub struct NixGitDep {
 ///
 /// This struct is used for dependencies that are distributed as tarballs
 /// or archives, with integrity verification through cryptographic hashes.
-#[derive(Serialize, Deserialize, Debug, Eq, Clone)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, PartialOrd, Ord)]
 #[serde(deny_unknown_fields)]
 pub struct NixTarDep {
     /// The name of the tar source.
@@ -381,17 +392,83 @@ impl Uri {
     }
 }
 
-impl<T: Ord> AsMut<BTreeSet<T>> for DepMap<T> {
-    fn as_mut(&mut self) -> &mut BTreeSet<T> {
+impl From<&AtomDep> for AtomId<Root> {
+    fn from(dep: &AtomDep) -> Self {
+        let root = Root::from(dep.set());
+        // unwrap is safe, as calculate_origin will always suceed for src of type Root
+        let id = AtomId::construct(&root, dep.tag().to_owned()).unwrap();
+        id
+    }
+}
+
+impl<R, T: Serialize + Ord> Serialize for DepMap<R, T> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        // BTreeMap iterates in sorted order automatically.
+        let values: Vec<_> = self.as_ref().values().collect();
+        values.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for DepMap<Root, Dep> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        use either::Either;
+
+        let entries: Vec<Dep> = Vec::deserialize(deserializer)?;
+        let mut map = BTreeMap::new();
+        for dep in entries {
+            match dep {
+                Dep::Atom(dep) => {
+                    let key = Either::Left(AtomId::from(&dep));
+                    map.insert(key, Dep::Atom(dep));
+                },
+                Dep::Nix(dep) => {
+                    map.insert(Either::Right(dep.name().to_owned()), Dep::Nix(dep));
+                },
+                Dep::NixGit(dep) => {
+                    map.insert(Either::Right(dep.name.to_owned()), Dep::NixGit(dep));
+                },
+                Dep::NixTar(dep) => {
+                    map.insert(Either::Right(dep.name.to_owned()), Dep::NixTar(dep));
+                },
+                Dep::NixSrc(dep) => {
+                    map.insert(Either::Right(dep.name.to_owned()), Dep::NixSrc(dep));
+                },
+            }
+        }
+        Ok(DepMap(map))
+    }
+}
+
+impl<R, T: Ord> AsMut<BTreeMap<DepKey<R>, T>> for DepMap<R, T> {
+    fn as_mut(&mut self) -> &mut BTreeMap<DepKey<R>, T> {
         let DepMap(map) = self;
         map
     }
 }
 
-impl<T: Ord> AsRef<BTreeSet<T>> for DepMap<T> {
-    fn as_ref(&self) -> &BTreeSet<T> {
+impl<R, T: Ord> AsRef<BTreeMap<DepKey<R>, T>> for DepMap<R, T> {
+    fn as_ref(&self) -> &BTreeMap<DepKey<R>, T> {
         let DepMap(map) = self;
         map
+    }
+}
+
+impl From<UnpackedRef<ObjectId, Root>> for AtomDep {
+    fn from(value: UnpackedRef<ObjectId, Root>) -> Self {
+        let UnpackedRef { id, version, rev } = value;
+        AtomDep {
+            tag: id.tag().to_owned(),
+            version,
+            set: GitDigest::from(id.root().deref().to_owned()),
+            rev: GitDigest::from(rev),
+            id: id.compute_hash(),
+        }
     }
 }
 
@@ -409,112 +486,15 @@ impl AsRef<AtomDigest> for AtomDep {
     }
 }
 
-impl<T: Ord> Default for DepMap<T> {
+impl<R, T: Ord> Default for DepMap<R, T> {
     fn default() -> Self {
-        Self(BTreeSet::new())
+        Self(BTreeMap::new())
     }
 }
 
-impl<T: Ord> DepMap<T> {
+impl<R, T: Ord> DepMap<R, T> {
     fn is_empty(&self) -> bool {
         self.as_ref().is_empty()
-    }
-}
-
-/// We enforce equality of a locked atom only by its cryptographic identity. This ensures that no
-/// more than one copy of a unique atom can exist in the lock at any given time. This will be
-/// important for sane dependency resolution of transitives in the future, and also makes updating
-/// the lock more efficient, since we can just insert an updated atom into the BTreeSet and it will
-/// be replaced even if it has a newer version.
-impl PartialEq for AtomDep {
-    fn eq(&self, other: &Self) -> bool {
-        self.id == other.id
-    }
-}
-
-impl Ord for AtomDep {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.id.cmp(&other.id)
-    }
-}
-
-impl PartialOrd for AtomDep {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-/// We only want nix dependencies to be compared by name, so that there is no possibility of a
-/// duplicate in the set, just as every key in the manifest must be unique.
-impl PartialEq for NixDep {
-    fn eq(&self, other: &Self) -> bool {
-        self.name == other.name
-    }
-}
-
-impl PartialOrd for NixDep {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for NixDep {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.name.cmp(&other.name)
-    }
-}
-
-impl PartialEq for NixGitDep {
-    fn eq(&self, other: &Self) -> bool {
-        self.name == other.name
-    }
-}
-
-impl PartialOrd for NixGitDep {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for NixGitDep {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.name.cmp(&other.name)
-    }
-}
-
-impl PartialEq for NixTarDep {
-    fn eq(&self, other: &Self) -> bool {
-        self.name == other.name
-    }
-}
-
-impl PartialOrd for NixTarDep {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for NixTarDep {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.name.cmp(&other.name)
-    }
-}
-
-impl PartialEq for BuildSrc {
-    fn eq(&self, other: &Self) -> bool {
-        self.name == other.name
-    }
-}
-
-impl PartialOrd for BuildSrc {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for BuildSrc {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.name.cmp(&other.name)
     }
 }
 
@@ -666,7 +646,7 @@ impl NixGit {
                 ];
                 let refs = self
                     .git
-                    .get_refs(&queries, None)
+                    .get_refs(queries, None)
                     .map_err(|e| LockError::Generic(e.into()))?;
                 if let Some((v, r)) = NixGit::match_version(req, refs) {
                     (Some(v), r)
@@ -715,6 +695,7 @@ impl Default for Lockfile {
     fn default() -> Self {
         Self {
             version: 1,
+            sets: Default::default(),
             deps: Default::default(),
         }
     }

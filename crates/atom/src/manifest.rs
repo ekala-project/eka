@@ -100,7 +100,7 @@ pub enum AtomError {
 }
 
 /// A strongly-typed representation of a source for an atom set.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum AtomSet {
     /// Represents the local repository, allowing atoms to be resolved by path.
     #[serde(rename = "::")]

@@ -364,7 +364,7 @@ impl From<GitDigest> for Root {
 }
 
 impl Origin<Root> for Root {
-    type Error = ();
+    type Error = String;
 
     fn calculate_origin(&self) -> Result<Root, Self::Error> {
         Ok(self.to_owned())
@@ -626,7 +626,7 @@ impl super::UnpackRef<ObjectId, Root> for Ref {
         let id = p.or(t).map(ToOwned::to_owned)?;
 
         Some(UnpackedRef {
-            id: AtomId::construct(&*root, tag).ok()?,
+            id: AtomId::construct(root, tag).ok()?,
             version,
             rev: id,
         })

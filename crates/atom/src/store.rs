@@ -95,8 +95,11 @@ pub mod git;
 /// Type alias for unpacked atom reference information.
 #[derive(Clone, Debug, Eq)]
 pub struct UnpackedRef<Id, R> {
+    /// The proper AtomId of the reference
     pub id: AtomId<R>,
+    /// The version of this particular reference
     pub version: Version,
+    /// The cryptographic identity of the version
     pub rev: Id,
 }
 
@@ -295,7 +298,7 @@ where
         let ro = format!("{}:{}", git::V1_ROOT, git::V1_ROOT);
 
         let query = [a.as_str(), ro.as_str()];
-        let refs = self.get_refs(&query, transport)?;
+        let refs = self.get_refs(query, transport)?;
         let atoms = Self::process_atoms(refs);
         Ok(atoms)
     }
