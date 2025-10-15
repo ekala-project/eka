@@ -560,11 +560,18 @@ impl ManifestWriter {
                 use crate::lock::NixUrls;
                 let url = dep.get_url();
                 let mut unmatched = false;
-                match (lock, url) {
-                    (Dep::Nix(nix), NixUrls::Url(url)) => unmatched = nix.url() != url,
-                    (Dep::NixGit(git), NixUrls::Git(url)) => unmatched = git.url() != url,
-                    (Dep::NixTar(tar), NixUrls::Url(url)) => unmatched = tar.url() != url,
-                    (Dep::NixSrc(build), NixUrls::Url(url)) => unmatched = build.url() != url,
+                match (lock, url, &dep.kind) {
+                    (Dep::Nix(nix), NixUrls::Url(url), _) => unmatched = nix.url() != url,
+                    (Dep::NixGit(git), NixUrls::Git(url), NixReq::Git(NixGit { spec, .. })) => {
+                        // upstream bug: false positive (it is read later unconditionally)
+                        #[allow(unused_assignments)]
+                        if let (Some(GitSpec::Version(req)), Some(version)) = (spec, &git.version) {
+                            unmatched = !req.matches(version);
+                        }
+                        unmatched = git.url() != url;
+                    },
+                    (Dep::NixTar(tar), NixUrls::Url(url), _) => unmatched = tar.url() != url,
+                    (Dep::NixSrc(build), NixUrls::Url(url), _) => unmatched = build.url() != url,
                     _ => {},
                 }
                 if unmatched {

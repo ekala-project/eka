@@ -552,7 +552,7 @@ impl NixFetch {
         clone
     }
 
-    pub(crate) fn get_url(&self) -> NixUrls {
+    pub(crate) fn get_url(&self) -> NixUrls<'_> {
         match &self.kind {
             NixReq::Tar(url) => NixUrls::Url(url),
             NixReq::Url(url) => NixUrls::Url(url),
