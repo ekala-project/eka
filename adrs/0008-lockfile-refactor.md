@@ -48,10 +48,11 @@ With the new data models in place, we will implement a clear and robust synchron
 ## Consequences
 
 - **Positive:**
-    - **Reduced Complexity:** Eliminates redundant types and simplifies the conceptual model.
-    - **Improved Performance:** The `BTreeMap` structure provides efficient lookups, making the system more scalable.
-    - **Increased Robustness:** A clearer data model and algorithm will be less prone to bugs and easier to maintain.
-    - **Future-Proofing:** Provides a solid foundation for future features like transitive dependency resolution.
+
+  - **Reduced Complexity:** Eliminates redundant types and simplifies the conceptual model.
+  - **Improved Performance:** The `BTreeMap` structure provides efficient lookups, making the system more scalable.
+  - **Increased Robustness:** A clearer data model and algorithm will be less prone to bugs and easier to maintain.
+  - **Future-Proofing:** Provides a solid foundation for future features like transitive dependency resolution.
 
 - **Negative:**
-    - **Implementation Effort:** This is a significant refactoring that will require careful implementation and testing.
+  - **Implementation Effort:** This is a significant refactoring that will require careful implementation and testing.
