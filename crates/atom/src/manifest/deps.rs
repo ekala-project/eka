@@ -556,122 +556,29 @@ impl ManifestWriter {
         for (name, dep) in manifest.deps.direct.nix {
             let key = Either::Right(name.to_owned());
             let locked = self.lock.deps.as_ref().get(&key);
-            if locked.is_none() {
-                if let Ok((_, dep)) = self.resolve_nix(dep, Some(&name)).await {
-                    self.lock.deps.as_mut().insert(key, dep);
-                } else {
-                    tracing::warn!(message = Self::RESOLUTION_ERR_MSG, direct.nix = %name);
+            if let Some(lock) = locked {
+                use crate::lock::NixUrls;
+                let url = dep.get_url();
+                let mut unmatched = false;
+                match (lock, url) {
+                    (Dep::Nix(nix), NixUrls::Url(url)) => unmatched = nix.url() != url,
+                    (Dep::NixGit(git), NixUrls::Git(url)) => unmatched = git.url() != url,
+                    (Dep::NixTar(tar), NixUrls::Url(url)) => unmatched = tar.url() != url,
+                    (Dep::NixSrc(build), NixUrls::Url(url)) => unmatched = build.url() != url,
+                    _ => {},
                 }
+                if unmatched {
+                    tracing::warn!(message = "locked URL doesn't match, updating...", direct.nix = %name);
+                    let (_, dep) = self.resolve_nix(dep, Some(&name)).await?;
+                    self.lock.deps.as_mut().insert(key, dep);
+                }
+            } else if let Ok((_, dep)) = self.resolve_nix(dep, Some(&name)).await {
+                self.lock.deps.as_mut().insert(key, dep);
             } else {
-                // match (locked, dep) {
-                //     (
-                //         Some(Dep::Nix(lock)),
-                //         NixFetch {
-                //             kind: NixUrl::Url(url),
-                //             from_version: from,
-                //         }),
-                //     ) => todo!(),
-                //     (Some(_), NixReq::Git(nix_git)) => todo!(),
-                //     (Some(_), NixReq::Build(nix_src)) => todo!(),
-                //     _ => (),
-                // }
+                tracing::warn!(message = Self::RESOLUTION_ERR_MSG, direct.nix = %name);
             }
         }
-        //     for (k, v) in manifest.deps.iter() {
-        //         if !self.deps.as_ref().contains_key(k) {
-        //             match v {
-        //                 Dependency::Atom(atom_req) => {
-        //                     if let Ok(dep) = atom_req.resolve(k) {
-        //                         self.deps.as_mut().insert(k.to_owned(), Dep::Atom(dep));
-        //                     } else {
-        //                         tracing::warn!(message = Self::RESOLUTION_ERR_MSG, key = %k,
-        // r#type = "atom");                     };
-        //                 },
-        //                 Dependency::Pin(pin_req) => {
-        //                     if let Ok((_, dep)) = DirectPin::Straight(pin_req.to_owned())
-        //                         .resolve(Some(k))
-        //                         .await
-        //                     {
-        //                         self.deps.as_mut().insert(k.to_owned(), dep);
-        //                     } else {
-        //                         tracing::warn!(message = Self::RESOLUTION_ERR_MSG, key = %k,
-        // r#type = "pin");                     }
-        //                 },
-        //                 Dependency::TarPin(tar_req) => {
-        //                     if let Ok((_, dep)) = DirectPin::Tarball(tar_req.to_owned())
-        //                         .resolve(Some(k))
-        //                         .await
-        //                     {
-        //                         self.deps.as_mut().insert(k.to_owned(), dep);
-        //                     } else {
-        //                         tracing::warn!(message = Self::RESOLUTION_ERR_MSG, key = %k,
-        // r#type = "pin+tar");                     }
-        //                 },
-        //                 Dependency::GitPin(git_req) => {
-        //                     if let Ok(dep) = git_req.resolve(k).await {
-        //                         self.deps.as_mut().insert(k.to_owned(), Dep::NixGit(dep));
-        //                     } else {
-        //                         tracing::warn!(message = Self::RESOLUTION_ERR_MSG, key = %k,
-        // r#type = "pin+git");                     }
-        //                 },
-        //                 Dependency::Src(_) => todo!(),
-        //             }
-        //         } else {
-        //             match v {
-        //                 Dependency::Atom(atom_req) => {
-        //                     let req = atom_req.version();
-        //                     if let Some(Dep::Atom(dep)) = self.deps.as_ref().get(k) {
-        //                         if !req.matches(&dep.version) || &dep.set != atom_req.store() {
-        //                             tracing::warn!(message = "updating out of date dependency in
-        // accordance with spec", key = %k, r#type = "atom");                             if let
-        // Ok(dep) = atom_req.resolve(k) {
-        // self.deps.as_mut().insert(Dep::Atom(dep));                             } else {
-        //                                 tracing::warn!(message = Self::OUT_OF_SYNC, key = %k);
-        //                             };
-        //                         }
-        //                     }
-        //                 },
-        //                 Dependency::GitPin(git_req) => {
-        //                     if let Some(Dep::NixGit(dep)) = self.deps.as_ref().get(k) {
-        //                         let fetch = async |git_req: &GitPin, deps: &mut BTreeSet<Dep>| {
-        //                             if let Ok(dep) = git_req.resolve(k).await {
-        //                                 deps.insert(Dep::NixGit(dep));
-        //                             } else {
-        //                                 tracing::warn!(
-        //                                     message = Self::OUT_OF_SYNC,
-        //                                     key = %k
-        //                                 );
-        //                             }
-        //                         };
-        //                         if dep.url == git_req.repo {
-        //                             use crate::manifest::deps::GitStrat;
-        //                             match git_req.fetch.to_owned() {
-        //                                 GitStrat::Ref(_) => {
-        //                                     // do nothing, we don't want to update locked refs
-        // unless                                     // explicitly requested
-        //                                 },
-        //                                 GitStrat::Version(version_req) => {
-        //                                     if dep
-        //                                         .version
-        //                                         .to_owned()
-        //                                         .is_none_or(|v| !version_req.matches(&v))
-        //                                     {
-        //                                         fetch(&git_req, self.deps.as_mut()).await;
-        //                                     }
-        //                                 },
-        //                             }
-        //                         } else {
-        //                             fetch(&git_req, self.deps.as_mut()).await;
-        //                         }
-        //                     }
-        //                 },
-        //                 Dependency::Src(_) => todo!(),
-        //                 _ => (),
-        //             }
-        //         }
-        //     }
-        // }
-        todo!()
+        Ok(())
     }
 
     async fn resolve_nix(

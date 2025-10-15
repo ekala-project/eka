@@ -290,7 +290,7 @@ enum LockError {
 }
 
 /// An enum to handle different URL types for filename extraction.
-enum Urls<'a> {
+pub(crate) enum NixUrls<'a> {
     Url(&'a Url),
     Git(&'a gix::Url),
 }
@@ -552,18 +552,22 @@ impl NixFetch {
         clone
     }
 
+    pub(crate) fn get_url(&self) -> NixUrls {
+        match &self.kind {
+            NixReq::Tar(url) => NixUrls::Url(url),
+            NixReq::Url(url) => NixUrls::Url(url),
+            NixReq::Build(nix_src) => NixUrls::Url(&nix_src.build),
+            NixReq::Git(nix_git) => NixUrls::Git(&nix_git.git),
+        }
+    }
+
     pub(crate) async fn resolve(&self, key: Option<&Name>) -> Result<(Name, Dep), BoxError> {
         use snix_glue::fetchers::Fetch;
 
         let key = if let Some(key) = key {
             key
         } else {
-            let url = match &self.kind {
-                NixReq::Tar(url) => Urls::Url(url),
-                NixReq::Url(url) => Urls::Url(url),
-                NixReq::Build(nix_src) => Urls::Url(&nix_src.build),
-                NixReq::Git(nix_git) => Urls::Git(&nix_git.git),
-            };
+            let url = self.get_url();
             &Name::try_from(get_url_filename(&url))?
         };
 
@@ -730,6 +734,28 @@ impl NixDep {
     pub(crate) fn name(&self) -> &Name {
         &self.name
     }
+
+    pub(crate) fn url(&self) -> &Url {
+        &self.url
+    }
+}
+
+impl NixGitDep {
+    pub(crate) fn url(&self) -> &gix::Url {
+        &self.url
+    }
+}
+
+impl NixTarDep {
+    pub(crate) fn url(&self) -> &Url {
+        &self.url
+    }
+}
+
+impl BuildSrc {
+    pub(crate) fn url(&self) -> &Url {
+        &self.url
+    }
 }
 
 impl<'de> Deserialize<'de> for WrappedNixHash {
@@ -774,9 +800,9 @@ fn extract_and_parse_semver(input: &str) -> Option<Version> {
 }
 
 /// Extracts a filename from a URL, suitable for use as a dependency name.
-fn get_url_filename(url: &Urls) -> String {
+fn get_url_filename(url: &NixUrls) -> String {
     match url {
-        Urls::Url(url) => {
+        NixUrls::Url(url) => {
             if url.path() == "/" {
                 url.host_str().unwrap_or("source").to_string()
             } else {
@@ -796,7 +822,7 @@ fn get_url_filename(url: &Urls) -> String {
                 s.to_string()
             }
         },
-        Urls::Git(url) => {
+        NixUrls::Git(url) => {
             if url.path_is_root() {
                 url.host().unwrap_or("source").to_string()
             } else {
