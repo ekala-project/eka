@@ -171,7 +171,7 @@ impl Manifest {
     pub(crate) fn get_atom(content: &str) -> AtomResult<Atom> {
         let doc = content.parse::<DocumentMut>()?;
 
-        if let Some(v) = doc.get("atom").map(ToString::to_string) {
+        if let Some(v) = doc.get("package").map(ToString::to_string) {
             let atom = de::from_str::<Atom>(&v)?;
             Ok(atom)
         } else {
