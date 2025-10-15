@@ -178,12 +178,18 @@ pub struct ManifestWriter {
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
 #[serde(untagged)]
 pub enum NixReq {
-    /// A nix eval-time fetch
-    Fetch(NixFetch),
-    /// A nix eval-time git fetch
-    Git(NixGit),
-    /// A nix build-time fetch, e.g. for build sources
+    /// A tarball url which will be unpacked before being hashed
+    #[serde(rename = "tar")]
+    Tar(Url),
+    /// A straight url which will be fetched and hashed directly
+    #[serde(rename = "url")]
+    Url(Url),
+    /// A fetch which will be deferred to buildtime
+    #[serde(untagged)]
     Build(NixSrc),
+    /// A fetch which leverages git
+    #[serde(untagged)]
+    Git(NixGit),
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -192,14 +198,14 @@ pub enum NixReq {
 pub struct NixFetch {
     /// The URL of the resource.
     #[serde(flatten)]
-    pub url: NixUrl,
+    pub kind: NixReq,
     /// An optional path to a resolved atom, tied to its concrete resolved version.
     ///
     /// Only relevant if the Url contains a `"__VERSION__"` place-holder in its path component.
     ///
     /// This field is omitted from serialization if None.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub from: Option<String>,
+    pub from_version: Option<(Name, AtomTag)>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -208,12 +214,7 @@ pub struct NixFetch {
 pub struct NixGit {
     /// The URL of the git repository.
     pub git: gix::Url,
-    /// An optional version, tied to a concrete, resolved version of an atom.
-    ///
-    /// Only relevant if the Url contains a `"{version}"` place-holder in its string
-    /// representation.
-    ///
-    /// This field is omitted from serialization if None.
+    /// A git ref or version constraint
     #[serde(flatten, skip_serializing_if = "Option::is_none")]
     pub spec: Option<GitSpec>,
 }
@@ -228,23 +229,12 @@ pub struct NixSrc {
     pub(crate) unpack: bool,
 }
 
-/// Represents the field name in a Nix dependency, which determines how it will be fetched
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
-pub enum NixUrl {
-    /// A tarball url which will be unpacked before being hashed
-    #[serde(rename = "tar")]
-    Tar(Url),
-    /// A straight url which will be fetched and hashed directly
-    #[serde(rename = "url")]
-    Url(Url),
-}
-
 /// Represents different possible types of direct dependencies, i.e. those in the atom format
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Default)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct DirectDeps {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    nix: HashMap<Name, NixReq>,
+    nix: HashMap<Name, NixFetch>,
 }
 
 /// A newtype wrapper to tie a `DocumentMut` to a specific serializable type `T`.
@@ -350,22 +340,21 @@ impl DirectDeps {
         self.nix.is_empty()
     }
 
-    pub(crate) fn nix(&self) -> &HashMap<Name, NixReq> {
+    pub(crate) fn nix(&self) -> &HashMap<Name, NixFetch> {
         &self.nix
     }
 }
 
-impl NixReq {
+impl NixFetch {
     /// Determines the type of `DirectPin` from a given URL and other parameters.
     fn determine(
-        url: &AliasedUrl,
+        url: AliasedUrl,
         git: Option<GitSpec>,
         tar: Option<bool>,
         build: bool,
         unpack: Option<bool>,
     ) -> Result<Self, DocError> {
-        let from = url.from();
-        let url = url.url();
+        let AliasedUrl { from, url } = url;
         let path = url.path.to_path_lossy();
         let is_tar = || {
             tar.is_some_and(|b| b)
@@ -382,25 +371,31 @@ impl NixReq {
             || git.is_some()
             || path.extension() == Some(OsStr::new("git"))
         {
-            NixReq::Git(NixGit {
-                git: url.to_owned(),
-                spec: git,
-            })
+            NixFetch {
+                kind: NixReq::Git(NixGit {
+                    git: url,
+                    spec: git,
+                }),
+                from_version: from,
+            }
         } else if build {
-            NixReq::Build(NixSrc {
-                build: url.to_string().parse()?,
-                unpack: unpack != Some(false) && is_tar() || unpack.is_some_and(|b| b),
-            })
+            NixFetch {
+                kind: NixReq::Build(NixSrc {
+                    build: url.to_string().parse()?,
+                    unpack: unpack != Some(false) && is_tar() || unpack.is_some_and(|b| b),
+                }),
+                from_version: from,
+            }
         } else if tar != Some(false) && is_tar() {
-            NixReq::Fetch(NixFetch {
-                url: NixUrl::Tar(url.to_string().parse()?),
-                from: from.map(ToOwned::to_owned),
-            })
+            NixFetch {
+                kind: NixReq::Tar(url.to_string().parse()?),
+                from_version: from,
+            }
         } else {
-            NixReq::Fetch(NixFetch {
-                url: NixUrl::Url(url.to_string().parse()?),
-                from: from.map(ToOwned::to_owned),
-            })
+            NixFetch {
+                kind: NixReq::Url(url.to_string().parse()?),
+                from_version: from,
+            }
         };
         Ok(dep)
     }
@@ -558,7 +553,30 @@ impl ManifestWriter {
             }
         }
 
-        for (name, dep) in manifest.deps().direct().nix() {}
+        for (name, dep) in manifest.deps().direct().nix() {
+            let key = Either::Right(name.to_owned());
+            let locked = self.lock.deps.as_ref().get(&key);
+            if locked.is_none() {
+                if let Ok((_, dep)) = dep.resolve(Some(name)).await {
+                    self.lock.deps.as_mut().insert(key, dep);
+                } else {
+                    tracing::warn!(message = Self::RESOLUTION_ERR_MSG, direct.nix = %name);
+                }
+            } else {
+                // match (locked, dep) {
+                //     (
+                //         Some(Dep::Nix(lock)),
+                //         NixFetch {
+                //             kind: NixUrl::Url(url),
+                //             from_version: from,
+                //         }),
+                //     ) => todo!(),
+                //     (Some(_), NixReq::Git(nix_git)) => todo!(),
+                //     (Some(_), NixReq::Build(nix_src)) => todo!(),
+                //     _ => (),
+                // }
+            }
+        }
         //     for (k, v) in manifest.deps.iter() {
         //         if !self.deps.as_ref().contains_key(k) {
         //             match v {
@@ -681,7 +699,7 @@ impl ManifestWriter {
         build: bool,
         unpack: Option<bool>,
     ) -> Result<(), DocError> {
-        let dep = NixReq::determine(&url, git, tar, build, unpack)?;
+        let dep = NixFetch::determine(url, git, tar, build, unpack)?;
         let (key, lock_entry) = dep.resolve(key.as_ref()).await?;
 
         self.doc.write_dep(&key, todo!())?;

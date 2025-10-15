@@ -89,7 +89,7 @@ use semver::VersionReq;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use super::id::AtomTag;
+use super::id::{AtomTag, Name};
 use crate::id::Error;
 
 #[cfg(test)]
@@ -100,7 +100,8 @@ mod tests;
 //================================================================================================
 
 static ALIASES: LazyLock<Aliases> = LazyLock::new(|| Aliases(config::CONFIG.aliases()));
-static ATOM_VERSION_REGEX: Lazy<Regex> = lazy_regex::lazy_regex!(r#"\{(?P<atom>[^.}]+\.[^.}]+)\}"#);
+static ATOM_VERSION_REGEX: Lazy<Regex> =
+    lazy_regex::lazy_regex!(r#"\{(?P<set>[^.}]+)\.(?P<atom>[^.}]+)\}"#);
 
 //================================================================================================
 // Types
@@ -110,8 +111,8 @@ static ATOM_VERSION_REGEX: Lazy<Regex> = lazy_regex::lazy_regex!(r#"\{(?P<atom>[
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Default)]
 #[cfg_attr(test, derive(Serialize, Deserialize))]
 pub struct AliasedUrl {
-    url: Url,
-    from: Option<String>,
+    pub(crate) url: Url,
+    pub(crate) from: Option<(Name, AtomTag)>,
 }
 
 /// Represents the parsed components of an Atom URI.
@@ -197,8 +198,12 @@ impl AliasedUrl {
         &self.url
     }
 
-    pub(crate) fn from(&self) -> Option<&String> {
-        self.from.as_ref()
+    pub(crate) fn from(&self) -> Option<(&Name, &AtomTag)> {
+        if let Some((ref n, ref t)) = self.from {
+            Some((n, t))
+        } else {
+            None
+        }
     }
 }
 
@@ -216,7 +221,7 @@ impl FromStr for AliasedUrl {
         let re = ATOM_VERSION_REGEX.replace(s, "__VERSION__");
         let mut from = None;
         if let Some(cap) = ATOM_VERSION_REGEX.captures(s) {
-            from = Some(cap["atom"].to_owned());
+            from = Some((cap["set"].try_into()?, cap["atom"].try_into()?));
         }
         let url = UrlRef::from(re.as_ref()).to_url()?;
 

@@ -77,7 +77,7 @@ use url::Url;
 use crate::id::{AtomDigest, AtomTag, Name};
 use crate::manifest::AtomSet;
 use crate::manifest::deps::{
-    AtomReq, GitSpec, NixFetch, NixGit, NixReq, NixUrl, deserialize_url, serialize_url,
+    AtomReq, GitSpec, NixFetch, NixGit, NixReq, deserialize_url, serialize_url,
 };
 use crate::store::git::{AtomQuery, Root};
 use crate::store::{QueryStore, QueryVersion, UnpackedRef};
@@ -498,7 +498,7 @@ impl<R, T: Ord> DepMap<R, T> {
     }
 }
 
-impl NixReq {
+impl NixFetch {
     pub(crate) async fn get_fetcher() -> Result<PinFetcher, BoxError> {
         use snix_castore::{blobservice, directoryservice};
         use snix_glue::fetchers::Fetcher;
@@ -528,35 +528,25 @@ impl NixReq {
     pub(crate) async fn resolve(&self, key: Option<&Name>) -> Result<(Name, Dep), BoxError> {
         use snix_glue::fetchers::Fetch;
 
-        let url = match self {
-            NixReq::Fetch(NixFetch {
-                url: NixUrl::Tar(url),
-                ..
-            }) => Urls::Url(url),
-            NixReq::Fetch(NixFetch {
-                url: NixUrl::Url(url),
-                ..
-            }) => Urls::Url(url),
-            NixReq::Git(nix_git) => Urls::Git(&nix_git.git),
-            NixReq::Build(nix_src) => Urls::Url(&nix_src.build),
-        };
-
         let key = if let Some(key) = key {
             key
         } else {
+            let url = match &self.kind {
+                NixReq::Tar(url) => Urls::Url(url),
+                NixReq::Url(url) => Urls::Url(url),
+                NixReq::Build(nix_src) => Urls::Url(&nix_src.build),
+                NixReq::Git(nix_git) => Urls::Git(&nix_git.git),
+            };
             &Name::try_from(get_url_filename(&url))?
         };
 
-        match self {
-            NixReq::Fetch(NixFetch {
-                url: NixUrl::Url(url),
-                ..
-            }) => {
+        match &self.kind {
+            NixReq::Url(url) => {
                 let args = Fetch::URL {
                     url: url.to_owned(),
                     exp_hash: None,
                 };
-                let fetcher = NixReq::get_fetcher();
+                let fetcher = Self::get_fetcher();
 
                 let (_, _, hash, _) = fetcher.await?.ingest_and_persist(key, args).await?;
 
@@ -569,15 +559,12 @@ impl NixReq {
                     }),
                 ))
             },
-            NixReq::Fetch(NixFetch {
-                url: NixUrl::Tar(url),
-                ..
-            }) => {
+            NixReq::Tar(url) => {
                 let args = Fetch::Tarball {
                     url: url.to_owned(),
                     exp_nar_sha256: None,
                 };
-                let fetcher = NixReq::get_fetcher();
+                let fetcher = Self::get_fetcher();
 
                 let (_, _, hash, _) = fetcher.await?.ingest_and_persist(key, args).await?;
                 Ok((
@@ -604,7 +591,7 @@ impl NixReq {
                         exp_hash: None,
                     }
                 };
-                let fetcher = NixReq::get_fetcher();
+                let fetcher = Self::get_fetcher();
 
                 let (_, _, hash, _) = fetcher.await?.ingest_and_persist(key, args).await?;
                 Ok((
