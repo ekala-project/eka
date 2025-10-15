@@ -81,7 +81,7 @@ use crate::manifest::deps::{
 };
 use crate::store::git::{AtomQuery, Root};
 use crate::store::{QueryStore, QueryVersion, UnpackedRef};
-use crate::uri::Uri;
+use crate::uri::{Uri, VERSION_PLACEHOLDER};
 use crate::{AtomId, Compute, Origin};
 
 //================================================================================================
@@ -523,6 +523,33 @@ impl NixFetch {
             Vec::new(),
             Some(cache_root.join("fetcher.redb")),
         ))
+    }
+
+    pub(crate) fn new_from_version(&self, version: &Version) -> Self {
+        let replace = |s: &str| s.replace(VERSION_PLACEHOLDER, version.to_string().as_ref());
+
+        let mut clone = self.to_owned();
+
+        match &mut clone.kind {
+            NixReq::Tar(url) => {
+                let new = replace(url.path());
+                url.set_path(new.as_ref());
+            },
+            NixReq::Url(url) => {
+                let new = replace(url.path());
+                url.set_path(new.as_ref());
+            },
+            NixReq::Build(dep) => {
+                let new = replace(dep.build.path());
+                dep.build.set_path(new.as_ref());
+            },
+            NixReq::Git(dep) => {
+                let new = replace(dep.git.path.to_string().as_ref());
+                dep.git.path = new.into();
+            },
+        };
+
+        clone
     }
 
     pub(crate) async fn resolve(&self, key: Option<&Name>) -> Result<(Name, Dep), BoxError> {

@@ -95,9 +95,7 @@ use crate::id::Error;
 #[cfg(test)]
 mod tests;
 
-//================================================================================================
-// Statics
-//================================================================================================
+pub(crate) const VERSION_PLACEHOLDER: &str = "__VERSION__";
 
 static ALIASES: LazyLock<Aliases> = LazyLock::new(|| Aliases(config::CONFIG.aliases()));
 static ATOM_VERSION_REGEX: Lazy<Regex> =
@@ -218,7 +216,7 @@ impl FromStr for AliasedUrl {
     type Err = UriError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let re = ATOM_VERSION_REGEX.replace(s, "__VERSION__");
+        let re = ATOM_VERSION_REGEX.replace(s, VERSION_PLACEHOLDER);
         let mut from = None;
         if let Some(cap) = ATOM_VERSION_REGEX.captures(s) {
             from = Some((cap["set"].try_into()?, cap["atom"].try_into()?));

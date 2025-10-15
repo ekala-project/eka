@@ -436,16 +436,16 @@ impl ManifestWriter {
             path,
             resolved: resolved_sets,
         };
-        writer.reconcile(&manifest).await?;
+        writer.reconcile(manifest).await?;
         Ok(writer)
     }
 
     /// Runs the sanitization process, and then the synchronization process to ensure a fully
     /// consistent manifest and lock. This function is called in the `ManifestWriter` constructor
     /// to ensure that we are never operating on a stale manifest.
-    async fn reconcile(&mut self, manifest: &Manifest) -> Result<(), DocError> {
+    async fn reconcile(&mut self, manifest: Manifest) -> Result<(), DocError> {
         self.set_sets();
-        self.sanitize(manifest);
+        self.sanitize(&manifest);
         self.synchronize(manifest).await?;
         Ok(())
     }
@@ -476,8 +476,8 @@ impl ManifestWriter {
         });
     }
 
-    fn lock_atom(&mut self, req: &VersionReq, id: AtomId<Root>, name: &Name) {
-        if let Some(dep) = self.resolved.resolve_atom(&id, req) {
+    fn lock_atom(&mut self, req: VersionReq, id: AtomId<Root>, name: Name) {
+        if let Some(dep) = self.resolved.resolve_atom(&id, &req) {
             if self
                 .lock
                 .deps
@@ -509,7 +509,7 @@ impl ManifestWriter {
         }
     }
 
-    fn synchronize_atom(&mut self, req: &VersionReq, id: AtomId<Root>, name: &Name) {
+    fn synchronize_atom(&mut self, req: VersionReq, id: AtomId<Root>, name: Name) {
         if !self
             .lock
             .deps
@@ -532,18 +532,18 @@ impl ManifestWriter {
     /// Updates the lockfile to match the dependencies specified in the manifest.
     /// It resolves any new dependencies, updates existing ones if their version
     /// requirements have changed, and ensures the lockfile is fully consistent.
-    pub(crate) async fn synchronize(&mut self, manifest: &Manifest) -> Result<(), DocError> {
-        for (name, set) in manifest.deps().from() {
-            let maybe_root = self.resolved.roots().get(name).map(ToOwned::to_owned);
+    pub(crate) async fn synchronize(&mut self, manifest: Manifest) -> Result<(), DocError> {
+        for (name, set) in manifest.deps.from {
+            let maybe_root = self.resolved.roots().get(&name).map(ToOwned::to_owned);
             if let Some(root) = maybe_root {
                 for (tag, req) in set {
                     let id = AtomId::construct(&root, tag.to_owned()).map_err(|e| {
                         DocError::AtomIdConstruct(format!(
                             "set: {}, atom: {}, err: {}",
-                            name, tag, e
+                            &name, &tag, e
                         ))
                     })?;
-                    self.synchronize_atom(req, id, name);
+                    self.synchronize_atom(req, id, name.to_owned());
                 }
             } else {
                 tracing::warn!(
@@ -553,11 +553,11 @@ impl ManifestWriter {
             }
         }
 
-        for (name, dep) in manifest.deps().direct().nix() {
+        for (name, dep) in manifest.deps.direct.nix {
             let key = Either::Right(name.to_owned());
             let locked = self.lock.deps.as_ref().get(&key);
             if locked.is_none() {
-                if let Ok((_, dep)) = dep.resolve(Some(name)).await {
+                if let Ok((_, dep)) = self.resolve_nix(dep, Some(&name)).await {
                     self.lock.deps.as_mut().insert(key, dep);
                 } else {
                     tracing::warn!(message = Self::RESOLUTION_ERR_MSG, direct.nix = %name);
@@ -674,6 +674,29 @@ impl ManifestWriter {
         todo!()
     }
 
+    async fn resolve_nix(
+        &self,
+        dep: NixFetch,
+        key: Option<&Name>,
+    ) -> Result<(Name, Dep), DocError> {
+        let get_dep = || {
+            if let Some((set, atom)) = &dep.from_version {
+                if let Some(root) = self.resolved.roots.get(set) {
+                    if let Ok(id) = AtomId::construct(root, atom.to_owned()) {
+                        if let Some(Dep::Atom(atom)) =
+                            self.lock.deps.as_ref().get(&Either::Left(id))
+                        {
+                            return dep.new_from_version(atom.version());
+                        }
+                    }
+                }
+            }
+            dep
+        };
+        let dep = get_dep();
+        dep.resolve(key).await.map_err(Into::into)
+    }
+
     /// Adds a user-requested atom URI to the manifest and lock files, ensuring they remain in sync.
     pub fn add_uri(&mut self, uri: Uri, set: Option<Name>) -> Result<(), DocError> {
         let (atom_req, lock_entry) = uri.resolve(None).map_err(Box::new)?;
@@ -700,7 +723,7 @@ impl ManifestWriter {
         unpack: Option<bool>,
     ) -> Result<(), DocError> {
         let dep = NixFetch::determine(url, git, tar, build, unpack)?;
-        let (key, lock_entry) = dep.resolve(key.as_ref()).await?;
+        let (key, lock_entry) = self.resolve_nix(dep, key.as_ref()).await?;
 
         self.doc.write_dep(&key, todo!())?;
         // if self.lock.deps.as_mut().insert(lock_entry) {
