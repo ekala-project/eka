@@ -5,11 +5,11 @@ use super::*;
 //================================================================================================
 
 const ALIASED_URLS: &[&str] = &[
-    "gh:foo/bar^master",
-    "bb^refs/heads/my-work",
+    "gh:foo/bar",
+    "bb",
     "https://gl:bar/baz",
-    "pkgs^main",
-    "git@gh:owner/repo^master",
+    "pkgs",
+    "git@gh:owner/repo",
 ];
 
 const ALIASES: &[&str] = &[

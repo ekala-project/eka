@@ -1,10 +1,10 @@
 ---
 source: crates/atom/src/uri/tests/mod.rs
-assertion_line: 57
+assertion_line: 66
 expression: results
 ---
-- "https://github.com/foo/bar^master"
-- "https://bitbucket.org/^refs/heads/my-work"
+- "https://github.com/foo/bar"
+- "https://bitbucket.org/"
 - "https://gitlab.com/bar/baz"
-- "https://github.com/nixos/nixpkgs^main"
-- "ssh://git@github.com/owner/repo^master"
+- "https://github.com/nixos/nixpkgs"
+- "ssh://git@github.com/owner/repo"
