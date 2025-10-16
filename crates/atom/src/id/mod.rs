@@ -71,7 +71,6 @@ use thiserror::Error;
 use unic_ucd_category::GeneralCategory;
 
 const ID_MAX: usize = 128;
-pub(crate) const ROOT_TAG: &str = "__ROOT";
 
 //================================================================================================
 // Types
@@ -208,16 +207,6 @@ where
 }
 
 impl AtomTag {
-    /// Returns a special-purpose `AtomTag` for the repository root commit.
-    pub(crate) fn root_tag() -> AtomTag {
-        AtomTag(ROOT_TAG.into())
-    }
-
-    /// Checks if the tag is the root tag.
-    pub(crate) fn is_root(&self) -> bool {
-        self == &AtomTag::root_tag()
-    }
-
     /// Validates that a character is a valid starting character.
     fn validate_start(c: char) -> Result<(), Error> {
         if AtomTag::is_invalid_start(c) {

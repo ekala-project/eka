@@ -296,10 +296,6 @@ impl ResolvedSets {
         &self.roots
     }
 
-    pub(crate) fn atoms_mut(&mut self) -> &mut ResolvedAtoms<ObjectId, Root> {
-        &mut self.atoms
-    }
-
     pub(crate) fn atoms(&self) -> &ResolvedAtoms<ObjectId, Root> {
         &self.atoms
     }

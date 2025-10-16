@@ -79,7 +79,7 @@ use crate::manifest::AtomSet;
 use crate::manifest::deps::{
     AtomReq, GitSpec, NixFetch, NixGit, NixReq, deserialize_url, serialize_url,
 };
-use crate::store::git::{AtomQuery, Root};
+use crate::store::git::Root;
 use crate::store::{QueryStore, QueryVersion, UnpackedRef};
 use crate::uri::{Uri, VERSION_PLACEHOLDER};
 use crate::{AtomId, Compute, Origin};
@@ -718,17 +718,6 @@ impl Default for Lockfile {
         }
     }
 }
-
-type MirrorResult = Result<
-    (
-        Option<Box<dyn Transport + Send>>,
-        <Vec<AtomQuery> as IntoIterator>::IntoIter,
-        Root,
-        Name,
-        gix::Url,
-    ),
-    BoxError,
->;
 
 impl NixDep {
     pub(crate) fn name(&self) -> &Name {

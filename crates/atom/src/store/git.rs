@@ -24,7 +24,7 @@ use thiserror::Error as ThisError;
 
 use crate::id::Origin;
 use crate::lock::GitDigest;
-use crate::store::{Init, NormalizeStorePath, QueryStore, QueryVersion, UnpackRef, UnpackedRef};
+use crate::store::{Init, NormalizeStorePath, QueryStore, QueryVersion, UnpackedRef};
 use crate::{AtomId, AtomTag};
 
 #[cfg(test)]
@@ -35,7 +35,6 @@ pub(crate) mod test;
 //================================================================================================
 
 pub(super) const V1_ROOT: &str = "refs/tags/ekala/root/v1";
-const V1_ROOT_SEMVER: &str = "1.0.0";
 
 //================================================================================================
 // Statics

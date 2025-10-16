@@ -402,8 +402,6 @@ impl NixFetch {
 }
 
 impl ManifestWriter {
-    const OUT_OF_SYNC: &str =
-        "out of sync dependency could not be resolved, check the version spec";
     const RESOLUTION_ERR_MSG: &str = "unlocked dependency could not be resolved";
     const UPDATE_DEPENDENCY: &str = "updating out of date dependency in accordance with spec";
 
