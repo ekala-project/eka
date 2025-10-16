@@ -15,6 +15,17 @@ use tracing_subscriber::{Layer, fmt};
 
 use super::{Args, LogArgs};
 
+//================================================================================================
+// Statics
+//================================================================================================
+
+/// A flag to indicate whether ANSI escape codes should be used.
+pub static ANSI: AtomicBool = AtomicBool::new(true);
+
+//================================================================================================
+// Modules
+//================================================================================================
+
 /// Contains ANSI escape codes for styling terminal output.
 pub mod ansi {
     /// ANSI escape code for magenta text.
@@ -23,8 +34,9 @@ pub mod ansi {
     pub const RESET: &str = "\x1b[0m";
 }
 
-/// A flag to indicate whether ANSI escape codes should be used.
-pub static ANSI: AtomicBool = AtomicBool::new(true);
+//================================================================================================
+// Macros
+//================================================================================================
 
 /// A macro to log a fatal error and exit.
 #[macro_export]
@@ -41,6 +53,10 @@ macro_rules! fatal {
         );
     }};
 }
+
+//================================================================================================
+// Functions
+//================================================================================================
 
 /// Initializes the global tracing subscriber.
 pub fn init_global_subscriber(args: LogArgs) -> WorkerGuard {

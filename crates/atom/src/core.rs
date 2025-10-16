@@ -4,18 +4,24 @@
 //! file system structure. These types form the foundation of the atom format
 //! and are used throughout the crate.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use semver::Version;
 use serde::{Deserialize, Serialize};
 
-use super::id::AtomTag;
+use super::id::{AtomTag, Name};
+use crate::manifest::AtomSets;
+
+//================================================================================================
+// Types
+//================================================================================================
 
 /// Represents the deserialized form of an Atom, directly constructed from the TOML manifest.
 ///
 /// This struct contains the basic metadata of an Atom but lacks the context-specific
 /// [`crate::AtomId`], which must be constructed separately.
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Atom {
     /// The verified, human-readable Unicode identifier for the Atom.
@@ -27,6 +33,10 @@ pub struct Atom {
     /// An optional description of the Atom.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+
+    /// A table of named atom sets, defining the sources for resolving atom dependencies.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub sets: HashMap<Name, AtomSets>,
 }
 
 /// Represents the file system paths associated with an atom.
@@ -44,6 +54,10 @@ where
     /// Path to the atom's content directory
     content: P,
 }
+
+//================================================================================================
+// Impls
+//================================================================================================
 
 impl AtomPaths<PathBuf> {
     /// Creates a new `AtomPaths` instance from a given path.

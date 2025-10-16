@@ -63,8 +63,8 @@
 //!
 //! // Query atom versions from a remote store
 //! let atoms = url.get_atoms(None)?;
-//! for (tag, version, id) in atoms {
-//!     println!("Atom: {} v{} -> {}", tag, version, id);
+//! for atom in atoms {
+//!     println!("Atom: {} v{} -> {}", atom.id.tag(), atom.version, atom.rev);
 //! }
 //!
 //! // Find highest version matching requirements
@@ -84,12 +84,28 @@ use std::path::{Path, PathBuf};
 use bstr::BStr;
 use semver::{Version, VersionReq};
 
-use crate::AtomTag;
+use crate::{AtomId, AtomTag};
 
 pub mod git;
 
+//================================================================================================
+// Types
+//================================================================================================
+
 /// Type alias for unpacked atom reference information.
-type UnpackedRef<Id> = (AtomTag, Version, Id);
+#[derive(Clone, Debug, Eq)]
+pub struct UnpackedRef<Id, R> {
+    /// The proper AtomId of the reference
+    pub id: AtomId<R>,
+    /// The version of this particular reference
+    pub version: Version,
+    /// The cryptographic identity of the version
+    pub rev: Id,
+}
+
+//================================================================================================
+// Traits
+//================================================================================================
 
 /// A trait representing the methods required to initialize an Ekala store.
 pub trait Init<R, O, T: Send> {
@@ -165,7 +181,7 @@ pub trait QueryStore<Ref, T: Send> {
         &self,
         targets: impl IntoIterator<Item = Spec>,
         transport: Option<&mut T>,
-    ) -> Result<impl IntoIterator<Item = Ref>, Self::Error>
+    ) -> Result<Vec<Ref>, Self::Error>
     where
         Spec: AsRef<BStr>;
 
@@ -231,8 +247,8 @@ pub trait QueryStore<Ref, T: Send> {
 ///
 /// // Get all available atoms
 /// let atoms = url.get_atoms(None)?;
-/// for (tag, version, id) in atoms {
-///     println!("Atom: {} v{} -> {}", tag, version, id);
+/// for atom in atoms {
+///     println!("Atom: {} v{} -> {}", atom.id.tag(), atom.version, atom.rev);
 /// }
 ///
 /// // Find the highest version matching a requirement
@@ -243,18 +259,19 @@ pub trait QueryStore<Ref, T: Send> {
 /// }
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
-pub trait QueryVersion<Ref, Id, C, T>: QueryStore<Ref, T>
+pub trait QueryVersion<Ref, Id, C, T, R>: QueryStore<Ref, T>
 where
-    C: FromIterator<UnpackedRef<Id>> + IntoIterator<Item = UnpackedRef<Id>>,
-    Ref: UnpackRef<Id> + std::fmt::Debug,
+    C: FromIterator<UnpackedRef<Id, R>> + IntoIterator<Item = UnpackedRef<Id, R>>,
+    Ref: UnpackRef<Id, R> + std::fmt::Debug,
     Self: std::fmt::Debug,
     T: Send,
 {
     /// Processes an iterator of references, unpacking and collecting them into an
     /// iterator of atom information.
-    fn process_atoms(refs: impl IntoIterator<Item = Ref>) -> <C as IntoIterator>::IntoIter {
+    fn process_atoms(refs: Vec<Ref>) -> <C as IntoIterator>::IntoIter {
+        let root = refs.iter().find_map(|r| r.find_root_ref());
         refs.into_iter()
-            .filter_map(|x| x.unpack_atom_ref())
+            .filter_map(|x| x.unpack_atom_ref(root.as_ref()))
             .collect::<C>()
             .into_iter()
     }
@@ -281,7 +298,7 @@ where
         let ro = format!("{}:{}", git::V1_ROOT, git::V1_ROOT);
 
         let query = [a.as_str(), ro.as_str()];
-        let refs = self.get_refs(&query, transport)?;
+        let refs = self.get_refs(query, transport)?;
         let atoms = Self::process_atoms(refs);
         Ok(atoms)
     }
@@ -294,13 +311,14 @@ where
         req: &VersionReq,
     ) -> Option<(Version, Id)> {
         atoms
-            .filter_map(|(t, v, id)| (&t == tag && req.matches(&v)).then_some((v, id)))
+            .filter_map(
+                |UnpackedRef {
+                     id: t,
+                     version: v,
+                     rev: id,
+                 }| (t.tag() == tag && req.matches(&v)).then_some((v, id)),
+            )
             .max_by_key(|(ref version, _)| version.to_owned())
-    }
-
-    /// Processes an iterator of atoms to find the root commit of the remote repository.
-    fn process_root(mut atoms: <C as IntoIterator>::IntoIter) -> Option<Id> {
-        atoms.find_map(|(n, _, id)| (n.is_root()).then_some(id))
     }
 
     /// Finds the highest version of an atom matching the given version requirement.
@@ -358,10 +376,18 @@ where
                 (l, None) => l,
                 (_, Some(u)) => u,
             };
-            iter.fold(HashMap::with_capacity(s), |mut acc, (t, v, id)| {
-                acc.insert(t, (v, id));
-                acc
-            })
+            iter.fold(
+                HashMap::with_capacity(s),
+                |mut acc,
+                 UnpackedRef {
+                     id: t,
+                     version: v,
+                     rev: id,
+                 }| {
+                    acc.insert(t.tag().to_owned(), (v, id));
+                    acc
+                },
+            )
         } else {
             HashMap::new()
         }
@@ -380,13 +406,44 @@ where
 /// - `tag` is the atom identifier (e.g., "mylib", "database")
 /// - `version` is a semantic version (e.g., "1.2.3")
 /// - `id` is a unique identifier for this atom version
-pub trait UnpackRef<Id> {
+pub trait UnpackRef<Id, R> {
     /// Attempts to unpack this reference as an atom reference.
     ///
     /// # Returns
     /// - `Some((tag, version, id))` if the reference follows atom reference format
     /// - `None` if the reference is not an atom reference or is malformed
-    fn unpack_atom_ref(&self) -> Option<UnpackedRef<Id>>;
+    fn unpack_atom_ref(&self, root: Option<&R>) -> Option<UnpackedRef<Id, R>>;
     /// Attempts to find the root reference in the store.
-    fn find_root_ref(&self) -> Option<Id>;
+    fn find_root_ref(&self) -> Option<R>;
+}
+
+//================================================================================================
+// Impls
+//================================================================================================
+
+/// We purposefully avoid comparing version so we can update sets with new versions easily.
+impl<Id: PartialEq, R: PartialEq> PartialEq for UnpackedRef<Id, R> {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id && self.version == other.version
+    }
+}
+
+impl<Id: Ord, R: Ord> Ord for UnpackedRef<Id, R> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        match self.id.cmp(&other.id) {
+            std::cmp::Ordering::Equal => {},
+            ord => return ord,
+        }
+        self.version.cmp(&other.version)
+    }
+}
+
+impl<Id: PartialOrd, R: PartialOrd> PartialOrd for UnpackedRef<Id, R> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        match self.id.partial_cmp(&other.id) {
+            Some(core::cmp::Ordering::Equal) => {},
+            ord => return ord,
+        }
+        self.version.partial_cmp(&other.version)
+    }
 }

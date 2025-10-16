@@ -6,6 +6,7 @@
 
 use std::path::PathBuf;
 
+use anyhow::Result;
 use atom::publish::Stats;
 use atom::publish::error::PublishError;
 use clap::Parser;
@@ -14,6 +15,10 @@ use crate::cli::store::Detected;
 
 mod git;
 pub(super) mod init;
+
+//================================================================================================
+// Types
+//================================================================================================
 
 /// The `publish` subcommand.
 #[derive(Parser, Debug)]
@@ -43,6 +48,10 @@ pub(super) struct StoreArgs {
     #[command(flatten)]
     pub(super) git: git::GitArgs,
 }
+
+//================================================================================================
+// Functions
+//================================================================================================
 
 /// The main entry point for the `publish` subcommand.
 pub(super) async fn run(store: Detected, args: PublishArgs) -> Result<Stats, PublishError> {

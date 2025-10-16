@@ -1,21 +1,26 @@
 version = 1
 
+[sets]
+b7d610651b8dd7975eb0265fbf93ee70bc39c291 = {name = "foo", mirrors = ["ssh://git@github.com/nrdxp/home.git"]}
+f36300e6cd435c5b56751f2792e67f32cf1b666e = {name = "bar", mirrors = ["https://git.example.com/my-repo.git"]}
+47478f45ed0de99d42495a0842b1fa41eac1ce14 = {name = "baz", mirrors = ["::"]}
+
 [[deps]]
 type = "atom"
 tag = "hosts"
 version = "0.1.1"
-source = "ssh://git@github.com/nrdxp/home.git"
+set = "b7d610651b8dd7975eb0265fbf93ee70bc39c291"
 rev = "e38c54245b638eae16bdca1a65dcdc453fe33624"
 id = "nei65m8kevs1l37b2eefu440k725fsj6pqj3mq3ob20sfhb64ud0"
 
 [[deps]]
-type = "pin+tar"
+type = "nix+tar"
 name = "nixos-unstable"
 url = "https://github.com/nixos/nixpkgs/archive/nixos-unstable.tar.gz"
 hash = "sha256-gTrEEp5gEspIcCOx9PD8kMaF1iEmfBcTbO0Jag2QhQs="
 
 [[deps]]
-type = "pin+git"
+type = "nix+git"
 name = "nixpkgs"
 url = "ssh://git@github.com/nixos/nixpkgs"
 rev = "aa0ebc256a5b0540e9df53c64ef6930471c98407"
@@ -26,7 +31,7 @@ tag = "home"
 id = "nei65m8kevs1l37b2eefu440k725fsj6pqj3mq3ob20sfhb64ud0"
 version = "0.1.8"
 rev = "795ae541b7fd67dd3c6e1a9dddf903312696aa17"
-source = "https://git.example.com/my-repo.git"
+set = "f36300e6cd435c5b56751f2792e67f32cf1b666e"
 
 [[deps]]
 type = "atom"
@@ -34,37 +39,28 @@ id = "nei65m8kevs1l37b2eefu440k725fsj6pqj3mq3ob20sfhb64ud0"
 tag = "users"
 version = "0.1.4"
 rev = "a460f02d145b870bb4f8762fd7a163afee68512e"
-source = "hm/usr"
-
-[[deps]]
-type = "pin+from"
-name = "eval-config"
-import = "nixos/lib/eval-config.nix"
-from = "nei65m8kevs1l37b2eefu440k725fsj6pqj3mq3ob20sfhb64ud0"
-set = "nixpkgs"
+set = "47478f45ed0de99d42495a0842b1fa41eac1ce14"
 
 [[deps]]
 name = "hm-module"
 url = "https://github.com/nix-community/home-manager.git"
 rev = "d0300c8808e41da81d6edfc202f3d3833c157daf"
-import = "nixos"
-type = "pin+git"
+type = "nix+git"
 
 [[deps]]
+type = "nix"
 name = "foks"
 url = "https://raw.githubusercontent.com/NixOS/nixpkgs/393d5e815a19acad8a28fc4b27085e42c483b4f6/pkgs/by-name/fo/foks/package.nix"
-type = "pin"
 hash = "sha256:1spc2lsx16xy612lg8rsyd34j9fy6kmspxcvcfmawkxmyvi32g9v"
 
 [[deps]]
-type = "pin+tar"
+type = "nix+tar"
 name = "microvm-module"
 url = "https://github.com/microvm-nix/microvm.nix/archive/80bddbd51fda2c71d83449f5927e4d72a2eb0d89.tar.gz"
 hash = "sha256:0lkjn8q6p0c18acj43pj1cbiyixnf98wvkbgppr5vz73qkypii2g"
-import = "nixos-modules/host"
 
 [[deps]]
 name = "registry"
 url = "https://raw.githubusercontent.com/NixOS/flake-registry/refs/heads/master/flake-registry.json"
-type = "build"
+type = "nix+build"
 hash = "sha256-hClMprWwiEQe7mUUToXZAR5wbhoVFi+UuqLL2K/eIPw="

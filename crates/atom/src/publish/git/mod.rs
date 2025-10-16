@@ -11,11 +11,6 @@
 //! A hexadecimal representation of the source commit is also stored in the reproducible
 //! Atom commit header, ensuring it is tied to its source in an unforgable manner.
 
-mod inner;
-
-#[cfg(test)]
-mod test;
-
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -35,13 +30,14 @@ use crate::store::git::Root;
 use crate::store::{NormalizeStorePath, QueryStore};
 use crate::{Atom, AtomId};
 
-/// The Outcome of an Atom publish attempt to a Git store.
-pub type GitOutcome = PublishOutcome<Root>;
-/// The Result type used for various methods during publishing to a Git store.
-pub type GitResult<T> = Result<T, Error>;
+mod inner;
 
-type GitAtomId = AtomId<Root>;
-type GitRecord = Record<Root>;
+#[cfg(test)]
+mod test;
+
+//================================================================================================
+// Types
+//================================================================================================
 
 /// The Git-specific content returned after an Atom is successfully published.
 #[derive(Debug)]
@@ -84,6 +80,12 @@ pub struct GitPublisher<'a> {
     transport: Box<dyn Transport + Send>,
     progress: &'a tracing::Span,
 }
+
+/// The Outcome of an Atom publish attempt to a Git store.
+pub type GitOutcome = PublishOutcome<Root>;
+
+/// The Result type used for various methods during publishing to a Git store.
+pub type GitResult<T> = Result<T, Error>;
 
 /// Represents a Git reference to a component of a published Atom.
 struct AtomRef<'a> {
@@ -134,6 +136,13 @@ enum RefKind {
     Content,
     Origin,
 }
+
+type GitAtomId = AtomId<Root>;
+type GitRecord = Record<Root>;
+
+//================================================================================================
+// Impls
+//================================================================================================
 
 impl<'a> Builder<'a, Root> for GitPublisher<'a> {
     type Error = Error;
@@ -421,6 +430,10 @@ impl<'a> AtomContext<'a> {
         Ok(Self { paths, atom, git })
     }
 }
+
+//================================================================================================
+// Functions
+//================================================================================================
 
 /// Calculates a reasonable capacity for a HashMap based on the number of records.
 fn calculate_capacity(record_count: usize) -> usize {

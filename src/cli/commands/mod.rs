@@ -14,6 +14,10 @@ mod new;
 mod publish;
 mod resolve;
 
+//================================================================================================
+// Types
+//================================================================================================
+
 /// The subcommands for the Eka CLI.
 #[derive(Subcommand)]
 #[allow(clippy::large_enum_variant)]
@@ -45,11 +49,15 @@ pub(super) enum Commands {
     Resolve(resolve::Args),
 }
 
+//================================================================================================
+// Functions
+//================================================================================================
+
 /// The main entry point for the Eka CLI.
 pub async fn run(args: Args) -> anyhow::Result<()> {
     let store = store::detect();
     match args.command {
-        Commands::Add(args) => add::run(args).await?,
+        Commands::Add(args) => add::run(store.await?, args).await?,
         Commands::New(args) => new::run(args)?,
         Commands::Publish(args) => {
             if args.init {

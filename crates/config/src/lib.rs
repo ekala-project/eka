@@ -14,6 +14,10 @@ use figment::{Figment, Metadata, Provider};
 use gix::ThreadSafeRepository;
 use serde::{Deserialize, Serialize};
 
+//================================================================================================
+// Statics
+//================================================================================================
+
 /// Provides a lazily instantiated static reference to the application `Config`.
 ///
 /// This static variable ensures that configuration is parsed only once from
@@ -21,8 +25,9 @@ use serde::{Deserialize, Serialize};
 /// application's lifecycle.
 pub static CONFIG: LazyLock<Config> = LazyLock::new(load_config);
 
-/// A type alias for a hash map of borrowed string slices, used for command aliases.
-type Aliases<'a> = HashMap<&'a str, &'a str>;
+//================================================================================================
+// Types
+//================================================================================================
 
 /// Defines cache-related configuration settings.
 #[derive(Deserialize, Serialize)]
@@ -40,6 +45,13 @@ pub struct Config {
     /// Cache-related settings.
     pub cache: CacheConfig,
 }
+
+/// A type alias for a hash map of borrowed string slices, used for command aliases.
+type Aliases<'a> = HashMap<&'a str, &'a str>;
+
+//================================================================================================
+// Impls
+//================================================================================================
 
 impl Default for CacheConfig {
     fn default() -> Self {
@@ -108,6 +120,10 @@ impl Provider for Config {
         figment::providers::Serialized::defaults(Config::default()).data()
     }
 }
+
+//================================================================================================
+// Functions
+//================================================================================================
 
 /// Determines the appropriate cache directory based on the operating system.
 fn get_cache_dir() -> PathBuf {

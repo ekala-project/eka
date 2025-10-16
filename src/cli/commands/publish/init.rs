@@ -7,6 +7,10 @@ use atom::store::Init;
 
 use crate::cli::store::Detected;
 
+//================================================================================================
+// Functions
+//================================================================================================
+
 /// The main entry point for the `publish --init` subcommand.
 pub(in super::super) fn run(store: Detected, args: super::StoreArgs) -> anyhow::Result<()> {
     #[allow(clippy::single_match)]

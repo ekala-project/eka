@@ -15,6 +15,10 @@ pub mod git {
 
     use crate::store::git::Root;
 
+    //================================================================================================
+    // Types
+    //================================================================================================
+
     /// An error representing a failure during publishing to a Git Ekala store.
     #[derive(thiserror::Error, Debug)]
     pub enum Error {
@@ -90,6 +94,10 @@ pub mod git {
         #[error(transparent)]
         WriteFailed(#[from] object::write::Error),
     }
+
+    //================================================================================================
+    // Impls
+    //================================================================================================
 
     impl Error {
         const INCONSISTENT_ROOT_SUGGESTION: &str =

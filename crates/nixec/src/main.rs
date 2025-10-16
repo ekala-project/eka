@@ -12,6 +12,10 @@ use birdcage::process::Command;
 use birdcage::{Birdcage, Exception, Sandbox};
 use thiserror::Error;
 
+//================================================================================================
+// Types
+//================================================================================================
+
 /// Represents the possible errors that can occur during `nixec` execution.
 #[derive(Error, Debug)]
 enum NixecError {
@@ -31,6 +35,10 @@ enum NixecError {
 
 /// A specialized `Result` type for `nixec` operations.
 type Result<T> = std::result::Result<T, NixecError>;
+
+//================================================================================================
+// Functions
+//================================================================================================
 
 /// Locates the directory containing a given executable.
 ///

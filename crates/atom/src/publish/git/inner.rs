@@ -31,6 +31,10 @@ use crate::publish::{
 use crate::store::git;
 use crate::{Atom, AtomId, Manifest};
 
+//================================================================================================
+// Impls
+//================================================================================================
+
 impl<'a> AtomContext<'a> {
     /// Creates a new `AtomRef` for a specific reference kind (`Spec`, `Content`, `Origin`).
     pub(super) fn refs(&self, kind: RefKind) -> AtomRef<'_> {
@@ -271,6 +275,10 @@ impl<'a> GitContext<'a> {
         Ok(self.repo.write_object(obj).map(gix::Id::detach)?)
     }
 }
+
+//================================================================================================
+// Functions
+//================================================================================================
 
 /// Reads the full content of a Git blob object into a specified output format.
 fn read_blob<F, R>(obj: &Object, mut f: F) -> GitResult<R>

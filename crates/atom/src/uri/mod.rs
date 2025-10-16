@@ -70,9 +70,6 @@
 //! - Invalid version specifications
 //! - Missing required components
 
-#[cfg(test)]
-mod tests;
-
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::Display;
@@ -81,6 +78,7 @@ use std::str::FromStr;
 use std::sync::LazyLock;
 
 use gix::Url;
+use lazy_regex::{Lazy, Regex};
 use nom::branch::alt;
 use nom::bytes::complete::{tag, take_until};
 use nom::character::complete::digit1;
@@ -91,17 +89,28 @@ use semver::VersionReq;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use super::id::AtomTag;
+use super::id::{AtomTag, Name};
 use crate::id::Error;
 
+#[cfg(test)]
+mod tests;
+
+pub(crate) const VERSION_PLACEHOLDER: &str = "__VERSION__";
+
 static ALIASES: LazyLock<Aliases> = LazyLock::new(|| Aliases(config::CONFIG.aliases()));
+static ATOM_VERSION_REGEX: Lazy<Regex> =
+    lazy_regex::lazy_regex!(r#"\{(?P<set>[^.}]+)\.(?P<atom>[^.}]+)\}"#);
+
+//================================================================================================
+// Types
+//================================================================================================
 
 /// A URL that may contain an alias to be resolved.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Default)]
 #[cfg_attr(test, derive(Serialize, Deserialize))]
 pub struct AliasedUrl {
-    url: Url,
-    r#ref: Option<String>,
+    pub(crate) url: Url,
+    pub(crate) from: Option<(Name, AtomTag)>,
 }
 
 /// Represents the parsed components of an Atom URI.
@@ -115,17 +124,6 @@ pub struct Uri {
     tag: AtomTag,
     /// The requested Atom version.
     version: Option<VersionReq>,
-}
-
-/// Represents either an Atom URI or an aliased URL component.
-///
-/// When built through the `FromStr` implementation, aliases are resolved.
-#[derive(Debug, Clone)]
-pub enum UriOrUrl {
-    /// Atom URI variant
-    Atom(Uri),
-    /// URL variant
-    Pin(AliasedUrl),
 }
 
 /// An error encountered when constructing the concrete types from an Atom URI.
@@ -187,30 +185,30 @@ struct UrlRef<'a> {
     frag: Option<&'a str>,
 }
 
+type UrlPrefix<'a> = (Option<&'a str>, Option<&'a str>, Option<&'a str>);
+
+//================================================================================================
+// Impls
+//================================================================================================
+
 impl AliasedUrl {
-    /// Returns a reference to the optional git ref.
-    pub fn r#ref(&self) -> Option<&String> {
-        self.r#ref.as_ref()
+    pub(crate) fn _url(&self) -> &Url {
+        &self.url
     }
 
-    /// Returns a reference to the underlying URL.
-    pub fn url(&self) -> &Url {
-        &self.url
+    pub(crate) fn _from(&self) -> Option<(&Name, &AtomTag)> {
+        if let Some((ref n, ref t)) = self.from {
+            Some((n, t))
+        } else {
+            None
+        }
     }
 }
 
-impl Display for AliasedUrl {
+impl std::fmt::Display for AliasedUrl {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let AliasedUrl { url, r#ref } = self;
-        if let Some(r) = r#ref {
-            if r.is_empty() {
-                url.fmt(f)
-            } else {
-                write!(f, "{}^{}", url, r)
-            }
-        } else {
-            url.fmt(f)
-        }
+        let AliasedUrl { url, .. } = self;
+        write!(f, "{}", url)
     }
 }
 
@@ -218,19 +216,14 @@ impl FromStr for AliasedUrl {
     type Err = UriError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let r#ref: Option<String>;
-        let url_str: &str;
-        if let Some((f, r)) = s.split_once('^') {
-            r#ref = Some(r.to_owned());
-            url_str = f;
-        } else {
-            r#ref = None;
-            url_str = s;
+        let re = ATOM_VERSION_REGEX.replace(s, VERSION_PLACEHOLDER);
+        let mut from = None;
+        if let Some(cap) = ATOM_VERSION_REGEX.captures(s) {
+            from = Some((cap["set"].try_into()?, cap["atom"].try_into()?));
         }
-        let url = UrlRef::from(url_str);
-        let url = url.to_url()?;
+        let url = UrlRef::from(re.as_ref()).to_url()?;
 
-        Ok(AliasedUrl { url, r#ref })
+        Ok(AliasedUrl { url, from })
     }
 }
 
@@ -341,27 +334,6 @@ impl<'a> TryFrom<&'a str> for Uri {
 
     fn try_from(s: &'a str) -> Result<Self, Self::Error> {
         s.parse()
-    }
-}
-
-impl Display for UriOrUrl {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            UriOrUrl::Atom(uri) => uri.fmt(f),
-            UriOrUrl::Pin(url) => url.fmt(f),
-        }
-    }
-}
-
-impl FromStr for UriOrUrl {
-    type Err = UriError;
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        if s.contains("::") {
-            s.parse::<Uri>().map(UriOrUrl::Atom)
-        } else {
-            s.parse::<AliasedUrl>().map(UriOrUrl::Pin)
-        }
     }
 }
 
@@ -543,6 +515,10 @@ impl<'a> UrlRef<'a> {
     }
 }
 
+//================================================================================================
+// Functions
+//================================================================================================
+
 fn empty_none<'a>((rest, opt): (&'a str, Option<&'a str>)) -> (&'a str, Option<&'a str>) {
     (rest, opt.and_then(not_empty))
 }
@@ -624,8 +600,6 @@ fn parse_port(input: &str) -> IResult<&str, Option<(&str, &str)>> {
         digit1,
     )))(input)
 }
-
-type UrlPrefix<'a> = (Option<&'a str>, Option<&'a str>, Option<&'a str>);
 
 fn parse_url(url: &str) -> IResult<&str, UrlPrefix<'_>> {
     let (rest, (scheme, user_pass)) = tuple((scheme, split_at))(url)?;

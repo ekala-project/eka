@@ -11,6 +11,10 @@ use tempfile::{Builder, NamedTempFile};
 use crate::publish::{Content, Publish, Record};
 use crate::store::git;
 
+//================================================================================================
+// Traits
+//================================================================================================
+
 trait MockAtom {
     fn mock(
         &self,
@@ -19,6 +23,10 @@ trait MockAtom {
         description: &str,
     ) -> Result<(NamedTempFile, ObjectId), anyhow::Error>;
 }
+
+//================================================================================================
+// Impls
+//================================================================================================
 
 impl MockAtom for gix::Repository {
     fn mock(
@@ -43,10 +51,11 @@ impl MockAtom for gix::Repository {
             .tempfile_in(&atom_dir)?;
 
         let manifest = Manifest {
-            atom: Atom {
+            package: Atom {
                 tag: tag.try_into()?,
                 version: Version::from_str(version)?,
                 description: (!description.is_empty()).then_some(description.into()),
+                sets: HashMap::new(),
             },
             deps: Default::default(),
         };
@@ -108,6 +117,10 @@ impl MockAtom for gix::Repository {
         Ok((atom_file, atom_oid))
     }
 }
+
+//================================================================================================
+// Functions
+//================================================================================================
 
 #[tokio::test]
 async fn publish_atom() -> Result<(), anyhow::Error> {

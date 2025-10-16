@@ -2,6 +2,10 @@ use tempfile::TempDir;
 
 use super::*;
 
+//================================================================================================
+// Functions
+//================================================================================================
+
 pub(crate) fn init_repo_and_remote() -> Result<(TempDir, TempDir), anyhow::Error> {
     use gix::actor::SignatureRef;
     use gix::config::{File, Source};

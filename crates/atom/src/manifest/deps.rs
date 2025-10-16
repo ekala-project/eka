@@ -46,11 +46,15 @@
 //! validation and prevent typos in manifest files. Optional fields are properly
 //! handled with `skip_serializing_if` to keep the TOML output clean.
 
+use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
 use bstr::{BString, ByteSlice};
+use either::Either;
+use gix::ThreadSafeRepository;
 use semver::VersionReq;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -58,54 +62,36 @@ use toml_edit::DocumentMut;
 use url::Url;
 
 use crate::id::{AtomTag, Name};
+use crate::lock::{Dep, SetDetails};
+use crate::manifest::sets::{ResolvedSets, SetResolver};
+use crate::store::git::Root;
 use crate::uri::{AliasedUrl, Uri};
-use crate::{Lockfile, Manifest};
+use crate::{AtomId, Lockfile, Manifest};
 
 //================================================================================================
-// Structs & Enums
+// Types
 //================================================================================================
+
+type AtomFrom = HashMap<Name, HashMap<AtomTag, VersionReq>>;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
 #[serde(deny_unknown_fields)]
 /// Represents a locked atom dependency, referencing a verifiable repository slice.
 pub struct AtomReq {
-    /// The tag of the atom, used if the dependency name in the manifest
-    /// differs from the atom's actual tag.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tag: Option<AtomTag>,
     /// The semantic version requirement for the atom (e.g., "^1.0.0").
     version: VersionReq,
-    /// The Git URL or local path where the atom's repository can be found.
-    #[serde(serialize_with = "serialize_url", deserialize_with = "deserialize_url")]
-    store: gix::url::Url,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
-#[serde(untagged)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Default)]
+#[serde(deny_unknown_fields)]
 /// The dependencies specified in the manifest
-pub enum Dependency {
-    /// An atom dependency variant.
-    Atom(AtomReq),
-    /// A direct pin to an external source variant.
-    Pin(StraightPin),
-    /// A tarball pin to an external source variant.
-    TarPin(TarPin),
-    /// A git pin to an external source variant.
-    GitPin(GitPin),
-    /// A dependency fetched at build-time as an FOD.
-    Src(SrcReq),
-}
-
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
-#[serde(untagged)]
-/// Represents the two types of direct pins.
-pub enum DirectPin {
-    /// A simple pin, with an optional unpack field.
-    Straight(StraightPin),
-    /// A pin pointing to a tarball which will be unpacked before hashing.
-    Tarball(TarPin),
-    /// A git pin, with a ref or version.
-    Git(GitPin),
+pub struct Dependency {
+    /// Specify atom dependencies from a specific set outlined in `[package.sets]`.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    from: AtomFrom,
+    /// Direct dependencies not in the atom format.
+    #[serde(default, skip_serializing_if = "DirectDeps::is_empty")]
+    direct: DirectDeps,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -114,6 +100,9 @@ pub enum DocError {
     /// The manifest path could not be accessed.
     #[error("the atom directory disappeared or is inaccessible: {0}")]
     Missing(PathBuf),
+    /// A valid atom id could not be constructed.
+    #[error("a valid atom id could not be constructed; aborting: {0}")]
+    AtomIdConstruct(String),
     /// A TOML deserialization error occurred.
     #[error(transparent)]
     De(#[from] toml_edit::de::Error),
@@ -146,59 +135,15 @@ pub enum DocError {
     Error(#[from] crate::lock::BoxError),
 }
 
+/// Represents the manner in which we resolve a rev for this git fetch
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
-#[serde(deny_unknown_fields)]
-/// Represents a direct git pin to an external source.
-///
-/// This struct is used when a dependency is pinned directly to a Git repository.
-pub struct GitPin {
-    /// The URL of the Git repository.
-    #[serde(serialize_with = "serialize_url", deserialize_with = "deserialize_url")]
-    pub repo: gix::Url,
-    /// The fetching strategy, either by a specific ref (branch, tag, commit)
-    /// or by resolving a semantic version tag.
-    #[serde(flatten)]
-    pub fetch: GitStrat,
-    /// A bool representing whether the pin represents a Nix flake, changing the behavior of the
-    /// `import` field, if so.
-    ///
-    /// This field is omitted from serialization if false.
-    #[serde(default, skip_serializing_if = "not")]
-    pub flake: bool,
-    /// An optional relative path within the fetched source, used to import Nix expressions; the
-    /// precise behavior of which depends on whether or not the pin is a flake.
-    ///
-    /// This field is omitted from serialization if None.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub import: Option<PathBuf>,
-}
-
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
-/// Represents the two types of git fetch strategies.
-pub enum GitStrat {
+pub enum GitSpec {
+    /// We will resolve the rev of the given ref.
     #[serde(rename = "ref")]
-    /// The refspec (e.g. branch or tag) of the source (for git-type pins).
     Ref(String),
+    /// We will resolve a version from the available tags resembling a semantic version.
     #[serde(rename = "version")]
-    /// The version requirement of the source (for git-type pins).
     Version(VersionReq),
-}
-
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
-#[serde(deny_unknown_fields)]
-/// Represents an indirect pin referencing a dependency from another atom.
-///
-/// This struct is used when a dependency is sourced from another atom,
-/// enabling composition of complex systems from simpler atom components.
-pub struct IndirectPin {
-    /// The tag of the atom from which to source the dependency.
-    pub from: AtomTag,
-    /// The name of the dependency to acquire from the source atom. If `None`,
-    /// it defaults to the name of the current dependency.
-    ///
-    /// This field is omitted from serialization if None.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub set: Option<String>,
 }
 
 /// A writer for `atom.toml` manifests that ensures the `atom.lock` file is kept in sync.
@@ -212,58 +157,84 @@ pub struct IndirectPin {
 /// use atom::manifest::deps::ManifestWriter;
 /// use atom::uri::Uri;
 ///
-/// let mut writer = ManifestWriter::new(Path::new("/path/to/atom.toml")).unwrap();
-/// let uri = "my-atom@^1.0.0".parse::<Uri>().unwrap();
-/// let key = "my-atom".parse::<Name>().unwrap();
-/// writer.add_uri(uri, Some(key)).unwrap();
-/// writer.write_atomic().unwrap();
+/// async {
+///     let mut writer = ManifestWriter::new(None, Path::new("/path/to/atom.toml"))
+///         .await
+///         .unwrap();
+///     let uri = "my-atom@^1.0.0".parse::<Uri>().unwrap();
+///     let key = "my-atom".parse::<Name>().unwrap();
+///     writer.add_uri(uri, Some(key)).unwrap();
+///     writer.write_atomic().unwrap();
+/// };
 /// ```
 pub struct ManifestWriter {
     path: PathBuf,
     doc: TypedDocument<Manifest>,
     lock: Lockfile,
+    resolved: ResolvedSets,
+}
+
+/// Represents the underlying type of Nix dependency
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+#[serde(untagged)]
+pub enum NixReq {
+    /// A tarball url which will be unpacked before being hashed
+    #[serde(rename = "tar")]
+    Tar(Url),
+    /// A straight url which will be fetched and hashed directly
+    #[serde(rename = "url")]
+    Url(Url),
+    /// A fetch which will be deferred to buildtime
+    #[serde(untagged)]
+    Build(NixSrc),
+    /// A fetch which leverages git
+    #[serde(untagged)]
+    Git(NixGit),
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
-/// Represents a dependency which is fetched at build time as an FOD.
 #[serde(deny_unknown_fields)]
-pub struct SrcReq {
-    /// The URL from which to fetch the build-time source.
-    pub src: Url,
-}
-
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
-#[serde(deny_unknown_fields)]
-/// Represents a simple pin, with an optional unpack field.
-pub struct StraightPin {
-    /// The URL of the pinned resource.
-    pub pin: Url,
-    /// A bool representing whether the pin represents a Nix flake, changing the behavior of the
-    /// `import` field, if so.
+/// Represents a nix fetch, either direct or tarball.
+pub struct NixFetch {
+    /// The URL of the resource.
+    #[serde(flatten)]
+    pub kind: NixReq,
+    /// An optional path to a resolved atom, tied to its concrete resolved version.
     ///
-    /// This field is omitted from serialization if false.
-    #[serde(default, skip_serializing_if = "not")]
-    pub flake: bool,
-}
-
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
-#[serde(deny_unknown_fields)]
-/// Represents a pin to a tarball, with an optional unpack field.
-pub struct TarPin {
-    /// The URL of the tarball resource.
-    pub tar: Url,
-    /// A bool representing whether the pin represents a Nix flake, changing the behavior of the
-    /// `import` field, if so.
-    ///
-    /// This field is omitted from serialization if false.
-    #[serde(default, skip_serializing_if = "not")]
-    pub flake: bool,
-    /// An optional relative path within the fetched source, used to import Nix expressions; the
-    /// precise behavior of which depends on whether or not the pin is a flake.
+    /// Only relevant if the Url contains a `"__VERSION__"` place-holder in its path component.
     ///
     /// This field is omitted from serialization if None.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub import: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from_version: Option<(Name, AtomTag)>,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+#[serde(deny_unknown_fields)]
+/// Represents a nix eval-time git fetch.
+pub struct NixGit {
+    /// The URL of the git repository.
+    pub git: gix::Url,
+    /// A git ref or version constraint
+    #[serde(flatten, skip_serializing_if = "Option::is_none")]
+    pub spec: Option<GitSpec>,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+#[serde(deny_unknown_fields)]
+/// Represents a dependency which is fetched at build time as an FOD.
+pub struct NixSrc {
+    /// The URL from which to fetch the build-time source.
+    pub(crate) build: Url,
+    #[serde(default, skip_serializing_if = "not")]
+    pub(crate) unpack: bool,
+}
+
+/// Represents different possible types of direct dependencies, i.e. those in the atom format
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Default)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DirectDeps {
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    nix: HashMap<Name, NixFetch>,
 }
 
 /// A newtype wrapper to tie a `DocumentMut` to a specific serializable type `T`.
@@ -278,6 +249,7 @@ struct TypedDocument<T> {
 //================================================================================================
 
 /// A trait for writing dependencies to a mutable TOML document representing an Atom manifest.
+#[allow(dead_code)]
 trait WriteDeps<T: Serialize> {
     /// The error type returned by the methods.
     type Error;
@@ -296,20 +268,34 @@ impl AsMut<AtomReq> for AtomReq {
     }
 }
 
+impl AsMut<Dependency> for Dependency {
+    fn as_mut(&mut self) -> &mut Dependency {
+        self
+    }
+}
+
 impl<T: Serialize> AsMut<DocumentMut> for TypedDocument<T> {
     fn as_mut(&mut self) -> &mut DocumentMut {
         &mut self.inner
     }
 }
 
+impl FromStr for GitSpec {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if let Ok(req) = VersionReq::parse(s) {
+            Ok(GitSpec::Version(req))
+        } else {
+            Ok(GitSpec::Ref(s.to_string()))
+        }
+    }
+}
+
 impl AtomReq {
     /// Creates a new `AtomReq` with the specified version requirement and location.
-    pub fn new(version: VersionReq, store: gix::url::Url, tag: Option<AtomTag>) -> Self {
-        Self {
-            version,
-            store,
-            tag,
-        }
+    pub fn new(version: VersionReq) -> Self {
+        Self { version }
     }
 
     /// Returns a reference to the version requirement.
@@ -321,70 +307,108 @@ impl AtomReq {
     pub fn set_version(&mut self, version: VersionReq) {
         self.version = version
     }
+}
 
-    /// Returns a reference to the store location.
-    pub fn store(&self) -> &gix::url::Url {
-        &self.store
+impl Dependency {
+    pub(super) fn new() -> Self {
+        Dependency {
+            from: HashMap::new(),
+            direct: DirectDeps::new(),
+        }
     }
 
-    /// Returns a reference to the atom tag, if specified.
-    pub fn tag(&self) -> Option<&AtomTag> {
-        self.tag.as_ref()
+    pub(super) fn is_empty(&self) -> bool {
+        self.from.is_empty() && self.direct.is_empty()
+    }
+
+    pub(crate) fn from(&self) -> &AtomFrom {
+        &self.from
+    }
+
+    pub(crate) fn direct(&self) -> &DirectDeps {
+        &self.direct
     }
 }
 
-impl DirectPin {
+impl DirectDeps {
+    fn new() -> Self {
+        Self {
+            nix: HashMap::new(),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.nix.is_empty()
+    }
+
+    pub(crate) fn nix(&self) -> &HashMap<Name, NixFetch> {
+        &self.nix
+    }
+}
+
+impl NixFetch {
     /// Determines the type of `DirectPin` from a given URL and other parameters.
     fn determine(
-        url: &AliasedUrl,
-        import: Option<&PathBuf>,
-        flake: bool,
+        url: AliasedUrl,
+        git: Option<GitSpec>,
+        tar: Option<bool>,
+        build: bool,
+        unpack: Option<bool>,
     ) -> Result<Self, DocError> {
-        let r = url.r#ref();
-        let url = url.url();
-        let pin = if url.scheme == gix::url::Scheme::File {
-            // TODO: handle file paths to sources
-            todo!()
-        } else if let Some(r) = r {
-            let maybe_req = VersionReq::parse(r);
-            let fetch = if let Ok(req) = maybe_req {
-                GitStrat::Version(req)
-            } else {
-                GitStrat::Ref(r.to_owned())
-            };
-            DirectPin::Git(GitPin {
-                repo: url.to_owned(),
-                fetch,
-                flake,
-                import: import.map(ToOwned::to_owned),
-            })
-        } else {
-            let path = url.path.to_path()?;
-            if path.extension() == Some(OsStr::new("tar"))
+        let AliasedUrl { from, url } = url;
+        let path = url.path.to_path_lossy();
+        let is_tar = || {
+            tar.is_some_and(|b| b)
+                || path.extension() == Some(OsStr::new("tar"))
                 || path
                     .file_name()
                     .is_some_and(|f| f.to_str().is_some_and(|f| f.contains(".tar.")))
-            {
-                DirectPin::Tarball(TarPin {
-                    tar: url.to_string().parse()?,
-                    flake,
-                    import: import.map(ToOwned::to_owned),
-                })
-            } else {
-                DirectPin::Straight(StraightPin {
-                    pin: url.to_string().parse()?,
-                    flake,
-                })
+        };
+
+        let dep = if url.scheme == gix::url::Scheme::File {
+            // TODO: handle file paths to sources; requires anonymous atoms
+            todo!()
+        } else if url.scheme == gix::url::Scheme::Ssh
+            || git.is_some()
+            || path.extension() == Some(OsStr::new("git"))
+        {
+            NixFetch {
+                kind: NixReq::Git(NixGit {
+                    git: url,
+                    spec: git,
+                }),
+                from_version: from,
+            }
+        } else if build {
+            NixFetch {
+                kind: NixReq::Build(NixSrc {
+                    build: url.to_string().parse()?,
+                    unpack: unpack != Some(false) && is_tar() || unpack.is_some_and(|b| b),
+                }),
+                from_version: from,
+            }
+        } else if tar != Some(false) && is_tar() {
+            NixFetch {
+                kind: NixReq::Tar(url.to_string().parse()?),
+                from_version: from,
+            }
+        } else {
+            NixFetch {
+                kind: NixReq::Url(url.to_string().parse()?),
+                from_version: from,
             }
         };
-        Ok(pin)
+        Ok(dep)
     }
 }
 
 impl ManifestWriter {
+    const RESOLUTION_ERR_MSG: &str = "unlocked dependency could not be resolved";
+    const UPDATE_DEPENDENCY: &str = "updating out of date dependency in accordance with spec";
+
     /// Constructs a new `ManifestWriter`, ensuring that the manifest and lock file constraints
     /// are respected.
-    pub fn new(path: &Path) -> Result<Self, DocError> {
+    pub async fn new(repo: Option<&ThreadSafeRepository>, path: &Path) -> Result<Self, DocError> {
         use std::fs;
         let path = if path.file_name() == Some(OsStr::new(crate::MANIFEST_NAME.as_str())) {
             path.into()
@@ -396,66 +420,207 @@ impl ManifestWriter {
             tracing::error!(message = "No atom exists", path = %path.display());
         })?;
         let (doc, manifest) = TypedDocument::new(&toml_str)?;
+        let resolved_sets = SetResolver::new(repo, &manifest)
+            .get_and_check_sets()
+            .await?;
 
-        let mut lock = if let Ok(lock_str) = fs::read_to_string(&lock_path) {
+        let lock = if let Ok(lock_str) = fs::read_to_string(&lock_path) {
             toml_edit::de::from_str(&lock_str)?
         } else {
             Lockfile::default()
         };
-        lock.sanitize(&manifest);
-
-        Ok(ManifestWriter { doc, lock, path })
+        let mut writer = ManifestWriter {
+            doc,
+            lock,
+            path,
+            resolved: resolved_sets,
+        };
+        writer.reconcile(manifest).await?;
+        Ok(writer)
     }
 
-    /// Adds a user-requested atom URI to the manifest and lock files, ensuring they remain in sync.
-    pub fn add_uri(&mut self, uri: Uri, key: Option<Name>) -> Result<(), DocError> {
-        use crate::lock::Dep;
+    /// Runs the sanitization process, and then the synchronization process to ensure a fully
+    /// consistent manifest and lock. This function is called in the `ManifestWriter` constructor
+    /// to ensure that we are never operating on a stale manifest.
+    async fn reconcile(&mut self, manifest: Manifest) -> Result<(), DocError> {
+        self.set_sets();
+        self.sanitize(&manifest);
+        self.synchronize(manifest).await?;
+        Ok(())
+    }
 
-        let tag = uri.tag();
-        let maybe_version = uri.version();
-        let url = uri.url();
+    fn set_sets(&mut self) {
+        self.lock.sets = self.resolved().details().to_owned();
+    }
 
-        let req = if let Some(v) = maybe_version {
-            v
-        } else {
-            &VersionReq::STAR
-        };
+    /// Removes any dependencies from the lockfile that are no longer present in the
+    /// manifest, ensuring the lockfile only contains entries that are still relevant,
+    /// then calls into synchronization logic to ensure consistency.
+    fn sanitize(&mut self, manifest: &Manifest) {
+        self.lock.deps.as_mut().retain(|_, dep| match dep {
+            Dep::Atom(atom_dep) => {
+                if let Some(SetDetails { name, .. }) = self.lock.sets.get(&atom_dep.set()) {
+                    if let Some(set) = manifest.deps().from().get(name) {
+                        set.contains_key(atom_dep.tag())
+                    } else {
+                        false
+                    };
+                }
+                false
+            },
+            Dep::Nix(nix) => manifest.deps().direct().nix().contains_key(nix.name()),
+            Dep::NixGit(nix_git) => manifest.deps().direct().nix().contains_key(&nix_git.name),
+            Dep::NixTar(nix_tar) => manifest.deps().direct().nix().contains_key(&nix_tar.name),
+            Dep::NixSrc(build_src) => manifest.deps().direct().nix().contains_key(&build_src.name),
+        });
+    }
 
-        let key = if let Some(key) = key {
-            key
-        } else {
-            tag.to_owned()
-        };
-
-        if let Some(url) = url {
-            let mut atom = AtomReq::new(
-                req.to_owned(),
-                url.to_owned(),
-                (&key != tag).then(|| tag.to_owned()),
-            );
-            let lock_entry = atom.resolve(&key).map_err(Box::new)?;
-
-            if maybe_version.is_none() {
-                let version = VersionReq::parse(lock_entry.version.to_string().as_str())?;
-                atom.set_version(version);
-            };
-
-            let dep = Dependency::Atom(atom);
-
-            self.doc.write_dep(key.as_str(), &dep)?;
+    fn lock_atom(&mut self, req: VersionReq, id: AtomId<Root>, name: Name) {
+        if let Some(dep) = self.resolved.resolve_atom(&id, &req) {
             if self
                 .lock
                 .deps
                 .as_mut()
-                .insert(key.to_owned(), Dep::Atom(lock_entry))
+                .insert(Either::Left(id.to_owned()), dep)
                 .is_some()
             {
-                tracing::warn!("updating lock entry for `{}`", key);
+                tracing::warn!(
+                    message = Self::UPDATE_DEPENDENCY,
+                    tag = %id.tag(),
+                    set = %name,
+                    r#type = "atom"
+                );
             }
         } else {
-            // search locally for atom tag
-            todo!()
+            let versions: Vec<_> = self
+                .resolved()
+                .atoms()
+                .get(&id)
+                .map(|s| s.keys().collect())
+                .unwrap_or_default();
+            tracing::warn!(
+                message = Self::RESOLUTION_ERR_MSG,
+                set = %name,
+                atom = %id.tag(),
+                requested.version = %req,
+                avaliable.versions = %toml_edit::ser::to_string(&versions).unwrap_or_default()
+            );
         }
+    }
+
+    fn synchronize_atom(&mut self, req: VersionReq, id: AtomId<Root>, name: Name) {
+        if !self
+            .lock
+            .deps
+            .as_ref()
+            .contains_key(&either::Either::Left(id.to_owned()))
+        {
+            self.lock_atom(req, id, name);
+        } else if let Some(Dep::Atom(dep)) = self
+            .lock
+            .deps
+            .as_ref()
+            .get(&either::Either::Left(id.to_owned()))
+        {
+            if !req.matches(dep.version()) {
+                self.lock_atom(req, id, name);
+            }
+        }
+    }
+
+    /// Updates the lockfile to match the dependencies specified in the manifest.
+    /// It resolves any new dependencies, updates existing ones if their version
+    /// requirements have changed, and ensures the lockfile is fully consistent.
+    pub(crate) async fn synchronize(&mut self, manifest: Manifest) -> Result<(), DocError> {
+        for (name, set) in manifest.deps.from {
+            let maybe_root = self.resolved.roots().get(&name).map(ToOwned::to_owned);
+            if let Some(root) = maybe_root {
+                for (tag, req) in set {
+                    let id = AtomId::construct(&root, tag.to_owned()).map_err(|e| {
+                        DocError::AtomIdConstruct(format!(
+                            "set: {}, atom: {}, err: {}",
+                            &name, &tag, e
+                        ))
+                    })?;
+                    self.synchronize_atom(req, id, name.to_owned());
+                }
+            } else {
+                tracing::warn!(
+                    message = "set was not resolved to an origin id, can't syncrhonize it",
+                    set = %name,
+                );
+            }
+        }
+
+        for (name, dep) in manifest.deps.direct.nix {
+            let key = Either::Right(name.to_owned());
+            let locked = self.lock.deps.as_ref().get(&key);
+            if let Some(lock) = locked {
+                use crate::lock::NixUrls;
+                let url = dep.get_url();
+                let mut unmatched = false;
+                match (lock, url, &dep.kind) {
+                    (Dep::Nix(nix), NixUrls::Url(url), _) => unmatched = nix.url() != url,
+                    (Dep::NixGit(git), NixUrls::Git(url), NixReq::Git(NixGit { spec, .. })) => {
+                        // upstream bug: false positive (it is read later unconditionally)
+                        #[allow(unused_assignments)]
+                        if let (Some(GitSpec::Version(req)), Some(version)) = (spec, &git.version) {
+                            unmatched = !req.matches(version);
+                        }
+                        unmatched = git.url() != url;
+                    },
+                    (Dep::NixTar(tar), NixUrls::Url(url), _) => unmatched = tar.url() != url,
+                    (Dep::NixSrc(build), NixUrls::Url(url), _) => unmatched = build.url() != url,
+                    _ => {},
+                }
+                if unmatched {
+                    tracing::warn!(message = "locked URL doesn't match, updating...", direct.nix = %name);
+                    let (_, dep) = self.resolve_nix(dep, Some(&name)).await?;
+                    self.lock.deps.as_mut().insert(key, dep);
+                }
+            } else if let Ok((_, dep)) = self.resolve_nix(dep, Some(&name)).await {
+                self.lock.deps.as_mut().insert(key, dep);
+            } else {
+                tracing::warn!(message = Self::RESOLUTION_ERR_MSG, direct.nix = %name);
+            }
+        }
+        Ok(())
+    }
+
+    async fn resolve_nix(
+        &self,
+        dep: NixFetch,
+        key: Option<&Name>,
+    ) -> Result<(Name, Dep), DocError> {
+        let get_dep = || {
+            if let Some((set, atom)) = &dep.from_version {
+                if let Some(root) = self.resolved.roots.get(set) {
+                    if let Ok(id) = AtomId::construct(root, atom.to_owned()) {
+                        if let Some(Dep::Atom(atom)) =
+                            self.lock.deps.as_ref().get(&Either::Left(id))
+                        {
+                            return dep.new_from_version(atom.version());
+                        }
+                    }
+                }
+            }
+            dep
+        };
+        let dep = get_dep();
+        dep.resolve(key).await.map_err(Into::into)
+    }
+
+    /// Adds a user-requested atom URI to the manifest and lock files, ensuring they remain in sync.
+    pub fn add_uri(&mut self, uri: Uri, _set: Option<Name>) -> Result<(), DocError> {
+        let (_atom_req, lock_entry) = uri.resolve(None).map_err(Box::new)?;
+
+        let _tag = lock_entry.tag().to_owned();
+        let _id = lock_entry.id().to_owned();
+
+        // self.doc.write_dep(&tag, &dep)?;
+        // if !self.lock.deps.as_mut().insert(Dep::Atom(lock_entry)) {
+        //     tracing::warn!(message = "updating lock entry", atom.id = %id);
+        // }
 
         Ok(())
     }
@@ -465,28 +630,18 @@ impl ManifestWriter {
         &mut self,
         url: AliasedUrl,
         key: Option<Name>,
-        import: Option<PathBuf>,
-        flake: bool,
+        git: Option<GitSpec>,
+        tar: Option<bool>,
+        build: bool,
+        unpack: Option<bool>,
     ) -> Result<(), DocError> {
-        let direct = DirectPin::determine(&url, import.as_ref(), flake)?;
-        let (key, lock_entry) = direct.resolve(key.as_ref(), import, flake).await?;
+        let dep = NixFetch::determine(url, git, tar, build, unpack)?;
+        let (_key, _lock_entry) = self.resolve_nix(dep, key.as_ref()).await?;
 
-        let dep = match direct {
-            DirectPin::Straight(straight_pin) => Dependency::Pin(straight_pin),
-            DirectPin::Tarball(tar_pin) => Dependency::TarPin(tar_pin),
-            DirectPin::Git(git_pin) => Dependency::GitPin(git_pin),
-        };
-
-        self.doc.write_dep(&key, &dep)?;
-        if self
-            .lock
-            .deps
-            .as_mut()
-            .insert(key.to_owned(), lock_entry)
-            .is_some()
-        {
-            tracing::warn!("updating lock entry for `{}`", key);
-        }
+        // self.doc.write_dep(&key, todo!())?;
+        // if self.lock.deps.as_mut().insert(lock_entry) {
+        //     tracing::warn!(message = "updating lock entry", direct.nix = %key);
+        // }
         Ok(())
     }
 
@@ -512,11 +667,15 @@ impl ManifestWriter {
         tmp_lock.persist(lock_path)?;
         Ok(())
     }
+
+    fn resolved(&self) -> &ResolvedSets {
+        &self.resolved
+    }
 }
 
 impl TypedDocument<Manifest> {
     /// Writes an atom dependency into the manifest document.
-    pub fn write_dep(&mut self, key: &str, req: &Dependency) -> Result<(), toml_edit::ser::Error> {
+    pub fn _write_dep(&mut self, key: &str, req: &Dependency) -> Result<(), toml_edit::ser::Error> {
         req.write_dep(key, self)
     }
 }

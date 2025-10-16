@@ -3,6 +3,10 @@
 use atom::store::git;
 use clap::Parser;
 
+//================================================================================================
+// Types
+//================================================================================================
+
 /// Git-specific arguments for the `resolve` subcommand.
 #[derive(Parser, Debug)]
 #[command(next_help_heading = "Git Options")]

@@ -7,6 +7,10 @@ use std::process::ExitCode;
 use clap::Parser;
 use eka::cli::{self, Args};
 
+//================================================================================================
+// Functions
+//================================================================================================
+
 /// The main entry point for the Eka CLI.
 #[tokio::main]
 async fn main() -> ExitCode {
