@@ -63,8 +63,8 @@
 //!
 //! // Query atom versions from a remote store
 //! let atoms = url.get_atoms(None)?;
-//! for (tag, version, id) in atoms {
-//!     println!("Atom: {} v{} -> {}", tag, version, id);
+//! for atom in atoms {
+//!     println!("Atom: {} v{} -> {}", atom.id.tag(), atom.version, atom.rev);
 //! }
 //!
 //! // Find highest version matching requirements
@@ -247,8 +247,8 @@ pub trait QueryStore<Ref, T: Send> {
 ///
 /// // Get all available atoms
 /// let atoms = url.get_atoms(None)?;
-/// for (tag, version, id) in atoms {
-///     println!("Atom: {} v{} -> {}", tag, version, id);
+/// for atom in atoms {
+///     println!("Atom: {} v{} -> {}", atom.id.tag(), atom.version, atom.rev);
 /// }
 ///
 /// // Find the highest version matching a requirement

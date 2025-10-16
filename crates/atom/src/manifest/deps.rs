@@ -158,7 +158,7 @@ pub enum GitSpec {
 /// use atom::uri::Uri;
 ///
 /// async {
-///     let mut writer = ManifestWriter::new(Path::new("/path/to/atom.toml"))
+///     let mut writer = ManifestWriter::new(None, Path::new("/path/to/atom.toml"))
 ///         .await
 ///         .unwrap();
 ///     let uri = "my-atom@^1.0.0".parse::<Uri>().unwrap();
