@@ -192,11 +192,11 @@ type UrlPrefix<'a> = (Option<&'a str>, Option<&'a str>, Option<&'a str>);
 //================================================================================================
 
 impl AliasedUrl {
-    pub(crate) fn url(&self) -> &Url {
+    pub(crate) fn _url(&self) -> &Url {
         &self.url
     }
 
-    pub(crate) fn from(&self) -> Option<(&Name, &AtomTag)> {
+    pub(crate) fn _from(&self) -> Option<(&Name, &AtomTag)> {
         if let Some((ref n, ref t)) = self.from {
             Some((n, t))
         } else {

@@ -23,7 +23,7 @@ enum Error {
 pub(crate) struct ResolvedSets {
     pub(crate) atoms: ResolvedAtoms<ObjectId, Root>,
     pub(crate) roots: HashMap<Name, Root>,
-    transports: HashMap<gix::Url, Box<dyn Transport + Send>>,
+    _transports: HashMap<gix::Url, Box<dyn Transport + Send>>,
     details: BTreeMap<GitDigest, SetDetails>,
 }
 
@@ -116,7 +116,7 @@ impl<'a> SetResolver<'a> {
 
         Ok(ResolvedSets {
             atoms: self.atoms,
-            transports: self.transports,
+            _transports: self.transports,
             roots: self.roots,
             details: self.sets,
         })

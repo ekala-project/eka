@@ -320,7 +320,7 @@ impl AtomDep {
         &self.id
     }
 
-    pub(crate) fn rev(&self) -> GitDigest {
+    pub(crate) fn _rev(&self) -> GitDigest {
         self.rev
     }
 
@@ -377,7 +377,7 @@ impl Uri {
         }
     }
 
-    fn atom_req(&self) -> AtomReq {
+    fn _atom_req(&self) -> AtomReq {
         AtomReq::new(self.version_req())
     }
 
@@ -387,7 +387,7 @@ impl Uri {
             .unwrap_or(VersionReq::STAR)
     }
 
-    fn get_transport(&self) -> Option<Box<dyn Transport + Send>> {
+    fn _get_transport(&self) -> Option<Box<dyn Transport + Send>> {
         self.url().and_then(|u| u.get_transport().ok())
     }
 }

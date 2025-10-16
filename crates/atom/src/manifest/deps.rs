@@ -249,6 +249,7 @@ struct TypedDocument<T> {
 //================================================================================================
 
 /// A trait for writing dependencies to a mutable TOML document representing an Atom manifest.
+#[allow(dead_code)]
 trait WriteDeps<T: Serialize> {
     /// The error type returned by the methods.
     type Error;
@@ -610,11 +611,11 @@ impl ManifestWriter {
     }
 
     /// Adds a user-requested atom URI to the manifest and lock files, ensuring they remain in sync.
-    pub fn add_uri(&mut self, uri: Uri, set: Option<Name>) -> Result<(), DocError> {
-        let (atom_req, lock_entry) = uri.resolve(None).map_err(Box::new)?;
+    pub fn add_uri(&mut self, uri: Uri, _set: Option<Name>) -> Result<(), DocError> {
+        let (_atom_req, lock_entry) = uri.resolve(None).map_err(Box::new)?;
 
-        let tag = lock_entry.tag().to_owned();
-        let id = lock_entry.id().to_owned();
+        let _tag = lock_entry.tag().to_owned();
+        let _id = lock_entry.id().to_owned();
 
         // self.doc.write_dep(&tag, &dep)?;
         // if !self.lock.deps.as_mut().insert(Dep::Atom(lock_entry)) {
@@ -635,9 +636,9 @@ impl ManifestWriter {
         unpack: Option<bool>,
     ) -> Result<(), DocError> {
         let dep = NixFetch::determine(url, git, tar, build, unpack)?;
-        let (key, lock_entry) = self.resolve_nix(dep, key.as_ref()).await?;
+        let (_key, _lock_entry) = self.resolve_nix(dep, key.as_ref()).await?;
 
-        self.doc.write_dep(&key, todo!())?;
+        // self.doc.write_dep(&key, todo!())?;
         // if self.lock.deps.as_mut().insert(lock_entry) {
         //     tracing::warn!(message = "updating lock entry", direct.nix = %key);
         // }
@@ -674,7 +675,7 @@ impl ManifestWriter {
 
 impl TypedDocument<Manifest> {
     /// Writes an atom dependency into the manifest document.
-    pub fn write_dep(&mut self, key: &str, req: &Dependency) -> Result<(), toml_edit::ser::Error> {
+    pub fn _write_dep(&mut self, key: &str, req: &Dependency) -> Result<(), toml_edit::ser::Error> {
         req.write_dep(key, self)
     }
 }
