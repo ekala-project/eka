@@ -63,8 +63,8 @@
 //! let parsed = Manifest::from_str(manifest_str).unwrap();
 //! ```
 
-use std::collections::{BTreeSet, HashMap};
-use std::path::PathBuf;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use semver::Version;
@@ -86,9 +86,9 @@ pub(crate) mod sets;
 #[derive(Error, Debug)]
 pub enum AtomError {
     /// The manifest is missing the required `[atom]` table.
-    #[error("Manifest is missing the `[atom]` key")]
+    #[error("Manifest is missing the `[package]` key")]
     Missing,
-    /// One of the fields in the `[atom]` table is missing or invalid.
+    /// One of the fields in the `[package]` table is missing or invalid.
     #[error(transparent)]
     InvalidAtom(#[from] de::Error),
     /// The manifest is not valid TOML.
@@ -97,6 +97,9 @@ pub enum AtomError {
     /// An I/O error occurred while reading the manifest file.
     #[error(transparent)]
     Io(#[from] std::io::Error),
+    /// An AtomTag is missing or malformed
+    #[error(transparent)]
+    Id(#[from] crate::id::Error),
 }
 
 /// A strongly-typed representation of a source for an atom set.
@@ -143,9 +146,37 @@ pub struct Manifest {
 /// A specialized result type for manifest operations.
 pub type AtomResult<T> = Result<T, AtomError>;
 
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct EkalaManifest {
+    project: EkalaProject,
+    packages: AtomMap,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct EkalaProject {
+    name: String,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct AtomMap(BTreeMap<AtomTag, PathBuf>);
+
 //================================================================================================
 // Impls
 //================================================================================================
+
+impl AsRef<BTreeMap<AtomTag, PathBuf>> for AtomMap {
+    fn as_ref(&self) -> &BTreeMap<AtomTag, PathBuf> {
+        &self.0
+    }
+}
+
+impl AsMut<BTreeMap<AtomTag, PathBuf>> for AtomMap {
+    fn as_mut(&mut self) -> &mut BTreeMap<AtomTag, PathBuf> {
+        &mut self.0
+    }
+}
 
 impl Manifest {
     /// Creates a new `Manifest` with the given tag, version, and description.
@@ -161,13 +192,13 @@ impl Manifest {
         }
     }
 
-    /// Parses an [`Atom`] struct from the `[atom]` table of a TOML document string,
+    /// Parses an [`Atom`] struct from the `[package]` table of a TOML document string,
     /// ignoring other tables and fields.
     ///
     /// # Errors
     ///
     /// This function will return an error if the content is invalid TOML,
-    /// or if the `[atom]` table is missing.
+    /// or if the `[package]` table is missing.
     pub(crate) fn get_atom(content: &str) -> AtomResult<Atom> {
         let doc = content.parse::<DocumentMut>()?;
 
@@ -177,6 +208,15 @@ impl Manifest {
         } else {
             Err(AtomError::Missing)
         }
+    }
+
+    pub(crate) fn get_atom_tag<P: AsRef<Path>>(path: P) -> AtomResult<AtomTag> {
+        let content = std::fs::read_to_string(&path)?;
+        let doc = content.parse::<DocumentMut>()?;
+
+        let tag = doc["package"]["tag"].to_string();
+        tracing::error!(message = "atom tag is missing or malformed", %tag, path = %path.as_ref().display());
+        AtomTag::try_from(tag).map_err(Into::into)
     }
 
     pub(crate) fn deps(&self) -> &Dependency {
@@ -198,5 +238,32 @@ impl TryFrom<PathBuf> for Manifest {
     fn try_from(path: PathBuf) -> Result<Self, Self::Error> {
         let content = std::fs::read_to_string(path)?;
         Ok(Manifest::from_str(&content)?)
+    }
+}
+
+impl<'de> Deserialize<'de> for AtomMap {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let entries: Vec<PathBuf> = Vec::deserialize(deserializer)?;
+        let mut map = BTreeMap::new();
+
+        for path in entries {
+            let tag = Manifest::get_atom_tag(&path).map_err(serde::de::Error::custom)?;
+            map.insert(tag, path);
+        }
+
+        Ok(AtomMap(map))
+    }
+}
+
+impl Serialize for AtomMap {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let values: Vec<_> = self.as_ref().values().collect();
+        values.serialize(serializer)
     }
 }
