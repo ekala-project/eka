@@ -271,7 +271,7 @@ impl<'a> GitPublisher<'a> {
         let mut transport = remote.get_transport().map_err(Box::new)?;
         let root = remote.ekala_root(Some(&mut transport)).map_err(|e| {
             e.warn();
-            tracing::warn!("Did you run `eka publish --init`?");
+            tracing::warn!("Did you run `eka init`?");
             Error::NotInitialized
         })?;
 

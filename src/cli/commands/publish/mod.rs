@@ -3,6 +3,7 @@
 //! The `publish` subcommand is responsible for publishing atoms to the atom
 //! store. It can publish atoms from specified paths or recursively from the
 //! current directory.
+mod git;
 
 use std::path::PathBuf;
 
@@ -12,9 +13,6 @@ use atom::publish::error::PublishError;
 use clap::Parser;
 
 use crate::cli::store::Detected;
-
-mod git;
-pub(super) mod init;
 
 //================================================================================================
 // Types
@@ -28,25 +26,18 @@ pub(in super::super) struct PublishArgs {
     #[arg(long, short, conflicts_with = "path")]
     recursive: bool,
 
-    /// Initialize the Ekala store.
-    ///
-    /// This command initializes the repository for use as an Ekala store
-    /// fit for publishing atoms to a remote location.
-    #[arg(long, conflicts_with_all = ["path", "recursive"])]
-    pub(super) init: bool,
-
-    /// Path(s) to the atom(s) to publish.
-    #[arg(required_unless_present_any = ["recursive", "init"])]
+    /// Path(s) to the atom(s) to publish
+    #[arg(required_unless_present = "recursive")]
     path: Vec<PathBuf>,
     #[command(flatten)]
-    pub(super) store: StoreArgs,
+    store: StoreArgs,
 }
 
 /// Arguments for the atom store.
 #[derive(Parser, Debug)]
-pub(super) struct StoreArgs {
+struct StoreArgs {
     #[command(flatten)]
-    pub(super) git: git::GitArgs,
+    git: git::GitArgs,
 }
 
 //================================================================================================

@@ -10,6 +10,7 @@ use super::Args;
 use crate::cli::store;
 
 mod add;
+mod init;
 mod new;
 mod publish;
 mod resolve;
@@ -47,6 +48,12 @@ pub(super) enum Commands {
     /// This command will resolve and lock each dependency for the given atom(s) into a well
     /// structured lock file format.
     Resolve(resolve::Args),
+    /// Initialize the Ekala store.
+    ///
+    /// This command initializes the repository for use as an Ekala store
+    /// fit for publishing atoms to a remote location.
+    #[command(verbatim_doc_comment)]
+    Init(init::Args),
 }
 
 //================================================================================================
@@ -60,12 +67,9 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
         Commands::Add(args) => add::run(store.await?, args).await?,
         Commands::New(args) => new::run(args)?,
         Commands::Publish(args) => {
-            if args.init {
-                publish::init::run(store.await?, args.store)?;
-            } else {
-                publish::run(store.await?, args).await?;
-            }
+            publish::run(store.await?, args).await?;
         },
+        Commands::Init(args) => init::run(store.await?, args)?,
         Commands::Resolve(args) => resolve::run(store.await?, args)?,
     }
     Ok(())
