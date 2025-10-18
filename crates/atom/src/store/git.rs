@@ -262,7 +262,7 @@ impl<'repo> Init<Root, Ref, Box<dyn Transport + Send>> for gix::Remote<'repo> {
         &self,
         project: &str,
         transport: Option<&mut Box<dyn Transport + Send>>,
-    ) -> Result<(), Error> {
+    ) -> Result<String, Error> {
         use gix::refs::transaction::PreviousValue;
 
         use crate::Origin;
@@ -298,7 +298,7 @@ impl<'repo> Init<Root, Ref, Box<dyn Transport + Send>> for gix::Remote<'repo> {
             format!("{root_ref}:{root_ref}").as_str(),
         ])?;
         tracing::info!(remote, message = "Successfully initialized");
-        Ok(())
+        Ok(root_ref)
     }
 
     /// Sync with the given remote and get the most up to date HEAD according to it.

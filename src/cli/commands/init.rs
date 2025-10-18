@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use atom::manifest::EkalaManifest;
 use clap::Parser;
@@ -45,16 +45,20 @@ pub(super) fn run(store: Detected, args: Args) -> anyhow::Result<()> {
                 "must be in a git work directory to create an ekala manifest in a git repository"
             ))?;
 
-            let ekala = get_ekala(workdir.join(atom::EKALA_MANIFEST_NAME.as_str()), args.name)?;
+            let ekala = init_ekala(workdir.join(atom::EKALA_MANIFEST_NAME.as_str()), args.name)?;
 
-            remote.ekala_init(ekala.set().name(), None)?
+            remote.ekala_init(ekala.set().name(), None)?;
         },
-        _ => {},
+        _ => {
+            let dir = PathBuf::from(".");
+            let ekala = init_ekala(dir.join(atom::EKALA_MANIFEST_NAME.as_str()), args.name)?;
+            tracing::info!(message = "successfully initialized", project = %ekala.set().name());
+        },
     }
     Ok(())
 }
 
-fn get_ekala<P: AsRef<Path>>(path: P, name: Option<String>) -> anyhow::Result<EkalaManifest> {
+fn init_ekala<P: AsRef<Path>>(path: P, name: Option<String>) -> anyhow::Result<EkalaManifest> {
     use inquire::{Confirm, Text};
 
     let ekala: EkalaManifest = if let Ok(content) = std::fs::read_to_string(&path) {

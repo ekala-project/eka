@@ -114,7 +114,7 @@ pub trait Init<R, O, T: Send> {
     /// Sync with the Ekala store, for implementations that require it.
     fn sync(&self, transport: Option<&mut T>) -> Result<O, Self::Error>;
     /// Initialize the Ekala store.
-    fn ekala_init(&self, name: &str, transport: Option<&mut T>) -> Result<(), Self::Error>;
+    fn ekala_init(&self, name: &str, transport: Option<&mut T>) -> Result<String, Self::Error>;
     /// Returns the root as reported by the remote store, or an error if it is inconsistent.
     fn ekala_root(&self, transport: Option<&mut T>) -> Result<R, Self::Error>;
 }
