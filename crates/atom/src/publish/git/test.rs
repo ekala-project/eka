@@ -131,7 +131,7 @@ async fn publish_atom() -> Result<(), anyhow::Error> {
     let repo = gix::open(repo.as_ref())?;
     let remote = repo.find_remote("origin")?;
     let progress = &tracing::info_span!("test");
-    remote.ekala_init(None)?;
+    remote.ekala_init("foo", None)?;
     remote.get_refs(Some("refs/heads/*:refs/heads/*"), None)?;
 
     let tag = "foo";

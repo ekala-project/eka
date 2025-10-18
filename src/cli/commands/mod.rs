@@ -32,7 +32,7 @@ pub(super) enum Commands {
     /// This command takes a path anywhere on the file-system and creates
     /// a new bare atom there.
     New(new::Args),
-    /// Package and publish atoms to the atom store.
+    /// Package and publish atoms to a remote location.
     ///
     /// This command efficiently packages and publishes atoms using Git:
     ///
@@ -48,10 +48,11 @@ pub(super) enum Commands {
     /// This command will resolve and lock each dependency for the given atom(s) into a well
     /// structured lock file format.
     Resolve(resolve::Args),
-    /// Initialize the Ekala store.
+    /// Initialize an Ekala package set.
     ///
-    /// This command initializes the repository for use as an Ekala store
-    /// fit for publishing atoms to a remote location.
+    /// This command creates an `ekala.toml` to serve as the source of truth for a collection of
+    /// atoms in a repository. Optionally, and by default if detected, it will also initialize the
+    /// specified remote for publishing atoms if not already setup.
     #[command(verbatim_doc_comment)]
     Init(init::Args),
 }

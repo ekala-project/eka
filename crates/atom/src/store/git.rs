@@ -16,6 +16,7 @@ use bstr::BStr;
 use gix::discover::upwards::Options;
 use gix::protocol::handshake::Ref;
 use gix::protocol::transport::client::Transport;
+use gix::refs::Target;
 use gix::sec::Trust;
 use gix::sec::trust::Mapping;
 use gix::{Commit, ObjectId, Repository, ThreadSafeRepository};
@@ -34,7 +35,7 @@ pub(crate) mod test;
 // Constants
 //================================================================================================
 
-pub(super) const V1_ROOT: &str = "refs/tags/ekala/root/v1";
+pub(super) const V1_ROOT: &str = "refs/ekala/project";
 
 //================================================================================================
 // Statics
@@ -257,12 +258,16 @@ impl<'repo> Init<Root, Ref, Box<dyn Transport + Send>> for gix::Remote<'repo> {
     }
 
     /// Initialize the repository by calculating the root, according to the latest HEAD.
-    fn ekala_init(&self, transport: Option<&mut Box<dyn Transport + Send>>) -> Result<(), Error> {
+    fn ekala_init(
+        &self,
+        project: &str,
+        transport: Option<&mut Box<dyn Transport + Send>>,
+    ) -> Result<(), Error> {
         use gix::refs::transaction::PreviousValue;
 
         use crate::Origin;
 
-        let name = self.try_symbol()?;
+        let remote = self.try_symbol()?;
         let head = to_id(self.sync(transport)?);
         let repo = self.repo();
         let root = *repo
@@ -270,8 +275,15 @@ impl<'repo> Init<Root, Ref, Box<dyn Transport + Send>> for gix::Remote<'repo> {
             .map_err(Box::new)?
             .calculate_origin()?;
 
+        let root_ref = format!("{}/{}", V1_ROOT, project);
+
         let root_ref = repo
-            .reference(V1_ROOT, root, PreviousValue::MustNotExist, "init: root")
+            .reference(
+                root_ref,
+                root,
+                PreviousValue::ExistingMustMatch(Target::from(root)),
+                format!("init: ekala project {}", project),
+            )
             .map_err(Box::new)?
             .name()
             .as_bstr()
@@ -282,10 +294,10 @@ impl<'repo> Init<Root, Ref, Box<dyn Transport + Send>> for gix::Remote<'repo> {
             "-C",
             repo.git_dir().to_string_lossy().as_ref(),
             "push",
-            name,
+            remote,
             format!("{root_ref}:{root_ref}").as_str(),
         ])?;
-        tracing::info!(remote = name, message = "Successfully initialized");
+        tracing::info!(remote, message = "Successfully initialized");
         Ok(())
     }
 

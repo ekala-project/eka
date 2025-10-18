@@ -133,6 +133,9 @@ pub enum DocError {
     /// A generic error occurred.
     #[error(transparent)]
     Error(#[from] crate::lock::BoxError),
+    /// A invalid refname was passed.
+    #[error(transparent)]
+    BadRef(#[from] gix::validate::reference::name::Error),
 }
 
 /// Represents the manner in which we resolve a rev for this git fetch
@@ -410,10 +413,10 @@ impl ManifestWriter {
     /// are respected.
     pub async fn new(repo: Option<&ThreadSafeRepository>, path: &Path) -> Result<Self, DocError> {
         use std::fs;
-        let path = if path.file_name() == Some(OsStr::new(crate::MANIFEST_NAME.as_str())) {
+        let path = if path.file_name() == Some(OsStr::new(crate::ATOM_MANIFEST_NAME.as_str())) {
             path.into()
         } else {
-            path.join(crate::MANIFEST_NAME.as_str())
+            path.join(crate::ATOM_MANIFEST_NAME.as_str())
         };
         let lock_path = path.with_file_name(crate::LOCK_NAME.as_str());
         let toml_str = fs::read_to_string(&path).inspect_err(|_| {
@@ -658,7 +661,7 @@ impl ManifestWriter {
             .ok_or(DocError::Missing(self.path.clone()))?;
         let lock_path = self.path.with_file_name(crate::LOCK_NAME.as_str());
         let mut tmp =
-            NamedTempFile::with_prefix_in(format!(".{}", crate::MANIFEST_NAME.as_str()), dir)?;
+            NamedTempFile::with_prefix_in(format!(".{}", crate::ATOM_MANIFEST_NAME.as_str()), dir)?;
         let mut tmp_lock =
             NamedTempFile::with_prefix_in(format!(".{}", crate::LOCK_NAME.as_str()), dir)?;
         tmp.write_all(self.doc.as_mut().to_string().as_bytes())?;

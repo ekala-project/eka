@@ -29,6 +29,8 @@ tracing-subscriber.workspace = true
 
 atom.path = "crates/atom"
 
+inquire = "^0.9.1"
+
 [workspace.dependencies]
 anyhow            = "^1"
 lazy-regex        = "3.4.1"

@@ -397,7 +397,8 @@ impl<'a> StateValidator<Root> for GitPublisher<'a> {
 
         for entry in record.records {
             let path = PathBuf::from(entry.filepath.to_str_lossy().as_ref());
-            if entry.mode.is_blob() && path.file_name() == Some(crate::MANIFEST_NAME.as_ref()) {
+            if entry.mode.is_blob() && path.file_name() == Some(crate::ATOM_MANIFEST_NAME.as_ref())
+            {
                 if let Ok(obj) = publisher.repo.find_object(entry.oid) {
                     match publisher.verify_manifest(&obj, &path) {
                         Ok(atom) => {

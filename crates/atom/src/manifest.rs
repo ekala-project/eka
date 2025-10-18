@@ -72,7 +72,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use toml_edit::{DocumentMut, de};
 
-use crate::manifest::deps::Dependency;
+use crate::manifest::deps::{Dependency, DocError};
 use crate::{Atom, AtomTag};
 
 pub mod deps;
@@ -146,20 +146,23 @@ pub struct Manifest {
 /// A specialized result type for manifest operations.
 pub type AtomResult<T> = Result<T, AtomError>;
 
+/// The entrypoint for an ekala manifest describing a set of atoms.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-struct EkalaManifest {
-    project: EkalaProject,
+pub struct EkalaManifest {
+    set: EkalaSet,
+    #[serde(default, skip_serializing_if = "AtomMap::is_empty")]
     packages: AtomMap,
 }
 
+/// The section of the manifest describing the Ekala set of atoms.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-struct EkalaProject {
+pub struct EkalaSet {
     name: String,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Default)]
 pub(crate) struct AtomMap(BTreeMap<AtomTag, PathBuf>);
 
 //================================================================================================
@@ -265,5 +268,40 @@ impl Serialize for AtomMap {
     {
         let values: Vec<_> = self.as_ref().values().collect();
         values.serialize(serializer)
+    }
+}
+
+impl EkalaManifest {
+    /// Constructs a new Ekala manifest with the given set name
+    pub fn new(name: String) -> Result<Self, DocError> {
+        Ok(EkalaManifest {
+            set: EkalaSet::new(name)?,
+            packages: Default::default(),
+        })
+    }
+
+    /// Return a reference to the EkalaSet struct
+    pub fn set(&self) -> &EkalaSet {
+        &self.set
+    }
+}
+
+impl EkalaSet {
+    fn new(name: String) -> Result<Self, DocError> {
+        use gix::validate::reference;
+        reference::name_partial(name.as_str().into())?;
+
+        Ok(EkalaSet { name })
+    }
+
+    /// return a refernce to the name of this set
+    pub fn name(&self) -> &str {
+        self.name.as_str()
+    }
+}
+
+impl AtomMap {
+    pub fn is_empty(&self) -> bool {
+        self.as_ref().is_empty()
     }
 }

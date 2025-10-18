@@ -45,7 +45,7 @@ fn init_repo() -> Result<(), anyhow::Error> {
     let repo = gix::open(dir.as_ref())?;
     let remote = repo.find_remote("origin")?;
     let mut transport = remote.get_transport().ok();
-    remote.ekala_init(transport.as_mut())?;
+    remote.ekala_init("foo", transport.as_mut())?;
     assert!(remote.ekala_root(transport.as_mut()).is_ok());
     Ok(())
 }

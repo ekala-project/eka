@@ -84,13 +84,13 @@ impl AtomPaths<PathBuf> {
             .unwrap_or(path.as_os_str())
             .to_string_lossy();
 
-        if name == crate::MANIFEST_NAME.as_str() {
+        if name == crate::ATOM_MANIFEST_NAME.as_str() {
             AtomPaths {
                 spec: path.into(),
                 content: path.parent().unwrap_or(Path::new("")).into(),
             }
         } else {
-            let spec = path.join(crate::MANIFEST_NAME.as_str());
+            let spec = path.join(crate::ATOM_MANIFEST_NAME.as_str());
             AtomPaths {
                 spec: spec.clone(),
                 content: path.into(),

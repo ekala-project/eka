@@ -85,6 +85,7 @@ pub mod publish;
 pub mod store;
 pub mod uri;
 
+const EKALA: &str = "ekala";
 const ATOM: &str = "atom";
 /// The base32 alphabet used for encoding Atom hashes.
 ///
@@ -101,4 +102,9 @@ pub static LOCK_NAME: LazyLock<String> = LazyLock::new(|| format!("{}.{}", ATOM,
 /// The conventional filename for an Atom manifest (e.g., `atom.toml`).
 ///
 /// This static variable is lazily initialized to ensure it is constructed only when needed.
-pub static MANIFEST_NAME: LazyLock<String> = LazyLock::new(|| format!("{}.{}", ATOM, TOML));
+pub static ATOM_MANIFEST_NAME: LazyLock<String> = LazyLock::new(|| format!("{}.{}", ATOM, TOML));
+
+/// The conventional filename for an Ekala manifest (e.g., `ekala.toml`).
+///
+/// This static variable is lazily initialized to ensure it is constructed only when needed.
+pub static EKALA_MANIFEST_NAME: LazyLock<String> = LazyLock::new(|| format!("{}.{}", EKALA, TOML));
