@@ -9,6 +9,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use anyhow::Result;
+use atom::manifest::EkalaManifest;
 use atom::{AtomTag, Manifest};
 use clap::Parser;
 use semver::Version;
@@ -45,9 +46,9 @@ pub(super) fn run(args: Args) -> Result<()> {
     } else {
         args.path.file_name().unwrap_or(OsStr::new("")).try_into()?
     };
-    let atom = Manifest::new(tag, args.version, args.description);
+    let atom = Manifest::new(tag.to_owned(), args.version, args.description);
     let atom_str = toml_edit::ser::to_string_pretty(&atom)?;
-    let atom_toml = args.path.join("atom.toml");
+    let atom_toml = args.path.join(atom::ATOM_MANIFEST_NAME.as_str());
 
     fs::create_dir_all(&args.path)?;
 
@@ -62,6 +63,33 @@ pub(super) fn run(args: Args) -> Result<()> {
 
     let mut toml_file = fs::File::create(atom_toml)?;
     toml_file.write_all(atom_str.as_bytes())?;
+    tracing::info!(message = "successfully created new atom", %tag);
+
+    let ekala_path = find_upwards(atom::EKALA_MANIFEST_NAME.as_str())?;
+    if let Some(path) = ekala_path {
+        let mut ekala: EkalaManifest =
+            toml_edit::de::from_str(std::fs::read_to_string(path)?.as_str())?;
+        ekala.add_package(args.path)?;
+        tracing::info!(message = "added to package to set", %tag, set = ekala.set().name());
+    } else {
+        tracing::warn!(
+            message = "package set not yet initialized, atom won't be publishable until `eka \
+                       init` is invoked"
+        );
+    }
 
     Ok(())
+}
+
+fn find_upwards(filename: &str) -> anyhow::Result<Option<PathBuf>> {
+    let start_dir = std::env::current_dir()?;
+
+    for ancestor in start_dir.ancestors() {
+        let file_path = ancestor.join(filename);
+        if file_path.exists() {
+            return Ok(Some(file_path));
+        }
+    }
+
+    Ok(None)
 }

@@ -284,6 +284,14 @@ impl EkalaManifest {
     pub fn set(&self) -> &EkalaSet {
         &self.set
     }
+
+    /// Add an atom to the manifest, assuming it's valid
+    pub fn add_package<P: AsRef<Path>>(&mut self, path: P) -> AtomResult<AtomTag> {
+        let packages = self.packages.as_mut();
+        let name = Manifest::get_atom_tag(path.as_ref().join(crate::ATOM_MANIFEST_NAME.as_str()))?;
+        packages.insert(name.to_owned(), path.as_ref().into());
+        Ok(name)
+    }
 }
 
 impl EkalaSet {
