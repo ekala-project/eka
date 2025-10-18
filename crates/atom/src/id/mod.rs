@@ -29,12 +29,16 @@
 //!
 //! ## Tag Validation Rules
 //!
-//! Atom tags must adhere to the following rules:
-//! - Be valid UTF-8 encoded Unicode strings.
-//! - Not exceed 128 bytes in length.
-//! - Not be empty.
-//! - Start with a Unicode letter.
-//! - Contain only Unicode letters, numbers, hyphens (`-`), and underscores (`_`).
+//! Atom tags must adhere to the following rules, which are based on the
+//! [Unicode Standard Annex #31](https://unicode.org/reports/tr31/) for Unicode
+//! Identifier and Pattern Syntax.
+//!
+//! - The input string is first normalized to NFKC (Normalization Form KC).
+//! - The normalized string must not exceed 128 bytes in length.
+//! - The normalized string must not be empty.
+//! - The first character must be a character with the `XID_Start` property.
+//! - All subsequent characters must have the `XID_Continue` property, with one exception: the
+//!   hyphen (`-`) is allowed.
 //!
 //! ## Usage Example
 //!
@@ -68,7 +72,6 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize, Serializer};
 use thiserror::Error;
-use unic_ucd_category::GeneralCategory;
 
 const ID_MAX: usize = 128;
 
@@ -209,56 +212,47 @@ where
 impl AtomTag {
     /// Validates that a character is a valid starting character.
     fn validate_start(c: char) -> Result<(), Error> {
-        if AtomTag::is_invalid_start(c) {
+        if !AtomTag::is_valid_start(c) {
             return Err(Error::InvalidStart(c));
         }
         Ok(())
     }
 
     /// Validates the entire string as a valid `AtomTag`.
-    pub(super) fn validate(s: &str) -> Result<(), Error> {
-        if s.len() > ID_MAX {
+    pub(super) fn validate(s: &str) -> Result<AtomTag, Error> {
+        use unicode_normalization::UnicodeNormalization;
+        let normalized: String = s.nfkc().collect();
+
+        if normalized.len() > ID_MAX {
             return Err(Error::TooLong);
         }
 
-        match s.chars().next().map(AtomTag::validate_start) {
+        match normalized.chars().next().map(AtomTag::validate_start) {
             Some(Ok(())) => (),
             Some(Err(e)) => return Err(e),
             None => return Err(Error::Empty),
         }
 
-        let invalid_chars: String = s.chars().filter(|&c| !AtomTag::is_valid_char(c)).collect();
+        let invalid_chars: String = normalized
+            .chars()
+            .filter(|&c| !AtomTag::is_valid_char(c))
+            .collect();
 
         if !invalid_chars.is_empty() {
             return Err(Error::InvalidCharacters(invalid_chars));
         }
 
-        Ok(())
+        Ok(AtomTag(normalized))
     }
 
     /// Checks if a character is an invalid starting character.
-    pub(super) fn is_invalid_start(c: char) -> bool {
-        matches!(
-            GeneralCategory::of(c),
-            GeneralCategory::DecimalNumber | GeneralCategory::LetterNumber
-        ) || c == '_'
-            || c == '-'
-            || !AtomTag::is_valid_char(c)
+    pub(super) fn is_valid_start(c: char) -> bool {
+        unicode_ident::is_xid_start(c)
     }
 
     /// Checks if a character is valid for use in an `AtomTag`.
     pub(super) fn is_valid_char(c: char) -> bool {
-        matches!(
-            GeneralCategory::of(c),
-            GeneralCategory::LowercaseLetter
-                | GeneralCategory::UppercaseLetter
-                | GeneralCategory::TitlecaseLetter
-                | GeneralCategory::ModifierLetter
-                | GeneralCategory::OtherLetter
-                | GeneralCategory::DecimalNumber
-                | GeneralCategory::LetterNumber
-        ) || c == '-'
-            || c == '_'
+        unicode_ident::is_xid_continue(c) || c == '-'
     }
 }
 
@@ -368,8 +362,7 @@ impl FromStr for AtomTag {
     type Err = Error;
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        AtomTag::validate(s)?;
-        Ok(AtomTag(s.to_string()))
+        AtomTag::validate(s)
     }
 }
 
@@ -404,8 +397,7 @@ impl TryFrom<String> for AtomTag {
     type Error = Error;
 
     fn try_from(s: String) -> Result<Self, Self::Error> {
-        AtomTag::validate(&s)?;
-        Ok(AtomTag(s))
+        AtomTag::validate(&s)
     }
 }
 

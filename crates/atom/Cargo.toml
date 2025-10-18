@@ -4,26 +4,27 @@ name    = "atom"
 version = "0.3.0"
 
 [dependencies]
-addr              = "^0.15"
-base32            = "^0.5"
-blake3            = "^1.5"
-bstr              = "^1"
-nom               = "^7"
-path-clean        = "^1"
-unic-ucd-category = "^0.9"
+addr       = "^0.15"
+base32     = "^0.5"
+blake3     = "^1.5"
+bstr       = "^1"
+nom        = "^7"
+path-clean = "^1"
 
-either.workspace            = true
-lazy-regex.workspace        = true
-prodash.workspace           = true
-semver.workspace            = true
-serde.workspace             = true
-tempfile.workspace          = true
-thiserror.workspace         = true
-tokio.workspace             = true
-toml_edit.workspace         = true
-tracing.workspace           = true
-tracing-indicatif.workspace = true
-url.workspace               = true
+either.workspace                = true
+lazy-regex.workspace            = true
+prodash.workspace               = true
+semver.workspace                = true
+serde.workspace                 = true
+tempfile.workspace              = true
+thiserror.workspace             = true
+tokio.workspace                 = true
+toml_edit.workspace             = true
+tracing.workspace               = true
+tracing-indicatif.workspace     = true
+unicode-ident.workspace         = true
+unicode-normalization.workspace = true
+url.workspace                   = true
 
 config = { path = "../config" }
 gix = { workspace = true, default-features = false, features = ["serde"] }

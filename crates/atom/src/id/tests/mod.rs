@@ -77,7 +77,6 @@ fn invalid_unicode_tags() {
         "ก๏",                 // Contains Thai character not in allowed categories
         "Ա։",                 // Contains Armenian full stop
         "ᚠ᛫",                 // Contains Runic punctuation
-        "あア·",              // Contains middle dot
         "한글漢字♥",          // Contains heart symbol
         "Café_au_lait-123☕", // Contains coffee symbol
     ];

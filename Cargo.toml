@@ -32,13 +32,15 @@ atom.path = "crates/atom"
 inquire = "^0.9.1"
 
 [workspace.dependencies]
-anyhow            = "^1"
-lazy-regex        = "3.4.1"
-tempfile          = "^3.13"
-thiserror         = "^1"
-tracing           = "^0.1"
-tracing-appender  = "^0.2"
-tracing-indicatif = "^0.3"
+anyhow                = "^1"
+lazy-regex            = "3.4.1"
+tempfile              = "^3.13"
+thiserror             = "^1"
+tracing               = "^0.1"
+tracing-appender      = "^0.2"
+tracing-indicatif     = "^0.3"
+unicode-ident         = "1.0.19"
+unicode-normalization = "0.1.24"
 
 clap = { version = "^4", features = [
   "derive",
