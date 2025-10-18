@@ -31,7 +31,7 @@ trait MockAtom {
 impl MockAtom for gix::Repository {
     fn mock(
         &self,
-        tag: &str,
+        label: &str,
         version: &str,
         description: &str,
     ) -> Result<(NamedTempFile, ObjectId), anyhow::Error> {
@@ -52,7 +52,7 @@ impl MockAtom for gix::Repository {
 
         let manifest = Manifest {
             package: Atom {
-                tag: tag.try_into()?,
+                label: label.try_into()?,
                 version: Version::from_str(version)?,
                 description: (!description.is_empty()).then_some(description.into()),
                 sets: HashMap::new(),
@@ -108,7 +108,7 @@ impl MockAtom for gix::Repository {
         let atom_oid = self
             .commit(
                 head_ref.name().as_bstr(),
-                format!("init: {}", tag),
+                format!("init: {}", label),
                 oid,
                 vec![head],
             )?
@@ -124,7 +124,7 @@ impl MockAtom for gix::Repository {
 
 #[tokio::test]
 async fn publish_atom() -> Result<(), anyhow::Error> {
-    use crate::id::AtomTag;
+    use crate::id::Label;
     use crate::publish::git::{Builder, GitPublisher};
     use crate::store::{Init, QueryStore};
     let (repo, _remote) = git::test::init_repo_and_remote()?;
@@ -134,12 +134,12 @@ async fn publish_atom() -> Result<(), anyhow::Error> {
     remote.ekala_init("foo", None)?;
     remote.get_refs(Some("refs/heads/*:refs/heads/*"), None)?;
 
-    let tag = "foo";
-    let (file_path, src) = repo.mock(tag, "0.1.0", "some atom")?;
+    let label = "foo";
+    let (file_path, src) = repo.mock(label, "0.1.0", "some atom")?;
 
     let (paths, publisher) = GitPublisher::new(&repo, "origin", "HEAD", progress)?.build()?;
     let path = paths
-        .get(&AtomTag::try_from(tag)?)
+        .get(&Label::try_from(label)?)
         .context("path is messed up")?;
     let result = publisher.publish_atom(path, &HashMap::new())?;
     let mut errors = Vec::with_capacity(1);

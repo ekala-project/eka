@@ -37,7 +37,7 @@ The `GitPublisher` is the concrete implementation of the `Builder` and `Publish`
 **Key Responsibilities:**
 
 - **State Validation:** The `GitPublisher`'s `build` method validates the Git repository's state, ensuring that the specified revision exists and that all atom manifests are well-formed.
-- **Temporal Conflict Resolution:** To prevent ambiguity, the `publish` command enforces that no two atoms within the same commit (the same point in history) can share the same `atom.tag`. This ensures that every atom has a unique, calculable cryptographic ID.
+- **Temporal Conflict Resolution:** To prevent ambiguity, the `publish` command enforces that no two atoms within the same commit (the same point in history) can share the same `package.label`. This ensures that every atom has a unique, calculable cryptographic ID.
 - **Remote Atom Discovery:** Before publishing, the `GitPublisher` queries the remote repository for a list of existing atoms. This allows it to safely skip atoms that have already been published, preventing accidental overwrites and unnecessary network traffic.
 - **Atom Commit Generation:** For each atom, the `GitPublisher` creates a new, detached commit. This commit points to the exact same tree object as the source commit, meaning there is no copying of actual source files (blobs) or trees. It is simply a new, lightweight reference to pre-existing Git objects. The commit message is augmented with metadata, and the timestamp is held constant to ensure that the commit hash is fully reproducible.
 - **Git Reference Management:** The `GitPublisher` creates a set of Git references for each published atom, which serve as the public interface to the atom store.

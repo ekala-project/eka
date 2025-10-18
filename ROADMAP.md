@@ -9,11 +9,11 @@ This living document outlines the development roadmap for `eka`, `atom-nix`, and
 - [x] **Atom Format:** Implement the core data structure for atoms. A detached (from history) reference pointing to only relevant (to the atom) underlying git objects.
 - [x] **Git-Native Publishing:** Atoms are published directly to a git repository, leveraging git's object model for storage and transport, as detailed in [ADR #4](adrs/0004-publish-command.md).
   - [x] **Source History Integrity:** All atoms must derive from a common root commit (the first commit in the repository), ensuring a single, verifiable source of truth for an entire project's dependency graph. This root commit's hash is used as a global identifier for the atom set.
-  - [x] **Cryptographically Secure & Content-Addressed IDs:** Implement unique atom IDs derived from their declared Unicode tags and a key from the repository's root commit. This allows for unambiguous, cryptographically secure tracking of atoms across projects and ensures that changing a tag correctly changes the atom's identity.
-  - [x] **Temporal Conflict Resolution:** Enforce that no two atoms within the same commit (the same point in history) can share the same tag, preventing namespace collisions.
+  - [x] **Cryptographically Secure & Content-Addressed IDs:** Implement unique atom IDs derived from their declared Unicode labels and a key from the repository's root commit. This allows for unambiguous, cryptographically secure tracking of atoms across projects and ensures that changing a tag correctly changes the atom's identity.
+  - [x] **Temporal Conflict Resolution:** Enforce that no two atoms within the same commit (the same point in history) can share the same label, preventing namespace collisions.
   - [x] **Verifiable, GC-Proof Publishing:** Publish atoms directly from git tree objects, ensuring the published content is an exact, verifiable representation of committed source code. A git reference is created under `refs/eka/meta/<tag>` pointing back to the source commit, protecting it from garbage collection.
   - [x] **Reproducible Atom Commits:** Atom commit headers are augmented with the source path and content hash. The commit timestamp is held constant to ensure the final atom commit hash is fully reproducible.
-  - [x] **Efficient Version Discovery:** Publish atoms to versioned tags under `refs/eka/atoms/<tag>/<version>`. This allows for extremely cheap and efficient discovery of available atom versions by querying git references, often with server-side filtering, without needing to fetch any git objects.
+  - [x] **Efficient Version Discovery:** Publish atoms to versioned refs under `refs/eka/atoms/<tag>/<version>`. This allows for extremely cheap and efficient discovery of available atom versions by querying git references, often with server-side filtering, without needing to fetch any git objects.
 
 ### [Configuration & Dependency Management](https://github.com/ekala-project/eka/issues/24)
 
@@ -46,7 +46,7 @@ This living document outlines the development roadmap for `eka`, `atom-nix`, and
   - [ ] **Metadata Aggregation:** `eos` will manage atom metadata from multiple sources, enabling discovery and search.
 - [ ] **E2E Integrity:** Establish a strong cryptographic link from the original source code to the final artifact. Since git's default SHA-1 is not cryptographically sound, a more secure hashing strategy will be required to ensure end-to-end verifiability.
   - [ ] **Secure Hashing:** Rehash the git blobs and trees that constitute an atom using a secure algorithm like BLAKE3.
-  - [ ] **Integrity Reference:** Store this secure hash in the atom's commit header and in a new git reference (`refs/eka/meta/<atom-tag>/<version>/<blake3-content-sum>`) pointing to the atom commit.
+  - [ ] **Integrity Reference:** Store this secure hash in the atom's commit header and in a new git reference (`refs/eka/meta/<label>/<version>/<blake3-content-sum>`) pointing to the atom commit.
 - [ ] **`eka verify` Command:** Implement a command to ensure the integrity of an atom and its dependencies.
   - [ ] **Source Verification:** The command will download the original source tree and verify that the git tree objects match the content hash advertised by the atom.
   - [ ] **Recursive Verification:** The verification process will be recursive, ensuring the integrity of the entire dependency tree.

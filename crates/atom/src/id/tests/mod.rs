@@ -1,7 +1,7 @@
-//! Tests for the `AtomTag` identifier, ensuring validation logic is correct.
+//! Tests for the `Label` identifier, ensuring validation logic is correct.
 //!
 //! These tests cover valid and invalid formats, including various Unicode characters,
-//! edge cases, and specific error conditions to ensure the tag parsing is robust.
+//! edge cases, and specific error conditions to ensure the label parsing is robust.
 
 use super::*;
 
@@ -12,25 +12,25 @@ use super::*;
 #[test]
 fn edge_cases() {
     assert_eq!(
-        AtomTag::try_from("α"),
-        Ok(AtomTag("α".into())),
+        Label::try_from("α"),
+        Ok(Label("α".into())),
         "Single valid Unicode character should be accepted"
     );
 
     assert_eq!(
-        AtomTag::try_from("ñ_1"),
-        Ok(AtomTag("ñ_1".into())),
+        Label::try_from("ñ_1"),
+        Ok(Label("ñ_1".into())),
         "Mix of Unicode, underscore, and number should be valid"
     );
 
     assert_eq!(
-        AtomTag::try_from("\u{200B}"),
+        Label::try_from("\u{200B}"),
         Err(Error::InvalidStart('\u{200B}')),
         "Zero-width space should be invalid start"
     );
 
     assert_eq!(
-        AtomTag::try_from("α\u{200B}"),
+        Label::try_from("α\u{200B}"),
         Err(Error::InvalidCharacters("\u{200B}".into())),
         "Zero-width space should be invalid in the middle"
     );
@@ -38,20 +38,20 @@ fn edge_cases() {
 
 #[test]
 fn empty() {
-    let res = AtomTag::try_from("");
+    let res = Label::try_from("");
     assert!(res == Err(Error::Empty));
 }
 
 #[test]
 fn invalid_chars() {
-    let res = AtomTag::try_from("a-!@#$%^&*()_-asdf");
+    let res = Label::try_from("a-!@#$%^&*()_-asdf");
     assert!(res == Err(Error::InvalidCharacters("!@#$%^&*()".into())));
 }
 
 #[test]
 fn invalid_start() {
     let assert = |s: &str| {
-        let res = AtomTag::try_from(s);
+        let res = Label::try_from(s);
         assert!(res == Err(Error::InvalidStart(s.chars().next().unwrap())));
     };
     for a in ["9atom", "'atom", "_atom", "-atom", "%atom"] {
@@ -60,8 +60,8 @@ fn invalid_start() {
 }
 
 #[test]
-fn invalid_unicode_tags() {
-    let invalid_tags = [
+fn invalid_unicode_labels() {
+    let invalid_labels = [
         "123αβγ",             // Starts with number
         "_ΑΒΓ",               // Starts with underscore
         "-кириллица",         // Starts with hyphen
@@ -81,11 +81,11 @@ fn invalid_unicode_tags() {
         "Café_au_lait-123☕", // Contains coffee symbol
     ];
 
-    for tag in invalid_tags {
+    for label in invalid_labels {
         assert!(
-            AtomTag::try_from(tag).is_err(),
+            Label::try_from(label).is_err(),
             "Expected '{}' to be invalid",
-            tag
+            label
         );
     }
 }
@@ -93,33 +93,33 @@ fn invalid_unicode_tags() {
 #[test]
 fn specific_unicode_errors() {
     assert_eq!(
-        AtomTag::try_from("123αβγ"),
+        Label::try_from("123αβγ"),
         Err(Error::InvalidStart('1')),
         "Should fail for starting with a number"
     );
 
     assert_eq!(
-        AtomTag::try_from("αβγ!@#"),
+        Label::try_from("αβγ!@#"),
         Err(Error::InvalidCharacters("!@#".into())),
         "Should fail for invalid characters"
     );
 
     assert_eq!(
-        AtomTag::try_from("한글 漢字"),
+        Label::try_from("한글 漢字"),
         Err(Error::InvalidCharacters(" ".into())),
         "Should fail for space between valid characters"
     );
 
     assert_eq!(
-        AtomTag::try_from("Café♥"),
+        Label::try_from("Café♥"),
         Err(Error::InvalidCharacters("♥".into())),
         "Should fail for heart symbol"
     );
 }
 
 #[test]
-fn valid_unicode_tags() {
-    let valid_tags = [
+fn valid_unicode_labels() {
+    let valid_labels = [
         "αβγ",              // Greek lowercase
         "ΑΒΓ",              // Greek uppercase
         "кириллица",        // Cyrillic
@@ -141,11 +141,11 @@ fn valid_unicode_tags() {
         "Café_au_lait-123", // Mix of Latin, underscore, hyphen, and numbers
     ];
 
-    for tag in valid_tags {
+    for label in valid_labels {
         assert!(
-            AtomTag::try_from(tag).is_ok(),
+            Label::try_from(label).is_ok(),
             "Expected '{}' to be valid",
-            tag
+            label
         );
     }
 }

@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use atom::manifest::EkalaManifest;
-use atom::{AtomTag, Manifest};
+use atom::{Label, Manifest};
 use clap::Parser;
 use semver::Version;
 
@@ -30,9 +30,9 @@ pub struct Args {
     /// The version to initialize the atom at.
     #[arg(short = 'V', long, default_value = "0.1.0")]
     version: Version,
-    /// The atom's `tag` (defaults the the last part of path)
+    /// The atom's `label` (defaults the the last part of path)
     #[arg(short, long)]
-    tag: Option<AtomTag>,
+    label: Option<Label>,
 }
 
 //================================================================================================
@@ -41,12 +41,12 @@ pub struct Args {
 
 /// The main entry point for the `new` subcommand.
 pub(super) fn run(args: Args) -> Result<()> {
-    let tag: AtomTag = if let Some(tag) = args.tag {
-        tag
+    let label: Label = if let Some(label) = args.label {
+        label
     } else {
         args.path.file_name().unwrap_or(OsStr::new("")).try_into()?
     };
-    let atom = Manifest::new(tag.to_owned(), args.version, args.description);
+    let atom = Manifest::new(label.to_owned(), args.version, args.description);
     let atom_str = toml_edit::ser::to_string_pretty(&atom)?;
     let atom_toml = args.path.join(atom::ATOM_MANIFEST_NAME.as_str());
 
@@ -63,14 +63,14 @@ pub(super) fn run(args: Args) -> Result<()> {
 
     let mut toml_file = fs::File::create(atom_toml)?;
     toml_file.write_all(atom_str.as_bytes())?;
-    tracing::info!(message = "successfully created new atom", %tag);
+    tracing::info!(message = "successfully created new atom", %label);
 
     let ekala_path = find_upwards(atom::EKALA_MANIFEST_NAME.as_str())?;
     if let Some(path) = ekala_path {
         let mut ekala: EkalaManifest =
             toml_edit::de::from_str(std::fs::read_to_string(path)?.as_str())?;
         ekala.add_package(args.path)?;
-        tracing::info!(message = "added to package to set", %tag, set = ekala.set().name());
+        tracing::info!(message = "added to package to set", %label, set = ekala.set().name());
     } else {
         tracing::warn!(
             message = "package set not yet initialized, atom won't be publishable until `eka \

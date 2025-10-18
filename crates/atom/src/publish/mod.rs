@@ -79,7 +79,7 @@ use std::sync::LazyLock;
 
 use self::git::GitContent;
 use crate::AtomId;
-use crate::id::AtomTag;
+use crate::id::Label;
 
 pub mod error;
 pub mod git;
@@ -143,18 +143,18 @@ pub struct Stats {
 /// This is used instead of an `Option` to provide information about *which*
 /// atom was skipped, which is useful for reporting but does not represent a
 /// failure condition.
-type MaybeSkipped<T> = Result<T, AtomTag>;
+type MaybeSkipped<T> = Result<T, Label>;
 
 /// The outcome of an attempt to publish a single atom.
 ///
-/// This is either a [`Record`] for a successful publication or an [`AtomTag`]
+/// This is either a [`Record`] for a successful publication or an [`Label`]
 /// if the atom was safely skipped.
 type PublishOutcome<R> = MaybeSkipped<Record<R>>;
 
 /// A [`HashMap`] containing all valid atoms in the current workspace.
 ///
-/// The map links an [`AtomTag`] to the file path of its manifest.
-type ValidAtoms = HashMap<AtomTag, PathBuf>;
+/// The map links an [`Label`] to the file path of its manifest.
+type ValidAtoms = HashMap<Label, PathBuf>;
 
 //================================================================================================
 // Traits
@@ -207,7 +207,7 @@ pub trait Publish<R>: private::Sealed {
     fn publish<C>(
         &self,
         paths: C,
-        remotes: HashMap<AtomTag, (semver::Version, Self::Id)>,
+        remotes: HashMap<Label, (semver::Version, Self::Id)>,
     ) -> Vec<Result<PublishOutcome<R>, Self::Error>>
     where
         C: IntoIterator<Item = PathBuf>;
@@ -219,13 +219,13 @@ pub trait Publish<R>: private::Sealed {
     /// # Return Value
     ///
     /// - An [`Ok`] variant containing a [`PublishOutcome`], which is either the [`Record<R>`] of
-    ///   the successfully published atom or the [`AtomTag`] if it was safely skipped.
+    ///   the successfully published atom or the [`Label`] if it was safely skipped.
     /// - An [`Err`] variant containing a [`Self::Error`] if the atom could not be published for any
     ///   reason (e.g., an invalid manifest).
     fn publish_atom<P: AsRef<Path>>(
         &self,
         path: P,
-        remotes: &HashMap<AtomTag, (semver::Version, Self::Id)>,
+        remotes: &HashMap<Label, (semver::Version, Self::Id)>,
     ) -> Result<PublishOutcome<R>, Self::Error>;
 }
 

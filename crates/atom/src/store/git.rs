@@ -26,7 +26,7 @@ use thiserror::Error as ThisError;
 use crate::id::Origin;
 use crate::lock::GitDigest;
 use crate::store::{Init, NormalizeStorePath, QueryStore, QueryVersion, UnpackedRef};
-use crate::{AtomId, AtomTag};
+use crate::{AtomId, Label};
 
 #[cfg(test)]
 pub(crate) mod test;
@@ -633,13 +633,13 @@ impl super::UnpackRef<ObjectId, Root> for Ref {
         let version = Version::parse(v_str).ok()?;
         path.pop();
         let a_str = path.file_name()?.to_str()?;
-        let tag = AtomTag::try_from(a_str).ok()?;
-        let id = p.or(t).map(ToOwned::to_owned)?;
+        let label = Label::try_from(a_str).ok()?;
+        let rev = p.or(t).map(ToOwned::to_owned)?;
 
         Some(UnpackedRef {
-            id: AtomId::construct(root, tag).ok()?,
+            id: AtomId::construct(root, label).ok()?,
             version,
-            rev: id,
+            rev,
         })
     }
 }

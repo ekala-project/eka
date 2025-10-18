@@ -61,15 +61,15 @@ pub(super) async fn run(store: Detected, args: PublishArgs) -> Result<Stats, Pub
                         let Content::Git(content) = atom.content();
                         let name = content.content().name.clone();
                         tracing::info!(
-                            atom.tag = %atom.id().tag(),
+                            atom.label = %atom.id().label(),
                             path = %content.path().display(),
                             r#ref = %name,
                             "success"
                         );
                     },
-                    Ok(Skipped(tag)) => {
+                    Ok(Skipped(label)) => {
                         stats.skipped += 1;
-                        tracing::info!(atom.tag = %tag, "Skipping existing atom")
+                        tracing::info!(atom.label = %label, "Skipping existing atom")
                     },
                     Err(e) => {
                         stats.failed += 1;

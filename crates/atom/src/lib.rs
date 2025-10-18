@@ -46,12 +46,12 @@
 //! ## Basic Usage
 //!
 //! ```rust,no_run
-//! use atom::{Atom, AtomTag, Manifest};
+//! use atom::{Atom, Label, Manifest};
 //! use semver::Version;
 //!
 //! // Create a new atom manifest
 //! let manifest = Manifest::new(
-//!     AtomTag::try_from("my-atom").unwrap(),
+//!     Label::try_from("my-atom").unwrap(),
 //!     Version::new(1, 0, 0),
 //!     Some("A sample atom".to_string()),
 //! );
@@ -70,7 +70,7 @@
 use std::sync::LazyLock;
 
 pub use self::core::Atom;
-pub use self::id::{AtomId, AtomTag, Compute, Origin};
+pub use self::id::{AtomId, Compute, Label, Origin};
 pub use self::lock::Lockfile;
 pub use self::manifest::Manifest;
 pub use self::manifest::deps::ManifestWriter;

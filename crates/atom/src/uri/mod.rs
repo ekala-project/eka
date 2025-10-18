@@ -42,11 +42,11 @@
 //!
 //! // Simple atom reference
 //! let uri: Uri = "my-atom".parse().unwrap();
-//! assert_eq!(uri.tag().to_string(), "my-atom");
+//! assert_eq!(uri.label().to_string(), "my-atom");
 //!
 //! // Atom with version
 //! let uri: Uri = "my-atom@^1.0.0".parse().unwrap();
-//! assert_eq!(uri.tag().to_string(), "my-atom");
+//! assert_eq!(uri.label().to_string(), "my-atom");
 //!
 //! // GitHub reference with alias
 //! let uri: Uri = "gh:user/repo::my-atom".parse().unwrap();
@@ -89,7 +89,7 @@ use semver::VersionReq;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use super::id::{AtomTag, Name};
+use super::id::{Label, Name};
 use crate::id::Error;
 
 #[cfg(test)]
@@ -110,7 +110,7 @@ static ATOM_VERSION_REGEX: Lazy<Regex> =
 #[cfg_attr(test, derive(Serialize, Deserialize))]
 pub struct AliasedUrl {
     pub(crate) url: Url,
-    pub(crate) from: Option<(Name, AtomTag)>,
+    pub(crate) from: Option<(Name, Label)>,
 }
 
 /// Represents the parsed components of an Atom URI.
@@ -121,7 +121,7 @@ pub struct Uri {
     /// The URL to the repository containing the Atom.
     url: Option<Url>,
     /// The Atom's ID.
-    tag: AtomTag,
+    label: Label,
     /// The requested Atom version.
     version: Option<VersionReq>,
 }
@@ -138,9 +138,9 @@ pub enum UriError {
     /// The Url is invalid.
     #[error("Parsing URL failed")]
     NoUrl,
-    /// Malformed atom tag.
+    /// Malformed atom label.
     #[error(transparent)]
-    BadTag(#[from] Error),
+    BadLabel(#[from] Error),
     /// The version requested is not valid.
     #[error(transparent)]
     InvalidVersionReq(#[from] semver::Error),
@@ -159,7 +159,7 @@ struct Aliases(&'static HashMap<&'static str, &'static str>);
 #[cfg_attr(test, derive(Serialize, Deserialize))]
 struct AtomRef<'a> {
     /// The specific Atom within the repository.
-    tag: Option<&'a str>,
+    label: Option<&'a str>,
     /// The version of the Atom, if specified.
     version: Option<&'a str>,
 }
@@ -196,7 +196,7 @@ impl AliasedUrl {
         &self.url
     }
 
-    pub(crate) fn _from(&self) -> Option<(&Name, &AtomTag)> {
+    pub(crate) fn _from(&self) -> Option<(&Name, &Label)> {
         if let Some((ref n, ref t)) = self.from {
             Some((n, t))
         } else {
@@ -266,26 +266,26 @@ impl Deref for Aliases {
 }
 
 impl<'a> AtomRef<'a> {
-    fn render(&self) -> Result<(AtomTag, Option<VersionReq>), UriError> {
-        let tag = AtomTag::try_from(self.tag.ok_or(UriError::NoAtom)?)?;
+    fn render(&self) -> Result<(Label, Option<VersionReq>), UriError> {
+        let label = Label::try_from(self.label.ok_or(UriError::NoAtom)?)?;
         let version = if let Some(v) = self.version {
             VersionReq::parse(v)?.into()
         } else {
             None
         };
-        Ok((tag, version))
+        Ok((label, version))
     }
 }
 
 impl<'a> From<&'a str> for AtomRef<'a> {
     fn from(s: &'a str) -> Self {
-        let (tag, version) = match split_at(s) {
+        let (label, version) = match split_at(s) {
             Ok((rest, Some(atom))) => (Some(atom), not_empty(rest)),
             Ok((rest, None)) => (not_empty(rest), None),
             _ => (None, None),
         };
 
-        AtomRef { tag, version }
+        AtomRef { label, version }
     }
 }
 
@@ -314,7 +314,7 @@ impl Display for Uri {
             f,
             "{}::{}{}",
             &url.trim_end_matches('/'),
-            self.tag,
+            self.label,
             &version
         )
     }
@@ -340,8 +340,8 @@ impl<'a> TryFrom<&'a str> for Uri {
 impl Uri {
     /// Returns the Atom identifier parsed from the URI.
     #[must_use]
-    pub fn tag(&self) -> &AtomTag {
-        &self.tag
+    pub fn label(&self) -> &Label {
+        &self.label
     }
 
     /// Returns a reference to the Url parsed out of the Atom URI.
@@ -371,7 +371,7 @@ impl<'a> TryFrom<Ref<'a>> for Uri {
 
         Ok(Uri {
             url,
-            tag: id,
+            label: id,
             version,
         })
     }
@@ -555,7 +555,7 @@ fn parse(input: &str) -> Ref<'_> {
         url.user,
         url.pass = url.pass.map(|_| "<redacted>"),
         url.frag,
-        atom.tag,
+        atom.label,
         atom.version,
         "{}",
         input

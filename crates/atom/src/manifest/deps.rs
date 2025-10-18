@@ -61,7 +61,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use toml_edit::DocumentMut;
 use url::Url;
 
-use crate::id::{AtomTag, Name};
+use crate::id::{Label, Name};
 use crate::lock::{Dep, SetDetails};
 use crate::manifest::sets::{ResolvedSets, SetResolver};
 use crate::store::git::Root;
@@ -72,7 +72,7 @@ use crate::{AtomId, Lockfile, Manifest};
 // Types
 //================================================================================================
 
-type AtomFrom = HashMap<Name, HashMap<AtomTag, VersionReq>>;
+type AtomFrom = HashMap<Name, HashMap<Label, VersionReq>>;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
 #[serde(deny_unknown_fields)]
@@ -208,7 +208,7 @@ pub struct NixFetch {
     ///
     /// This field is omitted from serialization if None.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub from_version: Option<(Name, AtomTag)>,
+    pub from_version: Option<(Name, Label)>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -464,7 +464,7 @@ impl ManifestWriter {
             Dep::Atom(atom_dep) => {
                 if let Some(SetDetails { name, .. }) = self.lock.sets.get(&atom_dep.set()) {
                     if let Some(set) = manifest.deps().from().get(name) {
-                        set.contains_key(atom_dep.tag())
+                        set.contains_key(atom_dep.label())
                     } else {
                         false
                     };
@@ -489,7 +489,7 @@ impl ManifestWriter {
             {
                 tracing::warn!(
                     message = Self::UPDATE_DEPENDENCY,
-                    tag = %id.tag(),
+                    label = %id.label(),
                     set = %name,
                     r#type = "atom"
                 );
@@ -504,7 +504,7 @@ impl ManifestWriter {
             tracing::warn!(
                 message = Self::RESOLUTION_ERR_MSG,
                 set = %name,
-                atom = %id.tag(),
+                atom = %id.label(),
                 requested.version = %req,
                 avaliable.versions = %toml_edit::ser::to_string(&versions).unwrap_or_default()
             );
@@ -538,11 +538,11 @@ impl ManifestWriter {
         for (name, set) in manifest.deps.from {
             let maybe_root = self.resolved.roots().get(&name).map(ToOwned::to_owned);
             if let Some(root) = maybe_root {
-                for (tag, req) in set {
-                    let id = AtomId::construct(&root, tag.to_owned()).map_err(|e| {
+                for (label, req) in set {
+                    let id = AtomId::construct(&root, label.to_owned()).map_err(|e| {
                         DocError::AtomIdConstruct(format!(
                             "set: {}, atom: {}, err: {}",
-                            &name, &tag, e
+                            &name, &label, e
                         ))
                     })?;
                     self.synchronize_atom(req, id, name.to_owned());
@@ -617,10 +617,10 @@ impl ManifestWriter {
     pub fn add_uri(&mut self, uri: Uri, _set: Option<Name>) -> Result<(), DocError> {
         let (_atom_req, lock_entry) = uri.resolve(None).map_err(Box::new)?;
 
-        let _tag = lock_entry.tag().to_owned();
+        let _label = lock_entry.label().to_owned();
         let _id = lock_entry.id().to_owned();
 
-        // self.doc.write_dep(&tag, &dep)?;
+        // self.doc.write_dep(&label, &dep)?;
         // if !self.lock.deps.as_mut().insert(Dep::Atom(lock_entry)) {
         //     tracing::warn!(message = "updating lock entry", atom.id = %id);
         // }

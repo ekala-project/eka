@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 
-use super::id::{AtomTag, Name};
+use super::id::{Label, Name};
 use crate::manifest::AtomSets;
 
 //================================================================================================
@@ -25,7 +25,7 @@ use crate::manifest::AtomSets;
 #[serde(deny_unknown_fields)]
 pub struct Atom {
     /// The verified, human-readable Unicode identifier for the Atom.
-    pub tag: AtomTag,
+    pub label: Label,
 
     /// The version of the Atom.
     pub version: Version,

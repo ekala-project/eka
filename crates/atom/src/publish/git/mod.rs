@@ -25,7 +25,7 @@ use tokio::task::JoinSet;
 use super::error::git::Error;
 use super::{Builder, Content, Publish, PublishOutcome, Record, StateValidator, ValidAtoms};
 use crate::core::AtomPaths;
-use crate::id::AtomTag;
+use crate::id::Label;
 use crate::store::git::Root;
 use crate::store::{NormalizeStorePath, QueryStore};
 use crate::{Atom, AtomId};
@@ -89,7 +89,7 @@ pub type GitResult<T> = Result<T, Error>;
 
 /// Represents a Git reference to a component of a published Atom.
 struct AtomRef<'a> {
-    tag: String,
+    label: String,
     kind: RefKind,
     version: &'a Version,
 }
@@ -323,7 +323,7 @@ impl<'a> Publish<Root> for GitContext<'a> {
     fn publish<C>(
         &self,
         paths: C,
-        remotes: HashMap<AtomTag, (Version, ObjectId)>,
+        remotes: HashMap<Label, (Version, ObjectId)>,
     ) -> Vec<GitResult<GitOutcome>>
     where
         C: IntoIterator<Item = PathBuf>,
@@ -344,22 +344,22 @@ impl<'a> Publish<Root> for GitContext<'a> {
     fn publish_atom<P: AsRef<Path>>(
         &self,
         path: P,
-        remotes: &HashMap<AtomTag, (Version, ObjectId)>,
+        remotes: &HashMap<Label, (Version, ObjectId)>,
     ) -> GitResult<GitOutcome> {
         use {Err as Skipped, Ok as Published};
         let context = AtomContext::set(path.as_ref(), self)?;
-        let span = tracing::info_span!("publish atom", atom=%context.atom.id.tag());
-        crate::log::set_sub_task(&span, &format!("⚛️ `{}`", context.atom.id.tag()));
+        let span = tracing::info_span!("publish atom", atom=%context.atom.id.label());
+        crate::log::set_sub_task(&span, &format!("⚛️ `{}`", context.atom.id.label()));
         let _enter = span.enter();
 
         let r = &context.refs(RefKind::Content);
         let lr = self.repo.find_reference(&r.to_string());
 
         if let Ok(lr) = lr {
-            if let Some((v, id)) = remotes.get(context.atom.id.tag()) {
+            if let Some((v, id)) = remotes.get(context.atom.id.label()) {
                 if r.version == v && lr.id().detach() == *id {
                     // Remote and local atoms are identical; skip.
-                    return Ok(Skipped(context.atom.spec.tag.clone()));
+                    return Ok(Skipped(context.atom.spec.label.clone()));
                 }
             }
         }
@@ -393,7 +393,7 @@ impl<'a> StateValidator<Root> for GitPublisher<'a> {
             .map_err(|_| Error::NotFound)?;
 
         let cap = calculate_capacity(record.records.len());
-        let mut atoms: HashMap<AtomTag, PathBuf> = HashMap::with_capacity(cap);
+        let mut atoms: HashMap<Label, PathBuf> = HashMap::with_capacity(cap);
 
         for entry in record.records {
             let path = PathBuf::from(entry.filepath.to_str_lossy().as_ref());
@@ -402,16 +402,16 @@ impl<'a> StateValidator<Root> for GitPublisher<'a> {
                 if let Ok(obj) = publisher.repo.find_object(entry.oid) {
                     match publisher.verify_manifest(&obj, &path) {
                         Ok(atom) => {
-                            if let Some(duplicate) = atoms.get(&atom.tag) {
+                            if let Some(duplicate) = atoms.get(&atom.label) {
                                 tracing::warn!(
                                     message = "Two atoms share the same ID",
-                                    duplicate.tag = %atom.tag,
+                                    duplicate.label = %atom.label,
                                     fst = %path.display(),
                                     snd = %duplicate.display(),
                                 );
                                 return Err(Error::Duplicates);
                             }
-                            atoms.insert(atom.tag, path);
+                            atoms.insert(atom.label, path);
                         },
                         Err(e) => e.warn(),
                     }

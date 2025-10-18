@@ -13,23 +13,23 @@
 //!
 //! - An immutable **origin** identifier (e.g., a repository's root commit hash) to anchor the
 //!   namespace.
-//! - A human-readable **tag** (moniker) that is validated for descriptiveness and safety.
-//! - A machine-readable **id** that combines the origin and tag into a globally unique identifier,
-//!   represented as a BLAKE3-derived cryptographic hash.
+//! - A human-readable **label** (moniker) that is validated for descriptiveness and safety.
+//! - A machine-readable **id** that combines the origin and label into a globally unique
+//!   identifier, represented as a BLAKE3-derived cryptographic hash.
 //!
 //! These primitives support robust tooling for indexing, querying, and addressing
 //! software packages with verifiable provenance.
 //!
 //! ## Key Concepts
 //!
-//! - **Atom Tags**: Unicode identifiers that label atoms within an origin. They are validated to
+//! - **Atom Labels**: Unicode identifiers that label atoms within an origin. They are validated to
 //!   ensure they contain only safe, descriptive characters.
-//! - **Atom Ids**: A struct coupling a tag to its origin, represented by a BLAKE3-derived hash.
+//! - **Atom Ids**: A struct coupling a label to its origin, represented by a BLAKE3-derived hash.
 //!   This provides a secure, collision-resistant, and stable identifier for the atom.
 //!
-//! ## Tag Validation Rules
+//! ## Label Validation Rules
 //!
-//! Atom tags must adhere to the following rules, which are based on the
+//! Atom labels must adhere to the following rules, which are based on the
 //! [Unicode Standard Annex #31](https://unicode.org/reports/tr31/) for Unicode
 //! Identifier and Pattern Syntax.
 //!
@@ -44,10 +44,10 @@
 //!
 //! ```rust,no_run
 //! use atom::store::git::Root;
-//! use atom::{AtomId, AtomTag, Compute, Origin};
+//! use atom::{AtomId, Compute, Label, Origin};
 //!
-//! // Create a validated atom tag.
-//! let tag = AtomTag::try_from("my-atom").unwrap();
+//! // Create a validated atom label.
+//! let label = Label::try_from("my-atom").unwrap();
 //!
 //! // Create an AtomId with a Git origin.
 //! let repo = gix::open(".").unwrap();
@@ -57,7 +57,7 @@
 //!     .unwrap()
 //!     .unwrap();
 //!
-//! let id = AtomId::construct(&commit, tag).unwrap();
+//! let id = AtomId::construct(&commit, label).unwrap();
 //!
 //! // Get the hash for disambiguated identification.
 //! let hash = id.compute_hash();
@@ -79,26 +79,26 @@ const ID_MAX: usize = 128;
 // Types
 //================================================================================================
 
-/// A struct that couples an atom's tag to its origin.
+/// A struct that couples an atom's label to its origin.
 ///
 /// `AtomId` represents an unambiguous identifier, combining a human-readable
-/// Unicode tag with a root field that varies by store implementation (e.g.,
+/// Unicode label with a root field that varies by store implementation (e.g.,
 /// the oldest commit in a Git repository).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct AtomId<R> {
     origin: R,
-    tag: AtomTag,
+    label: Label,
 }
 
-/// A validated string suitable for use as an atom's `tag`.
+/// A validated string suitable for use as an atom's `label`.
 ///
-/// `AtomTag` ensures that the identifier conforms to specific validation rules,
+/// `Label` ensures that the identifier conforms to specific validation rules,
 /// providing a safe and descriptive label for an atom within its origin.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(try_from = "String")]
-pub struct AtomTag(String);
+pub struct Label(String);
 
-/// An enumeration of errors that can occur during atom tag validation.
+/// An enumeration of errors that can occur during atom label validation.
 ///
 /// These errors indicate failures in creating or parsing atom identifiers,
 /// ensuring they adhere to the required format for secure identification.
@@ -134,8 +134,8 @@ pub enum Error {
 #[derive(Copy, Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct AtomDigest([u8; 32]);
 
-/// A type alias for `AtomTag` used in contexts requiring a validated identifier.
-pub type Name = AtomTag;
+/// A type alias for `Label` used in contexts requiring a validated identifier.
+pub type Name = Label;
 
 //================================================================================================
 // Traits
@@ -149,7 +149,7 @@ pub trait Compute<'id, T>: Borrow<[u8]> {
     /// Computes the BLAKE3 hash of this `AtomId`.
     ///
     /// The hash is keyed with the atom's root value, ensuring that atoms with
-    /// the same tag but different origins produce distinct hashes.
+    /// the same label but different origins produce distinct hashes.
     ///
     /// # Returns
     ///
@@ -179,8 +179,8 @@ pub trait Origin<R> {
 
 impl<R> AtomId<R> {
     /// Returns a reference to the atom's Unicode identifier.
-    pub fn tag(&self) -> &AtomTag {
-        &self.tag
+    pub fn label(&self) -> &Label {
+        &self.label
     }
 }
 
@@ -195,12 +195,12 @@ where
     /// # Errors
     ///
     /// This function will return an error if the call to `calculate_origin` fails.
-    pub fn construct<T>(src: &T, tag: AtomTag) -> Result<Self, T::Error>
+    pub fn construct<T>(src: &T, label: Label) -> Result<Self, T::Error>
     where
         T: Origin<R>,
     {
         let origin = src.calculate_origin()?;
-        Ok(AtomId { origin, tag })
+        Ok(AtomId { origin, label })
     }
 
     /// Returns the root field, which serves as a derived key for the BLAKE3 hash.
@@ -209,17 +209,17 @@ where
     }
 }
 
-impl AtomTag {
+impl Label {
     /// Validates that a character is a valid starting character.
     fn validate_start(c: char) -> Result<(), Error> {
-        if !AtomTag::is_valid_start(c) {
+        if !Label::is_valid_start(c) {
             return Err(Error::InvalidStart(c));
         }
         Ok(())
     }
 
-    /// Validates the entire string as a valid `AtomTag`.
-    pub(super) fn validate(s: &str) -> Result<AtomTag, Error> {
+    /// Validates the entire string as a valid `Label`.
+    pub(super) fn validate(s: &str) -> Result<Label, Error> {
         use unicode_normalization::UnicodeNormalization;
         let normalized: String = s.nfkc().collect();
 
@@ -227,7 +227,7 @@ impl AtomTag {
             return Err(Error::TooLong);
         }
 
-        match normalized.chars().next().map(AtomTag::validate_start) {
+        match normalized.chars().next().map(Label::validate_start) {
             Some(Ok(())) => (),
             Some(Err(e)) => return Err(e),
             None => return Err(Error::Empty),
@@ -235,14 +235,14 @@ impl AtomTag {
 
         let invalid_chars: String = normalized
             .chars()
-            .filter(|&c| !AtomTag::is_valid_char(c))
+            .filter(|&c| !Label::is_valid_char(c))
             .collect();
 
         if !invalid_chars.is_empty() {
             return Err(Error::InvalidCharacters(invalid_chars));
         }
 
-        Ok(AtomTag(normalized))
+        Ok(Label(normalized))
     }
 
     /// Checks if a character is an invalid starting character.
@@ -250,7 +250,7 @@ impl AtomTag {
         unicode_ident::is_xid_start(c)
     }
 
-    /// Checks if a character is valid for use in an `AtomTag`.
+    /// Checks if a character is valid for use in an `Label`.
     pub(super) fn is_valid_char(c: char) -> bool {
         unicode_ident::is_xid_continue(c) || c == '-'
     }
@@ -258,7 +258,7 @@ impl AtomTag {
 
 impl<T> Borrow<[u8]> for AtomId<T> {
     fn borrow(&self) -> &[u8] {
-        self.tag.as_bytes()
+        self.label.as_bytes()
     }
 }
 
@@ -269,7 +269,7 @@ impl<'id, R: AsRef<[u8]>> Compute<'id, R> for AtomId<R> {
         let key = blake3::derive_key("AtomId", self.origin.as_ref());
 
         let mut hasher = Hasher::new_keyed(&key);
-        hasher.update(self.tag.as_bytes());
+        hasher.update(self.label.as_bytes());
         AtomDigest(*hasher.finalize().as_bytes())
     }
 }
@@ -288,7 +288,7 @@ where
     }
 }
 
-impl Deref for AtomTag {
+impl Deref for Label {
     type Target = String;
 
     fn deref(&self) -> &Self::Target {
@@ -304,7 +304,7 @@ impl Deref for AtomDigest {
     }
 }
 
-impl fmt::Display for AtomTag {
+impl fmt::Display for Label {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
     }
@@ -358,11 +358,11 @@ impl<R: AsRef<[u8]>> From<AtomId<R>> for AtomDigest {
     }
 }
 
-impl FromStr for AtomTag {
+impl FromStr for Label {
     type Err = Error;
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        AtomTag::validate(s)
+        Label::validate(s)
     }
 }
 
@@ -376,28 +376,28 @@ impl<R: AsRef<[u8]>> Serialize for AtomId<R> {
     }
 }
 
-impl TryFrom<&OsStr> for AtomTag {
+impl TryFrom<&OsStr> for Label {
     type Error = Error;
 
     fn try_from(s: &OsStr) -> Result<Self, Self::Error> {
         let s = s.to_str().ok_or(Error::InvalidUnicode)?;
-        AtomTag::from_str(s)
+        Label::from_str(s)
     }
 }
 
-impl TryFrom<&str> for AtomTag {
+impl TryFrom<&str> for Label {
     type Error = Error;
 
     fn try_from(s: &str) -> Result<Self, Self::Error> {
-        AtomTag::from_str(s)
+        Label::from_str(s)
     }
 }
 
-impl TryFrom<String> for AtomTag {
+impl TryFrom<String> for Label {
     type Error = Error;
 
     fn try_from(s: String) -> Result<Self, Self::Error> {
-        AtomTag::validate(&s)
+        Label::validate(&s)
     }
 }
 

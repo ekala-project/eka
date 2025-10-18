@@ -57,7 +57,7 @@ The `add` command's primary responsibility is to trigger a full dependency resol
 
 1.  **Initialization**: The `ManifestWriter` is instantiated with the path to the project, loading the existing `atom.toml` and `atom.lock` files.
 2.  **Add Dependency**: The `ManifestWriter::add_uri` method is called with the new dependency.
-3.  **Resolution**: Inside `add_uri`, the `AtomReq::resolve` method (from `crates/atom/src/lock.rs`) is invoked. This function queries the remote Git repository (`store`) to find the highest matching version for the given `tag` and version requirement. A successful resolution confirms the atom's existence and provides the exact commit hash (`rev`) and atom ID.
+3.  **Resolution**: Inside `add_uri`, the `AtomReq::resolve` method (from `crates/atom/src/lock.rs`) is invoked. This function queries the remote Git repository (`store`) to find the highest matching version for the given `label` and version requirement. A successful resolution confirms the atom's existence and provides the exact commit hash (`rev`) and atom ID.
 4.  **Lockfile Update**: The resolved dependency, now an `AtomDep` struct, is added to the `Lockfile` instance managed by the `ManifestWriter`.
 5.  **Manifest Update**: The new dependency is added to the `atom.toml` document.
 6.  **Atomic Write**: The `ManifestWriter::write_atomic` method is called to save both the updated manifest and lockfile to disk.
@@ -72,7 +72,7 @@ The implementation uses more detailed data structures than originally proposed t
 
 - `Dependency`: An enum that can represent different types of dependencies (`Atom`, `Pin`, `Src`).
 - `AtomReq`: A struct representing a request for an atom dependency in the manifest. It includes:
-  - `tag`: The optional, unique identifier of the atom.
+  - `label`: The optional, unique identifier of the atom.
   - `version`: The semantic version requirement.
   - `store`: The Git URL or local path of the atom's repository.
 
@@ -83,7 +83,7 @@ The lockfile is fully implemented and is a critical part of the `add` command's 
 - `Lockfile`: The root structure of the `atom.lock` file, containing a map of all resolved dependencies.
 - `Dep`: An enum representing a locked dependency, which can be an `Atom`, `Pin`, etc.
 - `AtomDep`: A struct representing a locked atom dependency. It contains the resolved information:
-  - `tag`: The unique identifier of the atom.
+  - `label`: The unique identifier of the atom.
   - `version`: The exact resolved `Version`.
   - `location`: The `AtomLocation` (URL or path).
   - `rev`: The resolved Git commit hash (`LockDigest`).

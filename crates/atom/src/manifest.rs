@@ -12,14 +12,14 @@
 //! ## Key Types
 //!
 //! - [`Manifest`] - The complete manifest structure, representing the `atom.toml` file.
-//! - [`Atom`] - The core atom metadata (`tag`, `version`, `description`).
+//! - [`Atom`] - The core atom metadata (`label`, `version`, `description`).
 //! - [`AtomError`] - Errors that can occur during manifest processing.
 //!
 //! ## Example Manifest
 //!
 //! ```toml
 //! [atom]
-//! tag = "my-atom"
+//! label = "my-atom"
 //! version = "1.0.0"
 //! description = "A sample atom for demonstration"
 //!
@@ -44,12 +44,12 @@
 //! use std::str::FromStr;
 //!
 //! use atom::manifest::Manifest;
-//! use atom::{Atom, AtomTag};
+//! use atom::{Atom, Label};
 //! use semver::Version;
 //!
 //! // Create a manifest programmatically.
 //! let manifest = Manifest::new(
-//!     AtomTag::try_from("my-atom").unwrap(),
+//!     Label::try_from("my-atom").unwrap(),
 //!     Version::new(1, 0, 0),
 //!     Some("My first atom".to_string()),
 //! );
@@ -57,7 +57,7 @@
 //! // Parse a manifest from a string.
 //! let manifest_str = r#"
 //! [atom]
-//! tag = "parsed-atom"
+//! label = "parsed-atom"
 //! version = "2.0.0"
 //! "#;
 //! let parsed = Manifest::from_str(manifest_str).unwrap();
@@ -73,7 +73,7 @@ use thiserror::Error;
 use toml_edit::{DocumentMut, de};
 
 use crate::manifest::deps::{Dependency, DocError};
-use crate::{Atom, AtomTag};
+use crate::{Atom, Label};
 
 pub mod deps;
 pub(crate) mod sets;
@@ -97,7 +97,7 @@ pub enum AtomError {
     /// An I/O error occurred while reading the manifest file.
     #[error(transparent)]
     Io(#[from] std::io::Error),
-    /// An AtomTag is missing or malformed
+    /// An Label is missing or malformed
     #[error(transparent)]
     Id(#[from] crate::id::Error),
 }
@@ -163,30 +163,30 @@ pub struct EkalaSet {
 }
 
 #[derive(Debug, PartialEq, Eq, Default)]
-pub(crate) struct AtomMap(BTreeMap<AtomTag, PathBuf>);
+pub(crate) struct AtomMap(BTreeMap<Label, PathBuf>);
 
 //================================================================================================
 // Impls
 //================================================================================================
 
-impl AsRef<BTreeMap<AtomTag, PathBuf>> for AtomMap {
-    fn as_ref(&self) -> &BTreeMap<AtomTag, PathBuf> {
+impl AsRef<BTreeMap<Label, PathBuf>> for AtomMap {
+    fn as_ref(&self) -> &BTreeMap<Label, PathBuf> {
         &self.0
     }
 }
 
-impl AsMut<BTreeMap<AtomTag, PathBuf>> for AtomMap {
-    fn as_mut(&mut self) -> &mut BTreeMap<AtomTag, PathBuf> {
+impl AsMut<BTreeMap<Label, PathBuf>> for AtomMap {
+    fn as_mut(&mut self) -> &mut BTreeMap<Label, PathBuf> {
         &mut self.0
     }
 }
 
 impl Manifest {
-    /// Creates a new `Manifest` with the given tag, version, and description.
-    pub fn new(tag: AtomTag, version: Version, description: Option<String>) -> Self {
+    /// Creates a new `Manifest` with the given label, version, and description.
+    pub fn new(label: Label, version: Version, description: Option<String>) -> Self {
         Manifest {
             package: Atom {
-                tag,
+                label,
                 version,
                 description,
                 sets: HashMap::new(),
@@ -213,13 +213,13 @@ impl Manifest {
         }
     }
 
-    pub(crate) fn get_atom_tag<P: AsRef<Path>>(path: P) -> AtomResult<AtomTag> {
+    pub(crate) fn get_atom_label<P: AsRef<Path>>(path: P) -> AtomResult<Label> {
         let content = std::fs::read_to_string(&path)?;
         let doc = content.parse::<DocumentMut>()?;
 
-        let tag = doc["package"]["tag"].to_string();
-        tracing::error!(message = "atom tag is missing or malformed", %tag, path = %path.as_ref().display());
-        AtomTag::try_from(tag).map_err(Into::into)
+        let label = doc["package"]["label"].to_string();
+        tracing::error!(message = "atom label is missing or malformed", %label, path = %path.as_ref().display());
+        Label::try_from(label).map_err(Into::into)
     }
 
     pub(crate) fn deps(&self) -> &Dependency {
@@ -253,8 +253,8 @@ impl<'de> Deserialize<'de> for AtomMap {
         let mut map = BTreeMap::new();
 
         for path in entries {
-            let tag = Manifest::get_atom_tag(&path).map_err(serde::de::Error::custom)?;
-            map.insert(tag, path);
+            let label = Manifest::get_atom_label(&path).map_err(serde::de::Error::custom)?;
+            map.insert(label, path);
         }
 
         Ok(AtomMap(map))
@@ -286,9 +286,10 @@ impl EkalaManifest {
     }
 
     /// Add an atom to the manifest, assuming it's valid
-    pub fn add_package<P: AsRef<Path>>(&mut self, path: P) -> AtomResult<AtomTag> {
+    pub fn add_package<P: AsRef<Path>>(&mut self, path: P) -> AtomResult<Label> {
         let packages = self.packages.as_mut();
-        let name = Manifest::get_atom_tag(path.as_ref().join(crate::ATOM_MANIFEST_NAME.as_str()))?;
+        let name =
+            Manifest::get_atom_label(path.as_ref().join(crate::ATOM_MANIFEST_NAME.as_str()))?;
         packages.insert(name.to_owned(), path.as_ref().into());
         Ok(name)
     }

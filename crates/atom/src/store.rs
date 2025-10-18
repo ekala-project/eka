@@ -33,7 +33,7 @@
 //! or full fetches for complete store access.
 //!
 //! **Version Management**: High-level operations for discovering, filtering, and
-//! selecting atom versions based on semantic version constraints and tags.
+//! selecting atom versions based on semantic version constraints.
 //!
 //! **Path Normalization**: Converting user-provided paths to canonical paths
 //! relative to the store root, handling both relative and absolute paths correctly.
@@ -41,7 +41,7 @@
 //! ## Usage
 //!
 //! ```rust,no_run
-//! use atom::AtomTag;
+//! use atom::Label;
 //! use atom::store::git::Root;
 //! use atom::store::{Init, NormalizeStorePath, QueryStore, QueryVersion};
 //! use gix::{Remote, Url};
@@ -64,12 +64,17 @@
 //! // Query atom versions from a remote store
 //! let atoms = url.get_atoms(None)?;
 //! for atom in atoms {
-//!     println!("Atom: {} v{} -> {}", atom.id.tag(), atom.version, atom.rev);
+//!     println!(
+//!         "Atom: {} v{} -> {}",
+//!         atom.id.label(),
+//!         atom.version,
+//!         atom.rev
+//!     );
 //! }
 //!
 //! // Find highest version matching requirements
 //! let req = VersionReq::parse(">=1.0.0,<2.0.0")?;
-//! if let Some((version, id)) = url.get_highest_match(&AtomTag::try_from("mylib")?, &req, None) {
+//! if let Some((version, id)) = url.get_highest_match(&Label::try_from("mylib")?, &req, None) {
 //!     println!("Selected version {} with id {}", version, id);
 //! }
 //!
@@ -84,7 +89,7 @@ use std::path::{Path, PathBuf};
 use bstr::BStr;
 use semver::{Version, VersionReq};
 
-use crate::{AtomId, AtomTag};
+use crate::{AtomId, Label};
 
 pub mod git;
 
@@ -209,13 +214,13 @@ pub trait QueryStore<Ref, T: Send> {
 ///
 /// This trait extends [`QueryStore`] to provide high-level operations for working
 /// with atom versions. It enables efficient querying and filtering of atom versions
-/// based on tags and semantic version requirements.
+/// based on labels and semantic version requirements.
 ///
 /// ## Key Features
 ///
 /// - **Atom Discovery**: Automatically discovers all atoms in the store using the standard
 ///   reference pattern
-/// - **Version Filtering**: Find atoms matching specific tags and version requirements
+/// - **Version Filtering**: Find atoms matching specific label and version requirements
 /// - **Semantic Versioning**: Full support for semantic version constraints and comparison
 /// - **Type Safety**: Strongly typed atom identifiers and version information
 ///
@@ -237,7 +242,7 @@ pub trait QueryStore<Ref, T: Send> {
 /// ## Examples
 ///
 /// ```rust,no_run
-/// use atom::AtomTag;
+/// use atom::Label;
 /// use atom::store::{QueryStore, QueryVersion};
 /// use gix::Url;
 /// use semver::VersionReq;
@@ -248,13 +253,18 @@ pub trait QueryStore<Ref, T: Send> {
 /// // Get all available atoms
 /// let atoms = url.get_atoms(None)?;
 /// for atom in atoms {
-///     println!("Atom: {} v{} -> {}", atom.id.tag(), atom.version, atom.rev);
+///     println!(
+///         "Atom: {} v{} -> {}",
+///         atom.id.label(),
+///         atom.version,
+///         atom.rev
+///     );
 /// }
 ///
 /// // Find the highest version matching a requirement
 /// let req = VersionReq::parse(">=1.0.0,<2.0.0")?;
 ///
-/// if let Some((version, id)) = url.get_highest_match(&AtomTag::try_from("mylib")?, &req, None) {
+/// if let Some((version, id)) = url.get_highest_match(&Label::try_from("mylib")?, &req, None) {
 ///     println!("Selected version {} with id {}", version, id);
 /// }
 /// # Ok::<(), Box<dyn std::error::Error>>(())
@@ -282,7 +292,7 @@ where
     ///
     /// # Returns
     /// An iterator over all discovered atoms, where each atom contains:
-    /// - `AtomTag`: The atom's identifier/tag name
+    /// - `Label`: The atom's identifying name
     /// - `Version`: The semantic version of the atom
     /// - `Id`: The unique identifier for this atom version
     ///
@@ -304,31 +314,27 @@ where
     }
 
     /// Processes an iterator of atoms to find the highest version matching the
-    /// given tag and version requirement.
+    /// given label and version requirement.
     fn process_highest_match(
         atoms: <C as IntoIterator>::IntoIter,
-        tag: &AtomTag,
+        label: &Label,
         req: &VersionReq,
     ) -> Option<(Version, Id)> {
         atoms
-            .filter_map(
-                |UnpackedRef {
-                     id: t,
-                     version: v,
-                     rev: id,
-                 }| (t.tag() == tag && req.matches(&v)).then_some((v, id)),
-            )
+            .filter_map(|UnpackedRef { id, version, rev }| {
+                (id.label() == label && req.matches(&version)).then_some((version, rev))
+            })
             .max_by_key(|(ref version, _)| version.to_owned())
     }
 
     /// Finds the highest version of an atom matching the given version requirement.
     ///
-    /// This method searches through all available atom versions for a specific tag
+    /// This method searches through all available atom versions for a specific label
     /// and returns the highest version that satisfies the provided version requirement.
     /// Uses semantic version comparison to determine "highest" version.
     ///
     /// # Arguments
-    /// * `tag` - The atom tag to search for (e.g., "mylib", "database")
+    /// * `label` - The atom label to search for (e.g., "mylib", "database")
     /// * `req` - The version requirement to match (e.g., ">=1.0.0", "~2.1.0")
     ///
     /// # Returns
@@ -336,40 +342,40 @@ where
     ///
     /// # Examples
     /// ```rust,no_run
-    /// use atom::AtomTag;
+    /// use atom::Label;
     /// use atom::store::QueryVersion;
     /// use semver::VersionReq;
     ///
     /// let url = gix::url::parse("https://example.com/my-repo.git".into())?;
     /// let req = VersionReq::parse(">=1.0.0,<2.0.0")?;
-    /// let result = url.get_highest_match(&AtomTag::try_from("mylib")?, &req, None);
+    /// let result = url.get_highest_match(&Label::try_from("mylib")?, &req, None);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     fn get_highest_match(
         &self,
-        tag: &AtomTag,
+        label: &Label,
         req: &VersionReq,
         transport: Option<&mut T>,
     ) -> Option<(Version, Id)> {
         let atoms = self.get_atoms(transport).ok()?;
-        Self::process_highest_match(atoms, tag, req)
+        Self::process_highest_match(atoms, label, req)
     }
 
-    /// Retrieves all atoms from the remote store and maps them by their tag.
+    /// Retrieves all atoms from the remote store and maps them by their label.
     ///
     /// This method provides a convenient way to get a comprehensive overview of all
-    /// atoms available in the remote store, organized by their unique `AtomTag`.
+    /// atoms available in the remote store, organized by their unique `Label`.
     /// If an atom has multiple versions, only the highest version is returned.
     ///
     /// # Returns
     ///
     /// A `HashMap` where:
-    /// - The key is the `AtomTag`, representing the unique identifier of the atom.
+    /// - The key is the `Label`, representing the unique identifier of the atom.
     /// - The value is a tuple containing the `Version` and `Id` of the atom.
     ///
     /// If the remote store cannot be reached or if there are no atoms, an empty
     /// `HashMap` is returned.
-    fn remote_atoms(&self, transport: Option<&mut T>) -> HashMap<AtomTag, (Version, Id)> {
+    fn remote_atoms(&self, transport: Option<&mut T>) -> HashMap<Label, (Version, Id)> {
         if let Ok(refs) = self.get_atoms(transport) {
             let iter = refs.into_iter();
             let s = match iter.size_hint() {
@@ -384,7 +390,7 @@ where
                      version: v,
                      rev: id,
                  }| {
-                    acc.insert(t.tag().to_owned(), (v, id));
+                    acc.insert(t.label().to_owned(), (v, id));
                     acc
                 },
             )
@@ -397,20 +403,19 @@ where
 /// A trait for unpacking atom references into structured version information.
 ///
 /// This trait defines how to parse atom references (from git refs) into
-/// structured atom data including tags, versions, and identifiers.
+/// structured atom data including labels, versions, and identifiers.
 ///
 /// ## Reference Format
 ///
-/// Atom references follow the pattern: `refs/atoms/{tag}/{version}/{id}`
+/// Atom references follow the pattern: `refs/ekala/atoms/{label}/{version}`
 /// where:
-/// - `tag` is the atom identifier (e.g., "mylib", "database")
+/// - `label` is the atom identifier (e.g., "mylib", "database")
 /// - `version` is a semantic version (e.g., "1.2.3")
-/// - `id` is a unique identifier for this atom version
 pub trait UnpackRef<Id, R> {
     /// Attempts to unpack this reference as an atom reference.
     ///
     /// # Returns
-    /// - `Some((tag, version, id))` if the reference follows atom reference format
+    /// - `Some((label, version, id))` if the reference follows atom reference format
     /// - `None` if the reference is not an atom reference or is malformed
     fn unpack_atom_ref(&self, root: Option<&R>) -> Option<UnpackedRef<Id, R>>;
     /// Attempts to find the root reference in the store.

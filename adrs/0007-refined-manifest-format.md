@@ -20,11 +20,11 @@ The key design goals for the dependency format are:
 
 To understand the manifest, it's essential to understand how an atom is identified. An atom's identity is a combination of its content and its location, designed to be cryptographically unique and verifiable.
 
-- **Package Set:** A collection of atoms, typically stored in a Git repository. A key principle is that all atoms within a set must have a unique `tag`. See the "Atom Protocol" section of the [README](https://github.com/ekala-project/eka?tab=readme-ov-file#what-is-the-atom-protocol) for more details.
+- **Package Set:** A collection of atoms, typically stored in a Git repository. A key principle is that all atoms within a set must have a unique `label`. See the "Atom Protocol" section of the [README](https://github.com/ekala-project/eka?tab=readme-ov-file#what-is-the-atom-protocol) for more details.
 - **Repository Root Hash:** The very first commit in a Git repository's history. This serves as a unique, immutable identifier for that repository, even across different mirrors.
-- **Atom Tag:** A user-defined, unique identifier for a package within a given set.
+- **Atom Label:** A user-defined, unique identifier for a package within a given set.
 - **Semantic Version:** All atoms must have a semantic version, which is critical for reliable dependency resolution.
-- **Cryptographic ID:** In the lock file, an atom's final, globally unique ID is a cryptographic hash derived from its `tag` and the `Repository Root Hash` of its set. This ensures that an atom with the tag `foo` from one set can never be confused with an atom named `foo` from another.
+- **Cryptographic ID:** In the lock file, an atom's final, globally unique ID is a cryptographic hash derived from its `label` and the `Repository Root Hash` of its set. This ensures that an atom with the label `foo` from one set can never be confused with an atom named `foo` from another.
 
 ## Decision
 
@@ -38,7 +38,7 @@ Defines metadata about the current project. Its `[package.sets]` sub-table defin
 
 ```toml
 [package]
-tag = "my-project"
+label = "my-project"
 version = "0.1.0"
 
 [package.sets]
@@ -63,7 +63,7 @@ The unified top-level table for all dependencies.
 
 ##### `[deps.from.<set-name>]` Tables
 
-The primary mechanism for declaring atom dependencies. The presence of an `atom.toml` implies that an atom is buildable, and this section defines its dependencies. They are always simple key-value pairs of `<atom-tag> = "<version-constraint>"`.
+The primary mechanism for declaring atom dependencies. The presence of an `atom.toml` implies that an atom is buildable, and this section defines its dependencies. They are always simple key-value pairs of `<label> = "<version-constraint>"`.
 
 ```toml
 [deps.from.company-atoms]
@@ -81,7 +81,7 @@ This table serves as a compatibility layer for backend-specific dependencies tha
 
 ```toml
 [package]
-tag = "my-server"
+label = "my-server"
 version = "0.2.0"
 
 [package.sets]
@@ -161,19 +161,19 @@ The lock file contains a `[sets]` table and an array of `[[input]]` tables.
 
 [[input]]
 type = "atom"
-tag = "auth-service"
+label = "auth-service"
 version = "1.5.2"
 set = "<hash_of_company_root>"
 rev = "<git_rev_of_atom>"
-id = "<blake3_hash_of_tag_and_set_hash>"
+id = "<blake3_hash_of_label_and_set_hash>"
 
 [[input]]
 type = "atom"
-tag = "local-utility"
+label = "local-utility"
 version = "0.1.3"
 set = "<hash_of_local_root>"
 rev = "<git_rev_of_atom>"
-id = "<blake3_hash_of_tag_and_set_hash>"
+id = "<blake3_hash_of_label_and_set_hash>"
 
 [[input]]
 type = "nix+url"
