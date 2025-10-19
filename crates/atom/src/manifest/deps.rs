@@ -135,7 +135,7 @@ pub enum DocError {
     Error(#[from] crate::lock::BoxError),
     /// A invalid refname was passed.
     #[error(transparent)]
-    BadRef(#[from] gix::validate::reference::name::Error),
+    BadLabel(#[from] crate::id::Error),
 }
 
 /// Represents the manner in which we resolve a rev for this git fetch

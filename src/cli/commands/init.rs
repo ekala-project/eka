@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use atom::Label;
 use atom::manifest::EkalaManifest;
 use clap::Parser;
 
@@ -33,10 +34,10 @@ mod git {
     }
 }
 
-pub(super) fn run(store: Detected, args: Args) -> anyhow::Result<()> {
+pub(super) fn run(store: Option<Detected>, args: Args) -> anyhow::Result<()> {
     #[allow(clippy::single_match)]
     match store {
-        Detected::Git(repo) => {
+        Some(Detected::Git(repo)) => {
             use atom::store::Init;
             let repo = repo.to_thread_local();
             let remote = repo.find_remote(args.git.remote.as_str())?;
@@ -45,56 +46,78 @@ pub(super) fn run(store: Detected, args: Args) -> anyhow::Result<()> {
                 "must be in a git work directory to create an ekala manifest in a git repository"
             ))?;
 
-            let ekala = init_ekala(workdir.join(atom::EKALA_MANIFEST_NAME.as_str()), args.name)?;
+            let canon = workdir.canonicalize().ok();
+            let default_prompt = canon
+                .as_ref()
+                .and_then(|p| p.file_stem())
+                .and_then(|p| p.to_str());
+            let ekala = init_ekala(
+                workdir.join(atom::EKALA_MANIFEST_NAME.as_str()),
+                args.name,
+                default_prompt,
+            )?;
 
-            remote.ekala_init(ekala.set().name(), None)?;
+            remote.ekala_init(ekala.set().label(), None)?;
         },
         _ => {
             let dir = PathBuf::from(".");
-            let ekala = init_ekala(dir.join(atom::EKALA_MANIFEST_NAME.as_str()), args.name)?;
-            tracing::info!(message = "successfully initialized", project = %ekala.set().name());
+            let ekala = init_ekala(
+                dir.join(atom::EKALA_MANIFEST_NAME.as_str()),
+                args.name,
+                None,
+            )?;
+            tracing::info!(message = "successfully initialized", project = %ekala.set().label());
         },
     }
     Ok(())
 }
 
-fn init_ekala<P: AsRef<Path>>(path: P, name: Option<String>) -> anyhow::Result<EkalaManifest> {
+fn init_ekala<P: AsRef<Path>>(
+    path: P,
+    label: Option<String>,
+    default: Option<&str>,
+) -> anyhow::Result<EkalaManifest> {
     use inquire::{Confirm, Text};
 
     let ekala: EkalaManifest = if let Ok(content) = std::fs::read_to_string(&path) {
-        if let Some(name) = name {
+        if let Some(label) = label {
             tracing::warn!(
                 message =
                     "`--name` was passed, but an existing `{atom::EKALA_MANIFEST_NAME}` already exists, ignoring..",
-                    %name
+                    %label
 
             );
         }
         toml_edit::de::from_str(&content)?
     } else {
-        let root_name = if let Some(name) = name {
-            name
+        let root_label = if let Some(label) = label {
+            label
         } else {
-            let mut name: String;
-            use gix::validate::reference;
+            let mut label: String;
             loop {
-                name = Text::new("What would you like to name your project?")
+                let prompt = Text::new("What would you like to name your project?");
+                let prompt = if let Some(default) = default {
+                    prompt.with_default(default)
+                } else {
+                    prompt
+                };
+                label = prompt
                     .with_help_message(
                         "This will be the proper name of your atom set, affecting their \
                          cryptographic thumbprint.",
                     )
                     .prompt()?;
 
-                if reference::name_partial(name.as_str().into())
+                if Label::try_from(label.as_str())
                     .map_err(|e| {
-                        tracing::warn!(message = "name is not valid in a git ref, try again", %name, error = %e);
+                        tracing::warn!(message = "name is not a valid unicode identifier, try again", %label, error = %e);
                     })
                     .is_err()
                     {
                         continue;
                     }
 
-                let confirmed = Confirm::new(&format!("Is '{}' correct?", name))
+                let confirmed = Confirm::new(&format!("Is '{}' correct?", label))
                     .with_default(true)
                     .prompt()?;
 
@@ -102,10 +125,10 @@ fn init_ekala<P: AsRef<Path>>(path: P, name: Option<String>) -> anyhow::Result<E
                     break;
                 }
             }
-            name
+            label
         };
 
-        let manifest = EkalaManifest::new(root_name)?;
+        let manifest = EkalaManifest::new(root_label)?;
         std::fs::write(&path, toml_edit::ser::to_string_pretty(&manifest)?)?;
         manifest
     };

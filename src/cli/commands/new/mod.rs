@@ -70,7 +70,7 @@ pub(super) fn run(args: Args) -> Result<()> {
         let mut ekala: EkalaManifest =
             toml_edit::de::from_str(std::fs::read_to_string(path)?.as_str())?;
         ekala.add_package(args.path)?;
-        tracing::info!(message = "added to package to set", %label, set = ekala.set().name());
+        tracing::info!(message = "added to package to set", %label, set = ekala.set().label());
     } else {
         tracing::warn!(
             message = "package set not yet initialized, atom won't be publishable until `eka \

@@ -159,7 +159,7 @@ pub struct EkalaManifest {
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct EkalaSet {
-    name: String,
+    label: Label,
 }
 
 #[derive(Debug, PartialEq, Eq, Default)]
@@ -273,9 +273,9 @@ impl Serialize for AtomMap {
 
 impl EkalaManifest {
     /// Constructs a new Ekala manifest with the given set name
-    pub fn new(name: String) -> Result<Self, DocError> {
+    pub fn new(label: String) -> Result<Self, DocError> {
         Ok(EkalaManifest {
-            set: EkalaSet::new(name)?,
+            set: EkalaSet::new(label)?,
             packages: Default::default(),
         })
     }
@@ -288,24 +288,23 @@ impl EkalaManifest {
     /// Add an atom to the manifest, assuming it's valid
     pub fn add_package<P: AsRef<Path>>(&mut self, path: P) -> AtomResult<Label> {
         let packages = self.packages.as_mut();
-        let name =
+        let label =
             Manifest::get_atom_label(path.as_ref().join(crate::ATOM_MANIFEST_NAME.as_str()))?;
-        packages.insert(name.to_owned(), path.as_ref().into());
-        Ok(name)
+        packages.insert(label.to_owned(), path.as_ref().into());
+        Ok(label)
     }
 }
 
 impl EkalaSet {
-    fn new(name: String) -> Result<Self, DocError> {
-        use gix::validate::reference;
-        reference::name_partial(name.as_str().into())?;
+    fn new(label: String) -> Result<Self, DocError> {
+        let label = Label::try_from(label)?;
 
-        Ok(EkalaSet { name })
+        Ok(EkalaSet { label })
     }
 
     /// return a refernce to the name of this set
-    pub fn name(&self) -> &str {
-        self.name.as_str()
+    pub fn label(&self) -> &str {
+        self.label.as_str()
     }
 }
 
