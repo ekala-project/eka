@@ -53,7 +53,11 @@ semver = { version = "^1", features = ["serde"] }
 serde = { version = "^1", features = ["derive"] }
 tokio = { version = "^1", features = ["full"] }
 toml_edit = { version = "^0.22", features = ["serde", "parse"] }
-tracing-subscriber = { version = "^0.3", features = ["env-filter", "json"] }
+tracing-subscriber = { version = "^0.3", features = [
+  "env-filter",
+  "json",
+  "terminal_size",
+] }
 url = { version = "^2", features = ["serde"] }
 
 
@@ -71,3 +75,10 @@ prodash = { version = "30.0.1", features = [
   "render-line-crossterm",
   "render-line-autoconfigure",
 ] }
+
+[patch.crates-io]
+tracing            = { git = "https://github.com/nrdxp/tracing", branch = "hierarchical" }
+tracing-appender   = { git = "https://github.com/nrdxp/tracing", branch = "hierarchical" }
+tracing-core       = { git = "https://github.com/nrdxp/tracing", branch = "hierarchical" }
+tracing-futures    = { git = "https://github.com/nrdxp/tracing", branch = "hierarchical" }
+tracing-subscriber = { git = "https://github.com/nrdxp/tracing", branch = "hierarchical" }

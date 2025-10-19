@@ -9,6 +9,7 @@ use tracing_appender::non_blocking::WorkerGuard;
 use tracing_indicatif::IndicatifLayer;
 use tracing_indicatif::style::ProgressStyle;
 use tracing_subscriber::filter::{EnvFilter, LevelFilter};
+use tracing_subscriber::fmt::format::hierarchical::Hierarchical;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{Layer, fmt};
@@ -72,11 +73,13 @@ pub fn init_global_subscriber(args: LogArgs) -> WorkerGuard {
 
     let fmt = if std::io::stderr().is_terminal() {
         fmt::layer()
-            .without_time()
             .with_writer(progress_layer.get_stderr_writer())
-            .with_target(false)
             .with_span_events(tracing_subscriber::fmt::format::FmtSpan::NONE)
-            .compact()
+            .event_format(
+                fmt::format()
+                    .without_time()
+                    .with_hierarchical(Hierarchical::default().with_terminal_width()),
+            )
             .boxed()
     } else {
         ANSI.store(false, Ordering::SeqCst);
