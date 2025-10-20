@@ -98,6 +98,16 @@ pub struct AtomId<R> {
 #[serde(try_from = "String")]
 pub struct Label(String);
 
+/// A type like `Label` implementing UAX #31 precisely (no exception for `-`)
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "String")]
+pub struct Name(String);
+
+/// A type like `Name` but with exceptions for `:` and `.` characters for metadata tags
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "String")]
+pub struct Tag(String);
+
 /// An enumeration of errors that can occur during atom label validation.
 ///
 /// These errors indicate failures in creating or parsing atom identifiers,
@@ -105,19 +115,19 @@ pub struct Label(String);
 #[derive(Error, Debug, PartialEq, Eq)]
 pub enum Error {
     /// The atom identifier is empty.
-    #[error("An Atom id cannot be empty")]
+    #[error("cannot be empty")]
     Empty,
-    /// The atom identifier contains invalid characters.
-    #[error("The Atom id contains invalid characters: '{0}'")]
+    /// The identifier contains invalid characters.
+    #[error("contains invalid characters: '{0}'")]
     InvalidCharacters(String),
-    /// The atom identifier starts with an invalid character.
-    #[error("An Atom id cannot start with: '{0}'")]
+    /// The identifier starts with an invalid character.
+    #[error("cannot start with: '{0}'")]
     InvalidStart(char),
-    /// The atom identifier contains invalid Unicode.
-    #[error("An Atom id must be valid unicode")]
+    /// The identifier contains invalid Unicode.
+    #[error("must be valid unicode")]
     InvalidUnicode,
-    /// The atom identifier exceeds the maximum allowed length.
-    #[error("An Atom id cannot be more than {} bytes", ID_MAX)]
+    /// The identifier exceeds the maximum allowed length.
+    #[error("cannot be more than {} bytes", ID_MAX)]
     TooLong,
     /// Constructing atom digest from base32 string failed
     #[error("Invalid Base32 string")]
@@ -133,9 +143,6 @@ pub enum Error {
 /// secure and globally unique identifier for an atom.
 #[derive(Copy, Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct AtomDigest([u8; 32]);
-
-/// A type alias for `Label` used in contexts requiring a validated identifier.
-pub type Name = Label;
 
 //================================================================================================
 // Traits
@@ -171,6 +178,75 @@ pub trait Origin<R> {
     ///
     /// This function will return an error if the calculation fails.
     fn calculate_origin(&self) -> Result<R, Self::Error>;
+}
+
+/// A trait representing the unambiguous rules to validate and construct an identifier.
+/// The default implementations are the rules used for atom labels described in the top-level module
+/// documentation, but can be modified to allow for some flexibility, e.g. tags have identical
+/// rules with the exception of allowing `:` as an additional allowed separator.
+trait VerifiedName: VerifiedSeal + Deref {
+    /// Validates that a character is a valid starting character.
+    fn validate_start(c: char) -> Result<(), Error> {
+        if !Self::is_valid_start(c) {
+            return Err(Error::InvalidStart(c));
+        }
+        Ok(())
+    }
+
+    /// Constructor validating the entire string.
+    fn validate(s: &str) -> Result<Self, Error> {
+        use unicode_normalization::UnicodeNormalization;
+        let normalized: String = s.nfkc().collect();
+
+        if normalized.len() > ID_MAX {
+            return Err(Error::TooLong);
+        }
+
+        match normalized.chars().next().map(Self::validate_start) {
+            Some(Ok(())) => (),
+            Some(Err(e)) => return Err(e),
+            None => return Err(Error::Empty),
+        }
+
+        let invalid_chars: String = normalized
+            .chars()
+            .filter(|&c| !Self::is_valid_char(c))
+            .collect();
+
+        if !invalid_chars.is_empty() {
+            return Err(Error::InvalidCharacters(invalid_chars));
+        }
+
+        Self::extra_validation(&normalized)?;
+
+        Ok(VerifiedSeal::new_unverified(normalized))
+    }
+
+    /// Checks if a character is an invalid starting character.
+    fn is_valid_start(c: char) -> bool {
+        unicode_ident::is_xid_start(c)
+    }
+
+    /// Checks if a character is valid for use.
+    fn is_valid_char(c: char) -> bool {
+        unicode_ident::is_xid_continue(c) || c == '-'
+    }
+
+    /// Adds additional validation logic without overriding the default if required, does nothing by
+    /// default.
+    fn extra_validation(_s: &str) -> Result<(), Error> {
+        Ok(())
+    }
+}
+
+/// A private trait for constructing verified identifiers after validation.
+trait VerifiedSeal
+where
+    Self: Sized,
+{
+    /// used solely in the `VerifiedName` trait to construct the final value after it has been
+    /// verified. This function should never be exposed publicly.
+    fn new_unverified(s: String) -> Self;
 }
 
 //================================================================================================
@@ -209,50 +285,39 @@ where
     }
 }
 
-impl Label {
-    /// Validates that a character is a valid starting character.
-    fn validate_start(c: char) -> Result<(), Error> {
-        if !Label::is_valid_start(c) {
-            return Err(Error::InvalidStart(c));
+impl VerifiedName for Label {}
+
+impl VerifiedSeal for Label {
+    fn new_unverified(s: String) -> Self {
+        Self(s)
+    }
+}
+impl VerifiedName for Name {
+    fn is_valid_char(c: char) -> bool {
+        unicode_ident::is_xid_continue(c)
+    }
+}
+impl VerifiedSeal for Name {
+    fn new_unverified(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl VerifiedName for Tag {
+    fn is_valid_char(c: char) -> bool {
+        unicode_ident::is_xid_continue(c) || c == '.' || c == ':'
+    }
+
+    fn extra_validation(s: &str) -> Result<(), Error> {
+        if s.contains("..") {
+            return Err(Error::InvalidCharacters("..".into()));
         }
         Ok(())
     }
-
-    /// Validates the entire string as a valid `Label`.
-    pub(super) fn validate(s: &str) -> Result<Label, Error> {
-        use unicode_normalization::UnicodeNormalization;
-        let normalized: String = s.nfkc().collect();
-
-        if normalized.len() > ID_MAX {
-            return Err(Error::TooLong);
-        }
-
-        match normalized.chars().next().map(Label::validate_start) {
-            Some(Ok(())) => (),
-            Some(Err(e)) => return Err(e),
-            None => return Err(Error::Empty),
-        }
-
-        let invalid_chars: String = normalized
-            .chars()
-            .filter(|&c| !Label::is_valid_char(c))
-            .collect();
-
-        if !invalid_chars.is_empty() {
-            return Err(Error::InvalidCharacters(invalid_chars));
-        }
-
-        Ok(Label(normalized))
-    }
-
-    /// Checks if a character is an invalid starting character.
-    pub(super) fn is_valid_start(c: char) -> bool {
-        unicode_ident::is_xid_start(c)
-    }
-
-    /// Checks if a character is valid for use in an `Label`.
-    pub(super) fn is_valid_char(c: char) -> bool {
-        unicode_ident::is_xid_continue(c) || c == '-'
+}
+impl VerifiedSeal for Tag {
+    fn new_unverified(s: String) -> Self {
+        Self(s)
     }
 }
 
@@ -296,6 +361,28 @@ impl Deref for Label {
     }
 }
 
+impl Deref for Name {
+    type Target = String;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Deref for Tag {
+    type Target = String;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl AsRef<str> for Label {
+    fn as_ref(&self) -> &str {
+        (**self).as_str()
+    }
+}
+
 impl Deref for AtomDigest {
     type Target = [u8; 32];
 
@@ -305,6 +392,11 @@ impl Deref for AtomDigest {
 }
 
 impl fmt::Display for Label {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+impl fmt::Display for Name {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
     }
@@ -366,6 +458,14 @@ impl FromStr for Label {
     }
 }
 
+impl FromStr for Name {
+    type Err = Error;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        Name::validate(s)
+    }
+}
+
 impl<R: AsRef<[u8]>> Serialize for AtomId<R> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -393,11 +493,35 @@ impl TryFrom<&str> for Label {
     }
 }
 
+impl TryFrom<&str> for Name {
+    type Error = Error;
+
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
+        Name::from_str(s)
+    }
+}
+
 impl TryFrom<String> for Label {
     type Error = Error;
 
     fn try_from(s: String) -> Result<Self, Self::Error> {
         Label::validate(&s)
+    }
+}
+
+impl TryFrom<String> for Name {
+    type Error = Error;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        Name::validate(&s)
+    }
+}
+
+impl TryFrom<String> for Tag {
+    type Error = Error;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        Tag::validate(&s)
     }
 }
 
