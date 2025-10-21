@@ -92,7 +92,7 @@ version = "2.0.0"
 
 Despite having the same label, these atoms have completely different identities because they originate from different repositories. The cryptographic ID ensures that `company-a/utils` can never be confused with `company-b/utils`, even if both repositories are compromised, renamed, or forked.
 
-**Practical Implications:** This approach eliminates "dependency confusion" attacks where malicious packages with identical names can replace legitimate ones. The cryptographic foundation makes it mathematically impossible for an attacker to create a package that appears legitimate to the system, providing strong security guarantees against supply chain attacks.
+**Practical Implications:** This approach eliminates "dependency confusion" attacks where malicious packages with identical names can replace legitimate ones. The cryptographic foundation makes it mathematically impossible for an attacker to create a package that appears legitimate to the system, providing strong security guarantees against supply chain attacks. It also makes it trivial for a build service to keep track of artifacts and metadata related to a specific package across time, which will be Eos' bread & butter in the future.
 
 ### Reproducibility Through Manifests and Locks
 
