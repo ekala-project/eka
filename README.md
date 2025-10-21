@@ -50,6 +50,7 @@ This work is centered on four core components, which will eventually be unified 
 - **Disciplined:** Eka maintains a clean separation of concerns. It is an expert at managing source code dependencies, while delegating the heavy lifting of evaluation and building to a dedicated backend like Nix or Eos.
 - **Fast:** Dependency management commands in `eka` are designed to be exceptionally fast, operating primarily on static metadata. Querying, resolving, and locking atoms are near-instantaneous operations.
 - **Conceptually High-Level:** Developers care about packages, versions, and reproducibility, not the low-level details of Nix derivations. Eka provides an interface that speaks to developers at their level of concern, abstracting away the complexity of the underlying build system.
+- **User-Centric:** No matter how well designed a system's architecture, if it's painful to use, it will fail. Eka's philosophy integrates user experience as a core part of the development cycle, augmenting rather than opposing efficiency and performance. This harmonious balance of interface and technical excellence enables highly efficient implementations. For example, by carefully considering how mirrors were presented to users, we landed on an elegant data model that made efficient asynchronous resolution across many mirrors trivially efficient—the prototype model would have made this difficult or impossible. This demonstrates how UX and efficiency are directly coupled through thoughtful data modeling.
 
 ## Core Concepts
 
