@@ -14,13 +14,13 @@ The protocol addresses the inherent limitations of centralized package registrie
 
 - **Decentralized Distribution:** Instead of a central server like npm or PyPI, Atom uses Git repositories as the source of truth. It leverages the distributed nature of Git to ensure that package availability is not tied to a single entity, eliminating a critical vulnerability in the software supply chain.
 
-**Source as Truth:** Instead of copying source code into a registry, atoms are lightweight references to the same Git objects that comprise the original source code. This creates an unbreakable link between published packages and their origins, ensuring that the packaged code is always identical to the source.
+- **Source as Truth:** Instead of copying source code into a registry, atoms are lightweight references to the same Git objects that comprise the original source code. This creates an unbreakable link between published packages and their origins, ensuring that the packaged code is always identical to the source.
 
-**No Single Points of Failure:** Dependencies can be resolved from multiple mirrors or the original repository, ensuring availability even if one source becomes unavailable. This distributed approach means that a single registry outage or compromise cannot halt development.
+- **No Single Points of Failure:** Dependencies can be resolved from multiple mirrors or the original repository, ensuring availability even if one source becomes unavailable. This distributed approach means that a single registry outage or compromise cannot halt development.
 
-**Community-Driven Resilience:** Anyone can mirror an atom repository, creating a distributed network that cannot be taken down by any single entity. This community-driven approach ensures long-term availability and prevents vendor lock-in.
+- **Community-Driven Resilience:** Anyone can mirror an atom repository, creating a distributed network that cannot be taken down by any single entity. This community-driven approach ensures long-term availability and prevents vendor lock-in.
 
-**Practical Implications:** In a world where incidents like the `left-pad` npm package breaking the internet or the `xz-utils` backdoor demonstrate the fragility of centralized systems, Eka's decentralized approach ensures that critical dependencies remain available and verifiable, even during network outages or registry compromises.
+- **Practical Implications:** In a world where incidents like the `left-pad` npm package breaking the internet or the `xz-utils` backdoor demonstrate the fragility of centralized systems, Eka's decentralized approach ensures that critical dependencies remain available and verifiable, even during network outages or registry compromises.
 
 - **Designed for Efficiency:** By creating unambiguous, content-addressed cryptographic IDs for every package, Atom enables a future for highly efficient, decentralized build pipelines. This foundation allows for a system that is not only more secure and resilient but is also designed for high-performance, distributed build systems.
 
@@ -136,14 +136,14 @@ The `atom.lock` file captures the exact resolved state of all dependencies, crea
 version = 1
 
 [sets]
-"<blake3-hash-of-company-root>" = ["git@github.com:our-company/atoms"]
-"<blake3-hash-of-public-root>" = ["https://atoms.example.com", "https://mirror.atoms.example.com"]
+"<hash-of-company-root>" = ["git@github.com:our-company/atoms"]
+"<hash-of-public-root>" = ["https://atoms.example.com", "https://mirror.atoms.example.com"]
 
 [[deps]]
 type = "atom"
 label = "auth-lib"
 version = "2.1.3"
-set = "<blake3-hash-of-company-root>"
+set = "<hash-of-company-root>"
 rev = "<exact-git-commit>"
 id = "<cryptographic-atom-id>"
 
@@ -151,7 +151,7 @@ id = "<cryptographic-atom-id>"
 type = "atom"
 label = "serde"
 version = "1.0.42"
-set = "<blake3-hash-of-public-root>"
+set = "<hash-of-public-root>"
 rev = "<exact-git-commit>"
 id = "<cryptographic-atom-id>"
 ```
