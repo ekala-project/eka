@@ -67,12 +67,14 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
+use gix::{Repository, ThreadSafeRepository};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use toml_edit::{DocumentMut, de};
 
-use crate::manifest::deps::{Dependency, DocError};
+use crate::id::Tag;
+use crate::manifest::deps::{Dependency, DocError, TypedDocument};
 use crate::{Atom, Label};
 
 pub mod deps;
@@ -94,12 +96,18 @@ pub enum AtomError {
     /// The manifest is not valid TOML.
     #[error(transparent)]
     InvalidToml(#[from] toml_edit::TomlError),
+    /// An Label is missing or malformed
+    #[error("failed to locate Ekala manifest in directory parents")]
+    EkalaManifest,
     /// An I/O error occurred while reading the manifest file.
     #[error(transparent)]
     Io(#[from] std::io::Error),
     /// An Label is missing or malformed
     #[error(transparent)]
     Id(#[from] crate::id::Error),
+    /// A document error
+    #[error(transparent)]
+    Doc(#[from] DocError),
 }
 
 /// A strongly-typed representation of a source for an atom set.
@@ -146,24 +154,37 @@ pub struct Manifest {
 /// A specialized result type for manifest operations.
 pub type AtomResult<T> = Result<T, AtomError>;
 
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+struct MetaData {
+    tags: Option<BTreeSet<Tag>>,
+}
+
 /// The entrypoint for an ekala manifest describing a set of atoms.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct EkalaManifest {
     set: EkalaSet,
-    #[serde(default, skip_serializing_if = "AtomMap::is_empty")]
-    packages: AtomMap,
+    metadata: Option<MetaData>,
 }
 
 /// The section of the manifest describing the Ekala set of atoms.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct EkalaSet {
-    label: Label,
+    #[serde(default)]
+    packages: AtomMap,
 }
 
 #[derive(Debug, PartialEq, Eq, Default)]
 pub(crate) struct AtomMap(BTreeMap<Label, PathBuf>);
+
+/// A writer to assist with writing into the Ekala manifest.
+#[derive(Debug)]
+pub struct EkalaWriter {
+    path: PathBuf,
+    doc: TypedDocument<EkalaManifest>,
+    repo: Option<Repository>,
+}
 
 //================================================================================================
 // Impls
@@ -215,11 +236,8 @@ impl Manifest {
 
     pub(crate) fn get_atom_label<P: AsRef<Path>>(path: P) -> AtomResult<Label> {
         let content = std::fs::read_to_string(&path)?;
-        let doc = content.parse::<DocumentMut>()?;
-
-        let label = doc["package"]["label"].to_string();
-        tracing::error!(message = "atom label is missing or malformed", %label, path = %path.as_ref().display());
-        Label::try_from(label).map_err(Into::into)
+        let atom = Self::get_atom(&content)?;
+        Ok(atom.label)
     }
 
     pub(crate) fn deps(&self) -> &Dependency {
@@ -253,7 +271,8 @@ impl<'de> Deserialize<'de> for AtomMap {
         let mut map = BTreeMap::new();
 
         for path in entries {
-            let label = Manifest::get_atom_label(&path).map_err(serde::de::Error::custom)?;
+            let label = Manifest::get_atom_label(path.join(crate::ATOM_MANIFEST_NAME.as_str()))
+                .map_err(serde::de::Error::custom)?;
             map.insert(label, path);
         }
 
@@ -273,43 +292,133 @@ impl Serialize for AtomMap {
 
 impl EkalaManifest {
     /// Constructs a new Ekala manifest with the given set name
-    pub fn new(label: String) -> Result<Self, DocError> {
-        Ok(EkalaManifest {
-            set: EkalaSet::new(label)?,
-            packages: Default::default(),
-        })
+    pub fn new() -> Self {
+        EkalaManifest {
+            set: EkalaSet::new(),
+            metadata: Some(MetaData::new()),
+        }
     }
 
     /// Return a reference to the EkalaSet struct
     pub fn set(&self) -> &EkalaSet {
         &self.set
     }
+}
 
-    /// Add an atom to the manifest, assuming it's valid
-    pub fn add_package<P: AsRef<Path>>(&mut self, path: P) -> AtomResult<Label> {
-        let packages = self.packages.as_mut();
-        let label =
-            Manifest::get_atom_label(path.as_ref().join(crate::ATOM_MANIFEST_NAME.as_str()))?;
-        packages.insert(label.to_owned(), path.as_ref().into());
-        Ok(label)
+impl Default for EkalaManifest {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
 impl EkalaSet {
-    fn new(label: String) -> Result<Self, DocError> {
-        let label = Label::try_from(label)?;
-
-        Ok(EkalaSet { label })
+    fn new() -> Self {
+        EkalaSet {
+            packages: AtomMap::new(),
+        }
     }
 
-    /// return a refernce to the name of this set
-    pub fn label(&self) -> &str {
-        self.label.as_str()
+    fn _packages(&self) -> &AtomMap {
+        &self.packages
     }
 }
 
 impl AtomMap {
-    pub fn is_empty(&self) -> bool {
-        self.as_ref().is_empty()
+    fn new() -> Self {
+        AtomMap(BTreeMap::new())
     }
+}
+
+impl MetaData {
+    fn new() -> Self {
+        MetaData {
+            tags: Some(BTreeSet::new()),
+        }
+    }
+}
+
+impl EkalaWriter {
+    /// Create a new manifest writer, traversing upward to locate the nearest ekala.toml
+    pub fn new(repo: Option<&ThreadSafeRepository>) -> Result<Self, AtomError> {
+        let path = if let Some(repo) = repo {
+            repo.work_dir()
+                .map(|p| p.join(crate::EKALA_MANIFEST_NAME.as_str()))
+        } else {
+            find_upwards(crate::EKALA_MANIFEST_NAME.as_str())?
+        }
+        .ok_or(AtomError::EkalaManifest)?;
+
+        let (doc, _) = {
+            let content = std::fs::read_to_string(&path)?;
+            TypedDocument::new(&content)?
+        };
+
+        Ok(EkalaWriter {
+            doc,
+            path,
+            repo: repo.map(|r| r.to_thread_local()),
+        })
+    }
+
+    /// write a new package path into the packages list
+    pub fn write_package(
+        &mut self,
+        package_path: impl AsRef<Path>,
+    ) -> Result<(), crate::store::git::Error> {
+        use toml_edit::{Array, Value};
+
+        use crate::store::NormalizeStorePath;
+        let path = if let Some(repo) = &self.repo {
+            repo.normalize(package_path)?
+        } else {
+            package_path.as_ref().into()
+        };
+
+        let doc = self.doc.as_mut();
+        let set = doc
+            .entry("set")
+            .or_insert(toml_edit::table())
+            .as_table_mut()
+            .unwrap();
+
+        let packages = set
+            .entry("packages")
+            .or_insert(toml_edit::value(Value::Array(Array::new())))
+            .as_value_mut()
+            .and_then(|v| v.as_array_mut())
+            .unwrap();
+
+        packages.push(path.display().to_string());
+        packages.fmt();
+
+        Ok(())
+    }
+
+    /// write the Ekala Manifest back to disk atomically
+    pub fn write_atomic(&mut self) -> Result<(), DocError> {
+        use std::io::Write;
+
+        use tempfile::NamedTempFile;
+        let dir = self.path.parent().ok_or(DocError::MissingEkala)?;
+        let mut tmp = NamedTempFile::with_prefix_in(
+            format!(".{}", crate::EKALA_MANIFEST_NAME.as_str()),
+            dir,
+        )?;
+        tmp.write_all(self.doc.as_mut().to_string().as_bytes())?;
+        tmp.persist(dir.join(crate::EKALA_MANIFEST_NAME.as_str()))?;
+        Ok(())
+    }
+}
+
+fn find_upwards(filename: &str) -> Result<Option<PathBuf>, std::io::Error> {
+    let start_dir = std::env::current_dir()?;
+
+    for ancestor in start_dir.ancestors() {
+        let file_path = ancestor.join(filename);
+        if file_path.exists() {
+            return Ok(Some(file_path));
+        }
+    }
+
+    Ok(None)
 }

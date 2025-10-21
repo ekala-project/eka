@@ -100,6 +100,9 @@ pub enum DocError {
     /// The manifest path could not be accessed.
     #[error("the atom directory disappeared or is inaccessible: {0}")]
     Missing(PathBuf),
+    /// The manifest path could not be accessed.
+    #[error("the ekala.toml could not be located")]
+    MissingEkala,
     /// A valid atom id could not be constructed.
     #[error("a valid atom id could not be constructed; aborting: {0}")]
     AtomIdConstruct(String),
@@ -241,7 +244,8 @@ pub(crate) struct DirectDeps {
 }
 
 /// A newtype wrapper to tie a `DocumentMut` to a specific serializable type `T`.
-struct TypedDocument<T> {
+#[derive(Debug)]
+pub(super) struct TypedDocument<T> {
     /// The underlying `toml_edit` document.
     inner: DocumentMut,
     _marker: PhantomData<T>,

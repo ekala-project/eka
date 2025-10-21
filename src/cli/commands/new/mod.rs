@@ -5,14 +5,17 @@
 
 use std::ffi::OsStr;
 use std::fs;
+use std::future::Future;
 use std::io::Write;
 use std::path::PathBuf;
 
 use anyhow::Result;
-use atom::manifest::EkalaManifest;
+use atom::manifest::EkalaWriter;
 use atom::{Label, Manifest};
 use clap::Parser;
 use semver::Version;
+
+use crate::cli::store::Detected;
 
 //================================================================================================
 // Types
@@ -40,7 +43,10 @@ pub struct Args {
 //================================================================================================
 
 /// The main entry point for the `new` subcommand.
-pub(super) fn run(args: Args) -> Result<()> {
+pub(super) async fn run(
+    store: impl Future<Output = Result<Detected, crate::cli::store::Error>>,
+    args: Args,
+) -> Result<()> {
     let label: Label = if let Some(label) = args.label {
         label
     } else {
@@ -65,31 +71,24 @@ pub(super) fn run(args: Args) -> Result<()> {
     toml_file.write_all(atom_str.as_bytes())?;
     tracing::info!(message = "successfully created new atom", %label);
 
-    let ekala_path = find_upwards(atom::EKALA_MANIFEST_NAME.as_str())?;
-    if let Some(path) = ekala_path {
-        let mut ekala: EkalaManifest =
-            toml_edit::de::from_str(std::fs::read_to_string(path)?.as_str())?;
-        ekala.add_package(args.path)?;
-        tracing::info!(message = "added to package to set", %label, set = ekala.set().label());
+    let repo = if let Ok(Detected::Git(repo)) = store.await {
+        Some(repo)
+    } else {
+        None
+    };
+    if let Ok(mut writer) = EkalaWriter::new(repo).map_err(|error| {
+        tracing::error!(%error);
+        error
+    }) {
+        writer.write_package(&args.path)?;
+        writer.write_atomic()?;
+        tracing::info!(message = "successfully added to package to set", atom = %label);
     } else {
         tracing::warn!(
-            message = "package set not yet initialized, atom won't be publishable until `eka \
-                       init` is invoked"
+            message = "package set not yet initialized",
+            suggestion = "run eka init"
         );
-    }
+    };
 
     Ok(())
-}
-
-fn find_upwards(filename: &str) -> anyhow::Result<Option<PathBuf>> {
-    let start_dir = std::env::current_dir()?;
-
-    for ancestor in start_dir.ancestors() {
-        let file_path = ancestor.join(filename);
-        if file_path.exists() {
-            return Ok(Some(file_path));
-        }
-    }
-
-    Ok(None)
 }
