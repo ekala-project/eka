@@ -204,10 +204,6 @@ Eka's global namespace combines human-readable labels with cryptographic verific
 
 #### Repository Identity and Discovery
 
-> **Note:** Repository identity through initialization commits with entropy injection is proposed for future implementation. Currently, repository identity is established through the root commit hash. The `ekala.toml` manifest is now implemented and serves as the single source of truth for a repository's atom composition.
-
-Repository identity is established through an initialization commit with injected entropy, providing robust disambiguation of forks from mirrors. This temporal anchoring ensures that even identical repositories have different identities, preventing confusion between legitimate repositories and malicious forks.
-
 The `ekala.toml` manifest serves as the single source of truth for a repository's atom composition:
 
 ```toml
@@ -239,13 +235,11 @@ While the underlying system uses cryptographic IDs for security, developers inte
 - `gl:group/project::library` - GitLab addressing
 - `company-atoms::auth-lib` - Custom alias for internal repositories
 
-These URIs are resolved to cryptographic IDs in the lockfile, ensuring portability and security. The URI system supports:
+These URIs are resolved to full URLs in the manifest & cryptographic IDs in the lockfile, ensuring portability and security regardless of locally configured aliases. The URI system supports:
 
-- **Multiple Platforms:** GitHub, GitLab, and custom repositories.
 - **Version Constraints:** Semantic versioning and exact version pinning.
-- **Aliases:** Custom names for frequently used repositories.
-
-**Practical Implications:** The global namespace allows seamless collaboration across organizations while maintaining security. Teams can share atoms across different repositories, companies, or even continents, with mathematical guarantees that the right code is being used. The system scales naturally without requiring central coordination or registry maintenance, enabling a truly decentralized ecosystem.
+- **Aliases:** User configurable, custom names for frequently used repositories.
+- **Heuristics:** Intelligent heuristics help determine the most appropirate schema (e.g. `git@` implies ssh://) to obviate the need to express it in 90% of cases.
 
 ### Why This Matters: Beyond Package Management
 
@@ -258,7 +252,7 @@ The result is a system where:
 - **Reproducibility is automatic** through cryptographic locking and deterministic builds
 - **Collaboration is seamless** through global namespace management and intuitive URIs
 
-This foundation enables not just better package management, but a complete rethinking of how we build, distribute, and trust software in an increasingly interconnected world. Eka provides the infrastructure for a software supply chain that is as reliable and secure as the underlying mathematics that power it.
+This foundation enables not just better package management, but a complete rethinking of how we build, distribute, and trust software in an increasingly interconnected world. Eka provides the foundation for a software supply chain that is as reliable and secure as the underlying mathematics that power it.
 
 ## Development
 
