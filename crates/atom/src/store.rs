@@ -50,7 +50,7 @@
 //! // Initialize a Git store
 //! let repo = gix::open(".")?;
 //! let remote = repo.find_remote("origin")?;
-//! remote.ekala_init("foo", None)?;
+//! remote.ekala_init(None)?;
 //! let root = remote.ekala_root(None)?;
 //!
 //! // Query references from a remote store

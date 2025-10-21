@@ -98,12 +98,15 @@ pub struct AtomId<R> {
 #[serde(try_from = "String")]
 pub struct Label(String);
 
+/// A type alias for label in contexts where the term Label is confusing.
+pub type Name = Label;
+
 /// A type like `Label` implementing UAX #31 precisely (no exception for `-`)
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(try_from = "String")]
-pub struct Name(String);
+pub struct Identifier(String);
 
-/// A type like `Name` but with exceptions for `:` and `.` characters for metadata tags
+/// A type like `Identifier` but with exceptions for `:` and `.` characters for metadata tags
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(try_from = "String")]
 pub struct Tag(String);
@@ -292,12 +295,12 @@ impl VerifiedSeal for Label {
         Self(s)
     }
 }
-impl VerifiedName for Name {
+impl VerifiedName for Identifier {
     fn is_valid_char(c: char) -> bool {
         unicode_ident::is_xid_continue(c)
     }
 }
-impl VerifiedSeal for Name {
+impl VerifiedSeal for Identifier {
     fn new_unverified(s: String) -> Self {
         Self(s)
     }
@@ -361,7 +364,7 @@ impl Deref for Label {
     }
 }
 
-impl Deref for Name {
+impl Deref for Identifier {
     type Target = String;
 
     fn deref(&self) -> &Self::Target {
@@ -396,7 +399,7 @@ impl fmt::Display for Label {
         write!(f, "{}", self.0)
     }
 }
-impl fmt::Display for Name {
+impl fmt::Display for Identifier {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
     }
@@ -458,11 +461,11 @@ impl FromStr for Label {
     }
 }
 
-impl FromStr for Name {
+impl FromStr for Identifier {
     type Err = Error;
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        Name::validate(s)
+        Identifier::validate(s)
     }
 }
 
@@ -493,11 +496,11 @@ impl TryFrom<&str> for Label {
     }
 }
 
-impl TryFrom<&str> for Name {
+impl TryFrom<&str> for Identifier {
     type Error = Error;
 
     fn try_from(s: &str) -> Result<Self, Self::Error> {
-        Name::from_str(s)
+        Identifier::from_str(s)
     }
 }
 
@@ -509,11 +512,11 @@ impl TryFrom<String> for Label {
     }
 }
 
-impl TryFrom<String> for Name {
+impl TryFrom<String> for Identifier {
     type Error = Error;
 
     fn try_from(s: String) -> Result<Self, Self::Error> {
-        Name::validate(&s)
+        Identifier::validate(&s)
     }
 }
 
