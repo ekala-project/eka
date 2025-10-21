@@ -192,7 +192,7 @@ The structured namespace (`refs/ekala/`) optimizes atom discovery:
 - **Atom Content:** `refs/ekala/atoms/<label>/<version>` provides direct access to atom content.
 - **Metadata Separation:** Parallel hierarchies enable efficient querying without expensive traversals.
 
-This architecture enables near-instantaneous local discovery and remote querying, supporting scalable, distributed build pipelines.
+This architecture enables near-instantaneous remote querying, which is absolutely essential for decentralized systems to remain viable and performant. Without this capability, the distributed nature of the protocol would introduce prohibitive latency, rendering decentralized package management impractical. By leveraging efficient asynchronous query mechanisms, the system can simultaneously interrogate hundreds of mirrors, processing results as they arrive without blocking operations. This parallel processing ensures that dependency resolution remains fast and reliable, even in highly distributed environments where sources may be geographically dispersed or intermittently available.
 
 #### Backend Agnosticism
 
