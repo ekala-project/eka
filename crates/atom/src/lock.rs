@@ -30,7 +30,7 @@
 //!
 //! [[deps]]
 //! type = "atom"
-//! tag = "my-atom"
+//! label = "my-atom"
 //! version = "1.0.0"
 //! rev = "abc123..."
 //!
@@ -74,7 +74,7 @@ use snix_store::nar::SimpleRenderer;
 use snix_store::pathinfoservice::PathInfoService;
 use url::Url;
 
-use crate::id::{AtomDigest, AtomTag, Name};
+use crate::id::{AtomDigest, Label, Name};
 use crate::manifest::AtomSet;
 use crate::manifest::deps::{
     AtomReq, GitSpec, NixFetch, NixGit, NixReq, deserialize_url, serialize_url,
@@ -104,7 +104,7 @@ static SEMVER_REGEX: Lazy<Regex> = lazy_regex!(
 #[serde(deny_unknown_fields)]
 pub(crate) struct AtomDep {
     /// The unique identifier of the atom.
-    tag: AtomTag,
+    label: Label,
     /// The semantic version of the atom.
     version: Version,
     /// The location of the atom, whether local or remote.
@@ -312,8 +312,8 @@ impl AtomDep {
         &self.version
     }
 
-    pub(crate) fn tag(&self) -> &AtomTag {
-        &self.tag
+    pub(crate) fn label(&self) -> &Label {
+        &self.label
     }
 
     pub(crate) fn id(&self) -> &AtomDigest {
@@ -343,7 +343,7 @@ impl Uri {
         transport: Option<&mut Box<dyn Transport + Send>>,
     ) -> Result<(AtomReq, AtomDep), crate::store::git::Error> {
         let url = self.url();
-        let tag = self.tag();
+        let label = self.label();
         if url.is_some_and(|u| u.scheme != gix::url::Scheme::File) {
             let url = url.unwrap();
             let atoms = url.get_atoms(transport)?;
@@ -351,7 +351,7 @@ impl Uri {
             let (version, oid) =
                 <gix::url::Url as QueryVersion<_, _, _, _, _>>::process_highest_match(
                     atoms.clone(),
-                    tag,
+                    label,
                     &self.version_req(),
                 )
                 .ok_or(crate::store::git::Error::NoMatchingVersion)?;
@@ -361,9 +361,9 @@ impl Uri {
                 let v = VersionReq::parse(version.to_string().as_str())?;
                 AtomReq::new(v)
             };
-            let id = AtomId::construct(&atoms, tag.to_owned())?;
+            let id = AtomId::construct(&atoms, label.to_owned())?;
             Ok((atom_req, AtomDep {
-                tag: tag.to_owned(),
+                label: label.to_owned(),
                 version,
                 set: GitDigest::Sha1(root),
                 rev: match oid {
@@ -396,7 +396,7 @@ impl From<&AtomDep> for AtomId<Root> {
     fn from(dep: &AtomDep) -> Self {
         let root = Root::from(dep.set());
         // unwrap is safe, as calculate_origin will always suceed for src of type Root
-        let id = AtomId::construct(&root, dep.tag().to_owned()).unwrap();
+        let id = AtomId::construct(&root, dep.label().to_owned()).unwrap();
         id
     }
 }
@@ -463,7 +463,7 @@ impl From<UnpackedRef<ObjectId, Root>> for AtomDep {
     fn from(value: UnpackedRef<ObjectId, Root>) -> Self {
         let UnpackedRef { id, version, rev } = value;
         AtomDep {
-            tag: id.tag().to_owned(),
+            label: id.label().to_owned(),
             version,
             set: GitDigest::from(id.root().deref().to_owned()),
             rev: GitDigest::from(rev),
@@ -473,10 +473,10 @@ impl From<UnpackedRef<ObjectId, Root>> for AtomDep {
 }
 
 impl Deref for AtomDep {
-    type Target = AtomTag;
+    type Target = Label;
 
     fn deref(&self) -> &Self::Target {
-        &self.tag
+        &self.label
     }
 }
 

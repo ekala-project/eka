@@ -234,7 +234,7 @@ impl<'a> SetResolver<'a> {
                         existing.mirrors = %toml_edit::ser::to_string(&existing_mirrors)?,
                         existing.rev = %existing.unpacked.rev,
                         conflicting.url = %mirror_url.to_string(),
-                        conflicting.tag = %atom.id,
+                        conflicting.label = %atom.id,
                         conflicting.version = %atom.version,
                         conflicting.rev = %atom.rev,
                     );

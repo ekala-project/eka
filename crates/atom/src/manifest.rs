@@ -12,14 +12,14 @@
 //! ## Key Types
 //!
 //! - [`Manifest`] - The complete manifest structure, representing the `atom.toml` file.
-//! - [`Atom`] - The core atom metadata (`tag`, `version`, `description`).
+//! - [`Atom`] - The core atom metadata (`label`, `version`, `description`).
 //! - [`AtomError`] - Errors that can occur during manifest processing.
 //!
 //! ## Example Manifest
 //!
 //! ```toml
 //! [atom]
-//! tag = "my-atom"
+//! label = "my-atom"
 //! version = "1.0.0"
 //! description = "A sample atom for demonstration"
 //!
@@ -44,12 +44,12 @@
 //! use std::str::FromStr;
 //!
 //! use atom::manifest::Manifest;
-//! use atom::{Atom, AtomTag};
+//! use atom::{Atom, Label};
 //! use semver::Version;
 //!
 //! // Create a manifest programmatically.
 //! let manifest = Manifest::new(
-//!     AtomTag::try_from("my-atom").unwrap(),
+//!     Label::try_from("my-atom").unwrap(),
 //!     Version::new(1, 0, 0),
 //!     Some("My first atom".to_string()),
 //! );
@@ -57,23 +57,25 @@
 //! // Parse a manifest from a string.
 //! let manifest_str = r#"
 //! [atom]
-//! tag = "parsed-atom"
+//! label = "parsed-atom"
 //! version = "2.0.0"
 //! "#;
 //! let parsed = Manifest::from_str(manifest_str).unwrap();
 //! ```
 
-use std::collections::{BTreeSet, HashMap};
-use std::path::PathBuf;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
+use gix::{Repository, ThreadSafeRepository};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use toml_edit::{DocumentMut, de};
 
-use crate::manifest::deps::Dependency;
-use crate::{Atom, AtomTag};
+use crate::id::Tag;
+use crate::manifest::deps::{Dependency, DocError, TypedDocument};
+use crate::{Atom, Label};
 
 pub mod deps;
 pub(crate) mod sets;
@@ -86,17 +88,26 @@ pub(crate) mod sets;
 #[derive(Error, Debug)]
 pub enum AtomError {
     /// The manifest is missing the required `[atom]` table.
-    #[error("Manifest is missing the `[atom]` key")]
+    #[error("Manifest is missing the `[package]` key")]
     Missing,
-    /// One of the fields in the `[atom]` table is missing or invalid.
+    /// One of the fields in the `[package]` table is missing or invalid.
     #[error(transparent)]
     InvalidAtom(#[from] de::Error),
     /// The manifest is not valid TOML.
     #[error(transparent)]
     InvalidToml(#[from] toml_edit::TomlError),
+    /// An Label is missing or malformed
+    #[error("failed to locate Ekala manifest in directory parents")]
+    EkalaManifest,
     /// An I/O error occurred while reading the manifest file.
     #[error(transparent)]
     Io(#[from] std::io::Error),
+    /// An Label is missing or malformed
+    #[error(transparent)]
+    Id(#[from] crate::id::Error),
+    /// A document error
+    #[error(transparent)]
+    Doc(#[from] DocError),
 }
 
 /// A strongly-typed representation of a source for an atom set.
@@ -143,16 +154,60 @@ pub struct Manifest {
 /// A specialized result type for manifest operations.
 pub type AtomResult<T> = Result<T, AtomError>;
 
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+struct MetaData {
+    tags: Option<BTreeSet<Tag>>,
+}
+
+/// The entrypoint for an ekala manifest describing a set of atoms.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct EkalaManifest {
+    set: EkalaSet,
+    metadata: Option<MetaData>,
+}
+
+/// The section of the manifest describing the Ekala set of atoms.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct EkalaSet {
+    #[serde(default)]
+    packages: AtomMap,
+}
+
+#[derive(Debug, PartialEq, Eq, Default)]
+pub(crate) struct AtomMap(BTreeMap<Label, PathBuf>);
+
+/// A writer to assist with writing into the Ekala manifest.
+#[derive(Debug)]
+pub struct EkalaWriter {
+    path: PathBuf,
+    doc: TypedDocument<EkalaManifest>,
+    repo: Option<Repository>,
+}
+
 //================================================================================================
 // Impls
 //================================================================================================
 
+impl AsRef<BTreeMap<Label, PathBuf>> for AtomMap {
+    fn as_ref(&self) -> &BTreeMap<Label, PathBuf> {
+        &self.0
+    }
+}
+
+impl AsMut<BTreeMap<Label, PathBuf>> for AtomMap {
+    fn as_mut(&mut self) -> &mut BTreeMap<Label, PathBuf> {
+        &mut self.0
+    }
+}
+
 impl Manifest {
-    /// Creates a new `Manifest` with the given tag, version, and description.
-    pub fn new(tag: AtomTag, version: Version, description: Option<String>) -> Self {
+    /// Creates a new `Manifest` with the given label, version, and description.
+    pub fn new(label: Label, version: Version, description: Option<String>) -> Self {
         Manifest {
             package: Atom {
-                tag,
+                label,
                 version,
                 description,
                 sets: HashMap::new(),
@@ -161,13 +216,13 @@ impl Manifest {
         }
     }
 
-    /// Parses an [`Atom`] struct from the `[atom]` table of a TOML document string,
+    /// Parses an [`Atom`] struct from the `[package]` table of a TOML document string,
     /// ignoring other tables and fields.
     ///
     /// # Errors
     ///
     /// This function will return an error if the content is invalid TOML,
-    /// or if the `[atom]` table is missing.
+    /// or if the `[package]` table is missing.
     pub(crate) fn get_atom(content: &str) -> AtomResult<Atom> {
         let doc = content.parse::<DocumentMut>()?;
 
@@ -177,6 +232,12 @@ impl Manifest {
         } else {
             Err(AtomError::Missing)
         }
+    }
+
+    pub(crate) fn get_atom_label<P: AsRef<Path>>(path: P) -> AtomResult<Label> {
+        let content = std::fs::read_to_string(&path)?;
+        let atom = Self::get_atom(&content)?;
+        Ok(atom.label)
     }
 
     pub(crate) fn deps(&self) -> &Dependency {
@@ -199,4 +260,165 @@ impl TryFrom<PathBuf> for Manifest {
         let content = std::fs::read_to_string(path)?;
         Ok(Manifest::from_str(&content)?)
     }
+}
+
+impl<'de> Deserialize<'de> for AtomMap {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let entries: Vec<PathBuf> = Vec::deserialize(deserializer)?;
+        let mut map = BTreeMap::new();
+
+        for path in entries {
+            let label = Manifest::get_atom_label(path.join(crate::ATOM_MANIFEST_NAME.as_str()))
+                .map_err(serde::de::Error::custom)?;
+            map.insert(label, path);
+        }
+
+        Ok(AtomMap(map))
+    }
+}
+
+impl Serialize for AtomMap {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let values: Vec<_> = self.as_ref().values().collect();
+        values.serialize(serializer)
+    }
+}
+
+impl EkalaManifest {
+    /// Constructs a new Ekala manifest with the given set name
+    pub fn new() -> Self {
+        EkalaManifest {
+            set: EkalaSet::new(),
+            metadata: Some(MetaData::new()),
+        }
+    }
+
+    /// Return a reference to the EkalaSet struct
+    pub fn set(&self) -> &EkalaSet {
+        &self.set
+    }
+}
+
+impl Default for EkalaManifest {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl EkalaSet {
+    fn new() -> Self {
+        EkalaSet {
+            packages: AtomMap::new(),
+        }
+    }
+
+    fn _packages(&self) -> &AtomMap {
+        &self.packages
+    }
+}
+
+impl AtomMap {
+    fn new() -> Self {
+        AtomMap(BTreeMap::new())
+    }
+}
+
+impl MetaData {
+    fn new() -> Self {
+        MetaData {
+            tags: Some(BTreeSet::new()),
+        }
+    }
+}
+
+impl EkalaWriter {
+    /// Create a new manifest writer, traversing upward to locate the nearest ekala.toml
+    pub fn new(repo: Option<&ThreadSafeRepository>) -> Result<Self, AtomError> {
+        let path = if let Some(repo) = repo {
+            repo.work_dir()
+                .map(|p| p.join(crate::EKALA_MANIFEST_NAME.as_str()))
+        } else {
+            find_upwards(crate::EKALA_MANIFEST_NAME.as_str())?
+        }
+        .ok_or(AtomError::EkalaManifest)?;
+
+        let (doc, _) = {
+            let content = std::fs::read_to_string(&path)?;
+            TypedDocument::new(&content)?
+        };
+
+        Ok(EkalaWriter {
+            doc,
+            path,
+            repo: repo.map(|r| r.to_thread_local()),
+        })
+    }
+
+    /// write a new package path into the packages list
+    pub fn write_package(
+        &mut self,
+        package_path: impl AsRef<Path>,
+    ) -> Result<(), crate::store::git::Error> {
+        use toml_edit::{Array, Value};
+
+        use crate::store::NormalizeStorePath;
+        let path = if let Some(repo) = &self.repo {
+            repo.normalize(package_path)?
+        } else {
+            package_path.as_ref().into()
+        };
+
+        let doc = self.doc.as_mut();
+        let set = doc
+            .entry("set")
+            .or_insert(toml_edit::table())
+            .as_table_mut()
+            .unwrap();
+
+        let packages = set
+            .entry("packages")
+            .or_insert(toml_edit::value(Value::Array(Array::new())))
+            .as_value_mut()
+            .and_then(|v| v.as_array_mut())
+            .unwrap();
+
+        packages.push(path.display().to_string());
+        packages.fmt();
+
+        Ok(())
+    }
+
+    /// write the Ekala Manifest back to disk atomically
+    pub fn write_atomic(&mut self) -> Result<(), DocError> {
+        use std::io::Write;
+
+        use tempfile::NamedTempFile;
+        let dir = self.path.parent().ok_or(DocError::MissingEkala)?;
+        let mut tmp = NamedTempFile::with_prefix_in(
+            format!(".{}", crate::EKALA_MANIFEST_NAME.as_str()),
+            dir,
+        )?;
+        tmp.write_all(self.doc.as_mut().to_string().as_bytes())?;
+        tmp.persist(dir.join(crate::EKALA_MANIFEST_NAME.as_str()))?;
+        Ok(())
+    }
+}
+
+fn find_upwards(filename: &str) -> Result<Option<PathBuf>, std::io::Error> {
+    let start_dir = std::env::current_dir()?;
+
+    for ancestor in start_dir.ancestors() {
+        let file_path = ancestor.join(filename);
+        if file_path.exists() {
+            return Ok(Some(file_path));
+        }
+    }
+
+    Ok(None)
 }

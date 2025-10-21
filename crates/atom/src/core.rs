@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 
-use super::id::{AtomTag, Name};
+use super::id::{Label, Name};
 use crate::manifest::AtomSets;
 
 //================================================================================================
@@ -25,7 +25,7 @@ use crate::manifest::AtomSets;
 #[serde(deny_unknown_fields)]
 pub struct Atom {
     /// The verified, human-readable Unicode identifier for the Atom.
-    pub tag: AtomTag,
+    pub label: Label,
 
     /// The version of the Atom.
     pub version: Version,
@@ -84,13 +84,13 @@ impl AtomPaths<PathBuf> {
             .unwrap_or(path.as_os_str())
             .to_string_lossy();
 
-        if name == crate::MANIFEST_NAME.as_str() {
+        if name == crate::ATOM_MANIFEST_NAME.as_str() {
             AtomPaths {
                 spec: path.into(),
                 content: path.parent().unwrap_or(Path::new("")).into(),
             }
         } else {
-            let spec = path.join(crate::MANIFEST_NAME.as_str());
+            let spec = path.join(crate::ATOM_MANIFEST_NAME.as_str());
             AtomPaths {
                 spec: spec.clone(),
                 content: path.into(),

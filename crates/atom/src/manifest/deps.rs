@@ -61,7 +61,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use toml_edit::DocumentMut;
 use url::Url;
 
-use crate::id::{AtomTag, Name};
+use crate::id::{Label, Name};
 use crate::lock::{Dep, SetDetails};
 use crate::manifest::sets::{ResolvedSets, SetResolver};
 use crate::store::git::Root;
@@ -72,7 +72,7 @@ use crate::{AtomId, Lockfile, Manifest};
 // Types
 //================================================================================================
 
-type AtomFrom = HashMap<Name, HashMap<AtomTag, VersionReq>>;
+type AtomFrom = HashMap<Name, HashMap<Label, VersionReq>>;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
 #[serde(deny_unknown_fields)]
@@ -100,6 +100,9 @@ pub enum DocError {
     /// The manifest path could not be accessed.
     #[error("the atom directory disappeared or is inaccessible: {0}")]
     Missing(PathBuf),
+    /// The manifest path could not be accessed.
+    #[error("the ekala.toml could not be located")]
+    MissingEkala,
     /// A valid atom id could not be constructed.
     #[error("a valid atom id could not be constructed; aborting: {0}")]
     AtomIdConstruct(String),
@@ -133,6 +136,9 @@ pub enum DocError {
     /// A generic error occurred.
     #[error(transparent)]
     Error(#[from] crate::lock::BoxError),
+    /// A invalid refname was passed.
+    #[error(transparent)]
+    BadLabel(#[from] crate::id::Error),
 }
 
 /// Represents the manner in which we resolve a rev for this git fetch
@@ -205,7 +211,7 @@ pub struct NixFetch {
     ///
     /// This field is omitted from serialization if None.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub from_version: Option<(Name, AtomTag)>,
+    pub from_version: Option<(Name, Label)>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -238,7 +244,8 @@ pub(crate) struct DirectDeps {
 }
 
 /// A newtype wrapper to tie a `DocumentMut` to a specific serializable type `T`.
-struct TypedDocument<T> {
+#[derive(Debug)]
+pub(super) struct TypedDocument<T> {
     /// The underlying `toml_edit` document.
     inner: DocumentMut,
     _marker: PhantomData<T>,
@@ -410,10 +417,10 @@ impl ManifestWriter {
     /// are respected.
     pub async fn new(repo: Option<&ThreadSafeRepository>, path: &Path) -> Result<Self, DocError> {
         use std::fs;
-        let path = if path.file_name() == Some(OsStr::new(crate::MANIFEST_NAME.as_str())) {
+        let path = if path.file_name() == Some(OsStr::new(crate::ATOM_MANIFEST_NAME.as_str())) {
             path.into()
         } else {
-            path.join(crate::MANIFEST_NAME.as_str())
+            path.join(crate::ATOM_MANIFEST_NAME.as_str())
         };
         let lock_path = path.with_file_name(crate::LOCK_NAME.as_str());
         let toml_str = fs::read_to_string(&path).inspect_err(|_| {
@@ -461,7 +468,7 @@ impl ManifestWriter {
             Dep::Atom(atom_dep) => {
                 if let Some(SetDetails { name, .. }) = self.lock.sets.get(&atom_dep.set()) {
                     if let Some(set) = manifest.deps().from().get(name) {
-                        set.contains_key(atom_dep.tag())
+                        set.contains_key(atom_dep.label())
                     } else {
                         false
                     };
@@ -486,7 +493,7 @@ impl ManifestWriter {
             {
                 tracing::warn!(
                     message = Self::UPDATE_DEPENDENCY,
-                    tag = %id.tag(),
+                    label = %id.label(),
                     set = %name,
                     r#type = "atom"
                 );
@@ -501,7 +508,7 @@ impl ManifestWriter {
             tracing::warn!(
                 message = Self::RESOLUTION_ERR_MSG,
                 set = %name,
-                atom = %id.tag(),
+                atom = %id.label(),
                 requested.version = %req,
                 avaliable.versions = %toml_edit::ser::to_string(&versions).unwrap_or_default()
             );
@@ -535,11 +542,11 @@ impl ManifestWriter {
         for (name, set) in manifest.deps.from {
             let maybe_root = self.resolved.roots().get(&name).map(ToOwned::to_owned);
             if let Some(root) = maybe_root {
-                for (tag, req) in set {
-                    let id = AtomId::construct(&root, tag.to_owned()).map_err(|e| {
+                for (label, req) in set {
+                    let id = AtomId::construct(&root, label.to_owned()).map_err(|e| {
                         DocError::AtomIdConstruct(format!(
                             "set: {}, atom: {}, err: {}",
-                            &name, &tag, e
+                            &name, &label, e
                         ))
                     })?;
                     self.synchronize_atom(req, id, name.to_owned());
@@ -614,10 +621,10 @@ impl ManifestWriter {
     pub fn add_uri(&mut self, uri: Uri, _set: Option<Name>) -> Result<(), DocError> {
         let (_atom_req, lock_entry) = uri.resolve(None).map_err(Box::new)?;
 
-        let _tag = lock_entry.tag().to_owned();
+        let _label = lock_entry.label().to_owned();
         let _id = lock_entry.id().to_owned();
 
-        // self.doc.write_dep(&tag, &dep)?;
+        // self.doc.write_dep(&label, &dep)?;
         // if !self.lock.deps.as_mut().insert(Dep::Atom(lock_entry)) {
         //     tracing::warn!(message = "updating lock entry", atom.id = %id);
         // }
@@ -658,7 +665,7 @@ impl ManifestWriter {
             .ok_or(DocError::Missing(self.path.clone()))?;
         let lock_path = self.path.with_file_name(crate::LOCK_NAME.as_str());
         let mut tmp =
-            NamedTempFile::with_prefix_in(format!(".{}", crate::MANIFEST_NAME.as_str()), dir)?;
+            NamedTempFile::with_prefix_in(format!(".{}", crate::ATOM_MANIFEST_NAME.as_str()), dir)?;
         let mut tmp_lock =
             NamedTempFile::with_prefix_in(format!(".{}", crate::LOCK_NAME.as_str()), dir)?;
         tmp.write_all(self.doc.as_mut().to_string().as_bytes())?;

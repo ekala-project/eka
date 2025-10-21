@@ -123,10 +123,10 @@ enum DirectSubs {
 //================================================================================================
 
 /// The main entry point for the `add` subcommand.
-pub(super) async fn run(store: Detected, args: Args) -> Result<()> {
+pub(super) async fn run(store: Option<Detected>, args: Args) -> Result<()> {
     let repo = match store {
-        Detected::Git(repo) => Some(repo),
-        Detected::None => None,
+        Some(Detected::Git(repo)) => Some(repo),
+        _ => None,
     };
     let mut writer = atom::ManifestWriter::new(repo, &args.path).await?;
 

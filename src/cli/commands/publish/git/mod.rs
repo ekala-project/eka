@@ -21,10 +21,10 @@ use super::PublishArgs;
 /// Git-specific arguments for the `publish` subcommand.
 #[derive(Parser, Debug)]
 #[command(next_help_heading = "Git Options")]
-pub(crate) struct GitArgs {
+pub(super) struct GitArgs {
     /// The target remote to publish the atom(s) to.
     #[arg(long, short = 't', default_value_t = git::default_remote().to_owned(), name = "TARGET")]
-    pub(super) remote: String,
+    remote: String,
     /// The revision to publish the atom(s) from.
     ///
     /// Specifies a revision using Git's extended SHA-1 syntax.

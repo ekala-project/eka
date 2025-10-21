@@ -24,7 +24,7 @@ The Atom URI format is a custom scheme designed to be both powerful and ergonomi
 The abstract syntax for an Atom URI is as follows:
 
 ```
-[scheme://][[user[:pass]@][url-alias:][url-fragment::]atom-tag[@version]
+[scheme://][[user[:pass]@][url-alias:][url-fragment::]label[@version]
 ```
 
 **Component Breakdown:**
@@ -33,7 +33,7 @@ The abstract syntax for an Atom URI is as follows:
 - **`user[:pass]` (Optional):** User credentials for authentication.
 - **`url-alias` (Optional):** A user-configurable alias that expands to a full URL.
 - **`url-fragment` (Optional):** The path to the repository or a URL fragment that is combined with an alias.
-- **`atom-tag` (Required):** The unique, human-readable identifier for the atom.
+- **`label` (Required):** The unique, human-readable identifier for the atom.
 - **`version` (Optional):** A semantic version requirement for the atom.
 
 ### 2. Aliased URLs for Pinned Dependencies
@@ -88,7 +88,7 @@ graph TD
     C --> E{Resolve Aliases};
     E --> F{Infer Scheme};
     F --> G[Construct gix_url::Url];
-    D --> H{Validate Atom Tag / Get Ref};
+    D --> H{Validate Atom Label / Get Ref};
     D --> I{Parse Version Requirement};
     G & H & I --> J[Construct Final Uri/AliasedUrl Struct];
     J --> K{Write to Manifest};

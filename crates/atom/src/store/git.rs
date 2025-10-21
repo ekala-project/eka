@@ -16,6 +16,7 @@ use bstr::BStr;
 use gix::discover::upwards::Options;
 use gix::protocol::handshake::Ref;
 use gix::protocol::transport::client::Transport;
+use gix::refs::Target;
 use gix::sec::Trust;
 use gix::sec::trust::Mapping;
 use gix::{Commit, ObjectId, Repository, ThreadSafeRepository};
@@ -24,8 +25,9 @@ use thiserror::Error as ThisError;
 
 use crate::id::Origin;
 use crate::lock::GitDigest;
+use crate::manifest::EkalaManifest;
 use crate::store::{Init, NormalizeStorePath, QueryStore, QueryVersion, UnpackedRef};
-use crate::{AtomId, AtomTag};
+use crate::{AtomId, Label};
 
 #[cfg(test)]
 pub(crate) mod test;
@@ -34,7 +36,7 @@ pub(crate) mod test;
 // Constants
 //================================================================================================
 
-pub(super) const V1_ROOT: &str = "refs/tags/ekala/root/v1";
+pub(super) const V1_ROOT: &str = "refs/ekala/init";
 
 //================================================================================================
 // Statics
@@ -111,6 +113,9 @@ pub enum Error {
     /// The repository root calculation failed.
     #[error("Failed to calculate the repositories root commit")]
     RootNotFound,
+    /// Repo is in a detached head state
+    #[error("The repository is in a detached head state")]
+    DetachedHead,
     /// A transparent wrapper for a [`gix::url::parse::Error`]
     #[error(transparent)]
     UrlParse(#[from] gix::url::parse::Error),
@@ -123,6 +128,18 @@ pub enum Error {
     /// A transparent wrapper for a [`Box<gix::reference::edit::Error>`]
     #[error(transparent)]
     Semver(#[from] semver::Error),
+    /// A transparent wrapper for a [`crate::id::Error`]
+    #[error(transparent)]
+    LabelError(#[from] crate::id::Error),
+    /// A transparent wrapper for a [`crate::id::Error`]
+    #[error(transparent)]
+    Utf8(#[from] bstr::Utf8Error),
+    /// A transparent wrapper for a [`toml_edit::ser::Error`]
+    #[error(transparent)]
+    Serial(#[from] toml_edit::ser::Error),
+    /// A generic boxed error variant
+    #[error(transparent)]
+    Generic(Box<dyn std::error::Error + Send + Sync>),
 }
 
 /// The wrapper type for the underlying type which will be used to represent
@@ -212,11 +229,127 @@ impl<'repo> EkalaRemote for gix::Remote<'repo> {
     }
 }
 
+impl Init<Root, Ref, ()> for gix::Repository {
+    type Error = Error;
+
+    fn sync(&self, _: Option<&mut ()>) -> Result<Ref, Self::Error> {
+        todo!()
+    }
+
+    fn ekala_init(&self, _: Option<&mut ()>) -> Result<String, Self::Error> {
+        let workdir = self.workdir().ok_or(Error::DetachedHead)?;
+        let manifest_filename = crate::EKALA_MANIFEST_NAME.as_str();
+        let manifest_path = workdir.join(manifest_filename);
+
+        let content = if let Ok(content) = std::fs::read_to_string(&manifest_path) {
+            let _manifest: EkalaManifest =
+                toml_edit::de::from_str(&content).map_err(|e| Error::Generic(Box::new(e)))?;
+            content
+        } else {
+            let manifest = EkalaManifest::new();
+            let content = toml_edit::ser::to_string_pretty(&manifest)?;
+            std::fs::write(&manifest_path, &content)?;
+            content
+        };
+
+        if !self
+            .head_tree()
+            .ok()
+            .map(|t| t.find_entry(manifest_filename).is_some())
+            .is_some_and(|b| b)
+        {
+            self.commit_init(&content)?;
+        };
+        Ok(content)
+    }
+
+    fn commit_init(&self, content: &str) -> Result<(), Self::Error> {
+        use gix::objs::tree;
+
+        let blob = self
+            .write_blob(content)
+            .map_err(|e| Error::Generic(Box::new(e)))?;
+        let tree = self.head_tree().map_err(|e| Error::Generic(Box::new(e)))?;
+        let mut tree = tree.decode().map_err(|e| Error::Generic(Box::new(e)))?;
+        let entry = tree::Entry {
+            mode: tree::EntryKind::Blob.into(),
+            filename: crate::EKALA_MANIFEST_NAME.as_str().into(),
+            oid: blob.detach(),
+        };
+        tree.entries.push((&entry).into());
+        tree.entries.sort_unstable();
+        let id = self
+            .write_object(&tree)
+            .map_err(|e| Error::Generic(Box::new(e)))?;
+
+        let mut index = gix::index::File::clone(
+            &*self
+                .index_or_empty()
+                .map_err(|e| Error::Generic(Box::new(e)))?,
+        );
+        index.dangerously_push_entry(
+            gix::index::entry::Stat::default(),
+            blob.detach(),
+            gix::index::entry::Flags::from_stage(gix::index::entry::Stage::Unconflicted),
+            gix::index::entry::Mode::FILE,
+            crate::EKALA_MANIFEST_NAME.as_str().into(),
+        );
+        index.sort_entries();
+        index
+            .write(gix::index::write::Options::default())
+            .map_err(|e| Error::Generic(Box::new(e)))?;
+
+        self.commit("HEAD", "init: ekala project", id, vec![
+            self.head_id().map_err(|e| Error::Generic(Box::new(e)))?,
+        ])
+        .map_err(|e| Error::Generic(Box::new(e)))?;
+
+        Ok(())
+    }
+
+    fn ekala_root(&self, _: Option<&mut ()>) -> Result<Root, Self::Error> {
+        self.head_commit()
+            .map_err(|e| Error::Generic(Box::new(e)))?
+            .calculate_origin()
+    }
+}
+
 impl<'repo> Init<Root, Ref, Box<dyn Transport + Send>> for gix::Remote<'repo> {
     type Error = Error;
 
-    /// Determines if this remote is a valid Ekala store by pulling HEAD and the root
-    /// tag, ensuring the latter is actually the root of HEAD, returning the root.
+    /// Verifies the consistency of a remote Ekala store and returns its root.
+    ///
+    /// This function ensures the remote repository is properly initialized as an Ekala store
+    /// by checking that the declared root reference exists and is consistent with the repository's
+    /// actual root commit.
+    ///
+    /// ## Behavior
+    ///
+    /// The function performs the following steps:
+    ///
+    /// 1. **Fetches References**: It requests two specific references from the remote:
+    ///     - `HEAD`: To get the current head commit.
+    ///     - `refs/ekala/init`: The Ekala root reference.
+    ///
+    /// 2. **Validates References**: It ensures both `HEAD` and the Ekala root reference exist in
+    ///    the fetched refs. If either is missing, it returns a [`RootNotFound`] error.
+    ///
+    /// 3. **Calculates Roots**: For both the HEAD commit and the Ekala root reference:
+    ///     - If the commit has no parents (is the initial commit), uses that commit's ID directly.
+    ///     - Otherwise, traverses the commit history back to the initial commit to find the true
+    ///       root.
+    ///
+    /// 4. **Verifies Consistency**: Compares the calculated root from HEAD with the calculated root
+    ///    from the Ekala reference. If they match, the store is consistent. If they differ, returns
+    ///    a [`RootInconsistent`] error.
+    ///
+    /// ## Purpose
+    ///
+    /// This verification ensures that the Ekala store's root of trust is properly established
+    /// and hasn't been corrupted. It prevents operations on misconfigured stores and ensures
+    /// all atoms are anchored to a consistent project origin.
+    ///
+    /// On success, it returns the verified [`Root`] commit ID.
     #[tracing::instrument(skip(transport))]
     fn ekala_root(
         &self,
@@ -228,8 +361,27 @@ impl<'repo> Init<Root, Ref, Box<dyn Transport + Send>> for gix::Remote<'repo> {
         crate::log::set_sub_task(&span, "💪 ensuring consistency with remote");
 
         let repo = self.repo();
-        self.get_refs(["HEAD", V1_ROOT], transport).map(|i| {
-            let mut i = i.into_iter();
+        self.get_refs(["HEAD", V1_ROOT], transport).map(|refs| {
+            let ekala_root = refs
+                .iter()
+                .find(|r| {
+                    let (n, ..) = r.unpack();
+                    n.starts_with(V1_ROOT.as_bytes())
+                })
+                .ok_or(Error::RootNotFound)?;
+
+            let head = refs
+                .iter()
+                .find(|r| {
+                    if let Ref::Symbolic { full_ref_name, .. } = r {
+                        full_ref_name == "HEAD"
+                    } else {
+                        false
+                    }
+                })
+                .ok_or(Error::RootNotFound)?;
+
+            let mut i = vec![head.to_owned(), ekala_root.to_owned()].into_iter();
             let root_for = |i: &mut dyn Iterator<Item = Ref>| {
                 i.next()
                     .ok_or(Error::NoRef(V1_ROOT.to_owned(), self.symbol().to_owned()))
@@ -246,32 +398,106 @@ impl<'repo> Init<Root, Ref, Box<dyn Transport + Send>> for gix::Remote<'repo> {
                     })
             };
 
-            let fst = root_for(&mut i)?;
-            let snd = root_for(&mut i)?;
-            if fst == snd {
-                Ok(Root(fst))
+            let calculated_root = root_for(&mut i)?;
+            let reported_root = root_for(&mut i)?;
+            if calculated_root == reported_root {
+                Ok(Root(calculated_root))
             } else {
                 Err(Error::RootInconsistent)
             }
         })?
     }
 
-    /// Initialize the repository by calculating the root, according to the latest HEAD.
-    fn ekala_init(&self, transport: Option<&mut Box<dyn Transport + Send>>) -> Result<(), Error> {
+    /// Initializes a remote Git repository as an Ekala store.
+    ///
+    /// This function sets up a remote repository to serve as an Ekala store by creating
+    /// the necessary root reference. It ensures the repository is properly configured
+    /// before atoms can be published to it.
+    ///
+    /// ## Behavior
+    ///
+    /// The initialization process involves several key steps:
+    ///
+    /// 1. **Transport Setup**: Obtains or uses the provided transport for remote communication.
+    ///
+    /// 2. **Sync with Remote**: Calls [`sync`] to fetch the latest `HEAD` from the remote, ensuring
+    ///    initialization is based on the current repository state.
+    ///
+    /// 3. **Root Calculation**: Calculates the repository's true root commit by traversing the
+    ///    commit history from the synced `HEAD` back to the initial commit (the one with no
+    ///    parents).
+    ///
+    /// 4. **Consistency Check**: Attempts to call [`ekala_root`] to check if the remote is already
+    ///    initialized.
+    ///     - If already initialized, verifies that the existing root matches the calculated root.
+    ///     - If they match, returns the existing root reference name (idempotent behavior).
+    ///     - If they differ, returns a [`RootInconsistent`] error.
+    ///
+    /// 5. **Root Reference Creation**: If not already initialized, creates a new Git reference
+    ///    named `refs/ekala/init` that points directly to the calculated root commit.
+    ///
+    /// 6. **Push to Remote**: Uses the `git` command-line tool to push the newly created root
+    ///    reference to the remote repository. This finalizes the initialization.
+    ///
+    /// ## Idempotency
+    ///
+    /// The function is idempotent: if the remote is already initialized with the same root,
+    /// it will succeed without making changes. If initialized with a different root, it fails.
+    ///
+    /// ## Purpose
+    ///
+    /// By establishing a stable root reference, `ekala_init` provides the foundation for
+    /// atom publishing operations. It ensures all atoms are anchored to a consistent
+    /// project origin, maintaining the integrity of the distributed store.
+    ///
+    /// On success, it returns the name of the root reference (`refs/ekala/init`).
+    fn ekala_init(
+        &self,
+        transport: Option<&mut Box<dyn Transport + Send>>,
+    ) -> Result<String, Error> {
         use gix::refs::transaction::PreviousValue;
 
         use crate::Origin;
 
-        let name = self.try_symbol()?;
-        let head = to_id(self.sync(transport)?);
+        let transport = if let Some(transport) = transport {
+            transport
+        } else {
+            &mut self.get_transport()?
+        };
+        let remote = self.try_symbol()?;
+        let head = to_id(self.sync(Some(transport))?);
         let repo = self.repo();
         let root = *repo
             .find_commit(head)
             .map_err(Box::new)?
             .calculate_origin()?;
 
+        if let Ok(id) = self.ekala_root(Some(transport)) {
+            if root != *id {
+                tracing::error!(
+                    reported.root = %*id,
+                    requested.root = %root,
+                    "remote is already initialized to a different state than the one \
+                               reported; bailing...",
+                );
+                return Err(Error::RootInconsistent);
+            } else {
+                tracing::info!(
+                    ekala.root = %*id,
+                    ekala.remote = %remote,
+                    "remote is already initialized"
+                );
+                return Ok(V1_ROOT.into());
+            }
+        }
+
         let root_ref = repo
-            .reference(V1_ROOT, root, PreviousValue::MustNotExist, "init: root")
+            .reference(
+                V1_ROOT,
+                root,
+                PreviousValue::ExistingMustMatch(Target::from(root)),
+                "init: ekala",
+            )
             .map_err(Box::new)?
             .name()
             .as_bstr()
@@ -282,11 +508,11 @@ impl<'repo> Init<Root, Ref, Box<dyn Transport + Send>> for gix::Remote<'repo> {
             "-C",
             repo.git_dir().to_string_lossy().as_ref(),
             "push",
-            name,
+            remote,
             format!("{root_ref}:{root_ref}").as_str(),
         ])?;
-        tracing::info!(remote = name, message = "Successfully initialized");
-        Ok(())
+        tracing::info!(ekala.remote = %remote, ekala.root = %*root, "Successfully initialized");
+        Ok(root_ref)
     }
 
     /// Sync with the given remote and get the most up to date HEAD according to it.
@@ -329,8 +555,8 @@ impl NormalizeStorePath for Repository {
             )
             .map_err(|e| {
                 tracing::warn!(
-                    message = "Ignoring path outside repo root",
                     path = %path.display(),
+                    "Ignoring path outside repo root",
                 );
                 Error::NormalizationFailed(e)
             })
@@ -621,13 +847,13 @@ impl super::UnpackRef<ObjectId, Root> for Ref {
         let version = Version::parse(v_str).ok()?;
         path.pop();
         let a_str = path.file_name()?.to_str()?;
-        let tag = AtomTag::try_from(a_str).ok()?;
-        let id = p.or(t).map(ToOwned::to_owned)?;
+        let label = Label::try_from(a_str).ok()?;
+        let rev = p.or(t).map(ToOwned::to_owned)?;
 
         Some(UnpackedRef {
-            id: AtomId::construct(root, tag).ok()?,
+            id: AtomId::construct(root, label).ok()?,
             version,
-            rev: id,
+            rev,
         })
     }
 }
