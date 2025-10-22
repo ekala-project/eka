@@ -68,6 +68,7 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use gix::{Repository, ThreadSafeRepository};
+use path_clean::PathClean;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -75,7 +76,8 @@ use toml_edit::{DocumentMut, de};
 
 use crate::id::Tag;
 use crate::manifest::deps::{Dependency, DocError, TypedDocument};
-use crate::{Atom, Label};
+use crate::store::NormalizeStorePath;
+use crate::{ATOM_MANIFEST_NAME, Atom, Label};
 
 pub mod deps;
 pub(crate) mod sets;
@@ -184,6 +186,7 @@ pub struct EkalaWriter {
     path: PathBuf,
     doc: TypedDocument<EkalaManifest>,
     repo: Option<Repository>,
+    manifest: EkalaManifest,
 }
 
 //================================================================================================
@@ -262,18 +265,123 @@ impl TryFrom<PathBuf> for Manifest {
     }
 }
 
+/// # AtomMap Deserialization: Enforcing Repository Path Invariants
+///
+/// This implementation provides a unique deserialization strategy for `AtomMap` that
+/// conditionally enforces path normalization based on repository availability. This
+/// behavior is crucial for maintaining the integrity of atom paths within the Ekala
+/// ecosystem.
+///
+/// ## Purpose
+///
+/// The primary goal is to prevent atom paths from escaping the repository boundary.
+/// Since `AtomMap` is constructed from the actual on-disk manifest during deserialization,
+/// this provides an opportunity to validate and normalize paths early in the process,
+/// failing fast if any path would violate the repository containment invariant.
+///
+/// ## Behavior
+///
+/// - **When inside a repository**: Paths are normalized using the repository's `normalize()`
+///   method, which ensures all paths are relative to the repository root and contained within the
+///   repository boundaries. If normalization fails (indicating a path outside the repository),
+///   deserialization fails immediately.
+///
+/// - **When outside a repository**: Paths are left as-is, allowing normal operation in
+///   non-repository contexts (e.g., testing, standalone usage).
+///
+/// ## Implementation Details
+///
+/// The implementation uses a global static reference to a lazily initialized repository
+/// instance (`git::repo()`). This ensures:
+/// - Efficient access: The repository is only discovered once per process
+/// - Conditional behavior: Normalization only occurs when a repository is available
+/// - Thread safety: Uses `OnceLock` for safe static initialization
+///
+/// ## Why This Matters
+///
+/// Atom paths must never escape the repository because they represent internal
+/// references that are meaningless outside the repository context. By enforcing
+/// this invariant during deserialization, we prevent invalid states that could
+/// lead to data corruption, security issues, or inconsistent behavior.
+///
+/// ## Error Handling
+///
+/// If path normalization fails when a repository is present, deserialization
+/// returns a custom error, preventing the creation of an invalid `AtomMap` instance.
+/// This early failure ensures problems are caught during manifest loading rather
+/// than later during atom resolution.
+///
+/// ## Additional Invariants
+///
+/// Beyond path containment, this implementation also enforces that no two atoms
+/// share the same label. Since the map is keyed by `Label`, duplicate labels would
+/// overwrite entries, losing atom identity. The implementation detects and rejects
+/// such conflicts during deserialization, ensuring each atom maintains its distinct
+/// identity.
 impl<'de> Deserialize<'de> for AtomMap {
+    /// Deserializes a list of paths into an `AtomMap`, enforcing repository path invariants.
+    ///
+    /// This function transforms a serialized list of paths into a map keyed by atom labels,
+    /// acquired directly from each atom's manifest. This approach enables canonical addressing
+    /// and efficient lookups while enforcing crucial invariants: path containment within the
+    /// repository and uniqueness of atom labels.
+    ///
+    /// The deserialization process:
+    /// 1. Deserializes the input as a `Vec<PathBuf>`
+    /// 2. For each path, normalizes it relative to the repository root (when in a repo)
+    /// 3. Reads the atom manifest to extract the canonical label
+    /// 4. Ensures no duplicate labels exist
+    /// 5. Constructs the final `BTreeMap<Label, PathBuf>`
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Path normalization fails (paths outside repository when in repo context)
+    /// - Atom manifest cannot be read or parsed
+    /// - Multiple atoms share the same label
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
+        use crate::store::git;
+        let repo = git::repo().ok().flatten().map(|r| r.to_thread_local());
         let entries: Vec<PathBuf> = Vec::deserialize(deserializer)?;
         let mut map = BTreeMap::new();
 
+        let rel_to_root = repo
+            .as_ref()
+            .ok_or(crate::store::git::Error::NoWorkDir)
+            .and_then(|r| r.rel_from_root(r.current_dir()));
         for path in entries {
-            let label = Manifest::get_atom_label(path.join(crate::ATOM_MANIFEST_NAME.as_str()))
-                .map_err(serde::de::Error::custom)?;
-            map.insert(label, path);
+            let normalized = if let Some(repo) = &repo {
+                let rel_to_root = rel_to_root.as_ref().map_err(serde::de::Error::custom)?;
+                let rel_path = rel_to_root.join(&path);
+                let cwd = repo
+                    .normalize(repo.current_dir())
+                    .map_err(serde::de::Error::custom)?;
+                let normal = repo
+                    .normalize(&rel_path)
+                    .map_err(serde::de::Error::custom)?;
+                pathdiff::diff_paths(&normal, cwd)
+                    .unwrap_or(rel_path)
+                    .clean()
+            } else {
+                path.clean()
+            };
+            let label =
+                Manifest::get_atom_label(normalized.join(crate::ATOM_MANIFEST_NAME.as_str()))
+                    .map_err(serde::de::Error::custom)?;
+            if let Some(path) = map.insert(label.to_owned(), normalized.to_owned()) {
+                tracing::error!(
+                    atoms.label = %label,
+                    atoms.fst.path = %normalized.display(),
+                    atoms.snd.path = %path.display(),
+                    "two atoms share the same `label`"
+                );
+                return Err(serde::de::Error::custom(
+                    "atoms must have unique labels to retain distinct identities",
+                ));
+            }
         }
 
         Ok(AtomMap(map))
@@ -285,7 +393,16 @@ impl Serialize for AtomMap {
     where
         S: serde::Serializer,
     {
-        let values: Vec<_> = self.as_ref().values().collect();
+        let values: Vec<_> = self
+            .as_ref()
+            .values()
+            .filter(|p| {
+                p.join(ATOM_MANIFEST_NAME.as_str()).exists() || {
+                    tracing::warn!(path = %p.display(), "atom does not exist, skipping serialization");
+                    false
+                }
+            })
+            .collect();
         values.serialize(serializer)
     }
 }
@@ -343,12 +460,13 @@ impl EkalaWriter {
         let path = if let Some(repo) = repo {
             repo.work_dir()
                 .map(|p| p.join(crate::EKALA_MANIFEST_NAME.as_str()))
+                .ok_or(AtomError::EkalaManifest)?
         } else {
-            find_upwards(crate::EKALA_MANIFEST_NAME.as_str())?
-        }
-        .ok_or(AtomError::EkalaManifest)?;
+            let (_, manifest) = find_upwards(crate::EKALA_MANIFEST_NAME.as_str())?;
+            manifest
+        };
 
-        let (doc, _) = {
+        let (doc, manifest) = {
             let content = std::fs::read_to_string(&path)?;
             TypedDocument::new(&content)?
         };
@@ -356,16 +474,75 @@ impl EkalaWriter {
         Ok(EkalaWriter {
             doc,
             path,
+            manifest,
             repo: repo.map(|r| r.to_thread_local()),
         })
     }
 
-    /// write a new package path into the packages list
-    pub fn write_package(
+    /// writes a new, minimal atom.toml to path, and updates the ekala.toml manifest
+    pub fn new_atom_at_path(
+        &mut self,
+        label: Label,
+        package_path: impl AsRef<Path>,
+        version: Version,
+        description: Option<String>,
+    ) -> Result<(), crate::store::git::Error> {
+        use std::fs;
+        use std::io::Write;
+
+        self.write_package(&package_path)?;
+
+        let atom = Manifest::new(label.to_owned(), version, description);
+        let atom_str = toml_edit::ser::to_string_pretty(&atom)?;
+        let atom_toml = package_path.as_ref().join(ATOM_MANIFEST_NAME.as_str());
+
+        fs::create_dir_all(&package_path)?;
+
+        let mut dir = fs::read_dir(&package_path)?;
+
+        if dir.next().is_some() {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                format!(
+                    "Directory exists and is not empty: {:?}",
+                    package_path.as_ref().display()
+                ),
+            ))?;
+        }
+        let mut toml_file = fs::File::create(atom_toml)?;
+        toml_file.write_all(atom_str.as_bytes())?;
+        self.write_atomic()?;
+        tracing::info!(
+            message = "successfully added package to set",
+            atom.label = %label,
+            atom.path = %package_path.as_ref().display(),
+            set = %self.path.display()
+        );
+        Ok(())
+    }
+
+    /// write a new package path into the packages list after verifying it is a valid atom
+    fn write_package(
         &mut self,
         package_path: impl AsRef<Path>,
     ) -> Result<(), crate::store::git::Error> {
         use toml_edit::{Array, Value};
+
+        let content =
+            std::fs::read_to_string(package_path.as_ref().join(ATOM_MANIFEST_NAME.as_str()))?;
+        let label = Manifest::get_atom(&content)?.label;
+
+        if let Some(path) = self.manifest.set.packages.as_ref().get(&label) {
+            tracing::error!(
+                suggestion = "rename one of them to maintain distinct identities",
+                %label,
+                manifest = %self.path.display(),
+                atoms.existing.path = %path.display(),
+                atoms.requested.path = %package_path.as_ref().display(),
+                "atom with the given label already exists"
+            );
+            return Err(DocError::DuplicateAtoms.into());
+        }
 
         use crate::store::NormalizeStorePath;
         let path = if let Some(repo) = &self.repo {
@@ -395,7 +572,7 @@ impl EkalaWriter {
     }
 
     /// write the Ekala Manifest back to disk atomically
-    pub fn write_atomic(&mut self) -> Result<(), DocError> {
+    fn write_atomic(&mut self) -> Result<(), DocError> {
         use std::io::Write;
 
         use tempfile::NamedTempFile;
@@ -410,15 +587,19 @@ impl EkalaWriter {
     }
 }
 
-fn find_upwards(filename: &str) -> Result<Option<PathBuf>, std::io::Error> {
+/// Returns the directory of the searched file and a path to the file itself as a tuple.
+fn find_upwards(filename: &str) -> Result<(PathBuf, PathBuf), std::io::Error> {
     let start_dir = std::env::current_dir()?;
 
     for ancestor in start_dir.ancestors() {
         let file_path = ancestor.join(filename);
         if file_path.exists() {
-            return Ok(Some(file_path));
+            return Ok((ancestor.to_owned(), file_path));
         }
     }
 
-    Ok(None)
+    Err(std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        "could not locate ekala manifest",
+    ))
 }

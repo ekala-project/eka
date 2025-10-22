@@ -25,7 +25,8 @@ use thiserror::Error as ThisError;
 
 use crate::id::Origin;
 use crate::lock::GitDigest;
-use crate::manifest::EkalaManifest;
+use crate::manifest::deps::DocError;
+use crate::manifest::{AtomError, EkalaManifest};
 use crate::store::{Init, NormalizeStorePath, QueryStore, QueryVersion, UnpackedRef};
 use crate::{AtomId, Label};
 
@@ -137,6 +138,12 @@ pub enum Error {
     /// A transparent wrapper for a [`toml_edit::ser::Error`]
     #[error(transparent)]
     Serial(#[from] toml_edit::ser::Error),
+    /// A transparent wrapper for a [`AtomError`]
+    #[error(transparent)]
+    Atom(#[from] AtomError),
+    /// A transparent wrapper for a [`DocError`]
+    #[error(transparent)]
+    Doc(#[from] DocError),
     /// A generic boxed error variant
     #[error(transparent)]
     Generic(Box<dyn std::error::Error + Send + Sync>),
@@ -521,10 +528,10 @@ impl<'repo> Init<Root, Ref, Box<dyn Transport + Send>> for gix::Remote<'repo> {
     }
 }
 
-impl NormalizeStorePath for Repository {
+impl<P: AsRef<Path>> NormalizeStorePath<P> for Repository {
     type Error = Error;
 
-    fn normalize<P: AsRef<Path>>(&self, path: P) -> Result<PathBuf, Error> {
+    fn normalize(&self, path: P) -> Result<PathBuf, Error> {
         use std::fs;
 
         use path_clean::PathClean;

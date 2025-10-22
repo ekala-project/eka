@@ -32,6 +32,7 @@ atom.path = "crates/atom"
 [workspace.dependencies]
 anyhow                = "^1"
 lazy-regex            = "3.4.1"
+pathdiff              = "0.2.3"
 tempfile              = "^3.13"
 thiserror             = "^1"
 tracing               = "^0.1"

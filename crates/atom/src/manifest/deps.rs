@@ -106,6 +106,9 @@ pub enum DocError {
     /// A valid atom id could not be constructed.
     #[error("a valid atom id could not be constructed; aborting: {0}")]
     AtomIdConstruct(String),
+    /// Duplicate atoms were found in the ekala manifest
+    #[error("there is more than one atom with the same label in the set")]
+    DuplicateAtoms,
     /// A TOML deserialization error occurred.
     #[error(transparent)]
     De(#[from] toml_edit::de::Error),

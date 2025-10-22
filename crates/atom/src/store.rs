@@ -130,14 +130,14 @@ pub trait Init<R, O, T: Send> {
 
 /// A trait containing a path normalization method, to normalize paths in an Ekala store
 /// relative to its root.
-pub trait NormalizeStorePath {
+pub trait NormalizeStorePath<P: AsRef<Path>> {
     /// The error type returned by the [`NormalizeStorePath::normalize`] function.
     type Error;
     /// Normalizes a given path to be relative to the store root.
     ///
     /// This function takes a path (relative or absolute) and attempts to normalize it
     /// relative to the store root, based on the current working directory within
-    /// the store within system.
+    /// the store system.
     ///
     /// # Behavior:
     /// - For relative paths (e.g., "foo/bar" or "../foo"):
@@ -147,7 +147,20 @@ pub trait NormalizeStorePath {
     /// - For absolute paths (e.g., "/foo/bar"):
     ///   - Treated as if the repository root is the filesystem root.
     ///   - The leading slash is ignored, and the path is considered relative to the repo root.
-    fn normalize<P: AsRef<Path>>(&self, path: P) -> Result<PathBuf, Self::Error>;
+    fn normalize(&self, path: P) -> Result<PathBuf, Self::Error>;
+    /// Same as normalization but gives the relative difference between the path given and the
+    /// root of the store (e.g. foo/bar -> ../..). Path must be an ancestor of the store root or
+    /// this will fail.
+    fn rel_from_root(&self, path: P) -> Result<PathBuf, Self::Error> {
+        let path = self.normalize(path)?;
+        let mut res = PathBuf::new();
+        let mut iter = path.ancestors();
+        iter.next();
+        for _ in iter {
+            res.push("..");
+        }
+        Ok(res)
+    }
 }
 
 /// A trait for querying remote stores to retrieve references.
