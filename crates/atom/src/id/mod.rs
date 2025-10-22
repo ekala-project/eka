@@ -554,6 +554,16 @@ impl TryFrom<&str> for Tag {
         Tag::from_str(s)
     }
 }
+
+impl TryFrom<&OsStr> for Tag {
+    type Error = Error;
+
+    fn try_from(s: &OsStr) -> Result<Self, Self::Error> {
+        let s = s.to_str().ok_or(Error::InvalidUnicode)?;
+        Tag::from_str(s)
+    }
+}
+
 //================================================================================================
 // Tests
 //================================================================================================

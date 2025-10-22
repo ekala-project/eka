@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use atom::id::Name;
+use atom::id::{Name, Tag};
 use atom::manifest::deps::GitSpec;
 use atom::uri::{AliasedUrl, Uri};
 use clap::{Parser, Subcommand};
@@ -33,9 +33,11 @@ pub struct Args {
     #[clap(required = true)]
     uri: Option<Uri>, /* a required optional is used so that the subcommand properly negates it
                        * without causing a parser failure */
-    /// The name of the package set to add this source to inside the manifest. Defaults to the last
-    /// path segment if not specified.
-    set: Option<Name>,
+    /// The name of the package set to add this source to if not pre-existing inside the manifest.
+    /// Defaults to the last path segment if not specified.
+    ///
+    /// This option is ignored when the url already correlates with a known set.
+    set: Option<Tag>,
     #[command(subcommand)]
     sub: Option<AddSubs>,
 }

@@ -75,6 +75,7 @@ use thiserror::Error;
 use toml_edit::{DocumentMut, de};
 
 use crate::id::Tag;
+use crate::lock::BoxError;
 use crate::manifest::deps::{Dependency, DocError, TypedDocument};
 use crate::store::NormalizeStorePath;
 use crate::{ATOM_MANIFEST_NAME, Atom, Label};
@@ -110,6 +111,9 @@ pub enum AtomError {
     /// A document error
     #[error(transparent)]
     Doc(#[from] DocError),
+    /// A generic boxed error
+    #[error(transparent)]
+    Generic(#[from] BoxError),
 }
 
 /// A strongly-typed representation of a source for an atom set.

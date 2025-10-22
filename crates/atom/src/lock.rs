@@ -83,7 +83,6 @@ use crate::store::git::Root;
 use crate::store::{QueryStore, QueryVersion, UnpackedRef};
 use crate::uri::{Uri, VERSION_PLACEHOLDER};
 use crate::{AtomId, Compute, Origin};
-
 //================================================================================================
 // Statics
 //================================================================================================
@@ -109,8 +108,11 @@ pub(crate) struct AtomDep {
     version: Version,
     /// The location of the atom, whether local or remote.
     set: GitDigest,
-    /// The resolved Git revision (commit hash) for verification.
-    rev: GitDigest,
+    /// The resolved Git revision (commit hash) for verification. If it is `None`, it applies a
+    /// local only dependency which must be looked up by path. Atom's without revsions for all
+    /// other atoms in their lock cannot themsevles be published.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rev: Option<GitDigest>,
     /// The cryptographic identity of the atom.
     id: AtomDigest,
 }
@@ -320,7 +322,7 @@ impl AtomDep {
         &self.id
     }
 
-    pub(crate) fn _rev(&self) -> GitDigest {
+    pub(crate) fn rev(&self) -> Option<GitDigest> {
         self.rev
     }
 
@@ -367,7 +369,7 @@ impl Uri {
                 version,
                 set: GitDigest::Sha1(root),
                 rev: match oid {
-                    ObjectId::Sha1(bytes) => GitDigest::Sha1(bytes),
+                    ObjectId::Sha1(bytes) => Some(GitDigest::Sha1(bytes)),
                 },
                 id: id.into(),
             }))
@@ -459,16 +461,28 @@ impl<R, T: Ord> AsRef<BTreeMap<DepKey<R>, T>> for DepMap<R, T> {
     }
 }
 
-impl From<UnpackedRef<ObjectId, Root>> for AtomDep {
-    fn from(value: UnpackedRef<ObjectId, Root>) -> Self {
+impl From<UnpackedRef<Option<ObjectId>, Root>> for AtomDep {
+    fn from(value: UnpackedRef<Option<ObjectId>, Root>) -> Self {
         let UnpackedRef { id, version, rev } = value;
         AtomDep {
             label: id.label().to_owned(),
             version,
             set: GitDigest::from(id.root().deref().to_owned()),
-            rev: GitDigest::from(rev),
+            rev: rev.map(GitDigest::from),
             id: id.compute_hash(),
         }
+    }
+}
+
+impl From<UnpackedRef<ObjectId, Root>> for AtomDep {
+    fn from(value: UnpackedRef<ObjectId, Root>) -> Self {
+        let UnpackedRef { id, version, rev } = value;
+
+        AtomDep::from(UnpackedRef {
+            id,
+            version,
+            rev: Some(rev),
+        })
     }
 }
 
@@ -786,6 +800,11 @@ fn extract_and_parse_semver(input: &str) -> Option<Version> {
     );
 
     Version::parse(&version_str).ok()
+}
+
+pub(crate) fn url_filename_as_tag(url: &gix::Url) -> Result<Tag, crate::id::Error> {
+    let str = get_url_filename(&NixUrls::Git(url));
+    Tag::try_from(str)
 }
 
 /// Extracts a filename from a URL, suitable for use as a dependency name.
