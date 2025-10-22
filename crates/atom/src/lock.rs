@@ -74,8 +74,8 @@ use snix_store::nar::SimpleRenderer;
 use snix_store::pathinfoservice::PathInfoService;
 use url::Url;
 
-use crate::id::{AtomDigest, Label, Name};
-use crate::manifest::AtomSet;
+use crate::id::{AtomDigest, Label, Name, Tag};
+use crate::manifest::SetMirror;
 use crate::manifest::deps::{
     AtomReq, GitSpec, NixFetch, NixGit, NixReq, deserialize_url, serialize_url,
 };
@@ -197,8 +197,8 @@ pub enum GitDigest {
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq, PartialOrd, Ord)]
 /// The set of locked mirrors from the manifest
 pub struct SetDetails {
-    pub(crate) name: Name,
-    pub(crate) mirrors: BTreeSet<AtomSet>,
+    pub(crate) name: Tag,
+    pub(crate) mirrors: BTreeSet<SetMirror>,
 }
 
 /// The root structure for the lockfile, containing resolved dependencies and sources.

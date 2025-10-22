@@ -89,7 +89,7 @@ use semver::VersionReq;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use super::id::{Label, Name};
+use super::id::{Label, Tag};
 use crate::id::Error;
 
 #[cfg(test)]
@@ -110,7 +110,7 @@ static ATOM_VERSION_REGEX: Lazy<Regex> =
 #[cfg_attr(test, derive(Serialize, Deserialize))]
 pub struct AliasedUrl {
     pub(crate) url: Url,
-    pub(crate) from: Option<(Name, Label)>,
+    pub(crate) from: Option<(Tag, Label)>,
 }
 
 /// Represents the parsed components of an Atom URI.
@@ -196,7 +196,7 @@ impl AliasedUrl {
         &self.url
     }
 
-    pub(crate) fn _from(&self) -> Option<(&Name, &Label)> {
+    pub(crate) fn _from(&self) -> Option<(&Tag, &Label)> {
         if let Some((ref n, ref t)) = self.from {
             Some((n, t))
         } else {

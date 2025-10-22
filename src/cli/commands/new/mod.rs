@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use atom::Label;
-use atom::manifest::EkalaWriter;
+use atom::manifest::EkalaManager;
 use clap::Parser;
 use semver::Version;
 
@@ -55,11 +55,11 @@ pub(super) async fn run(
     } else {
         None
     };
-    if let Ok(mut writer) = EkalaWriter::new(repo).map_err(|error| {
+    if let Ok(mut manager) = EkalaManager::new(repo).map_err(|error| {
         tracing::error!(%error);
         error
     }) {
-        writer.new_atom_at_path(label, args.path, args.version, args.description)?;
+        manager.new_atom_at_path(label, args.path, args.version, args.description)?;
     } else {
         tracing::warn!(
             message = "package set not yet initialized",

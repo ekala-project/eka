@@ -5,9 +5,9 @@ use gix::{ObjectId, ThreadSafeRepository};
 use semver::{Version, VersionReq};
 use tokio::task::JoinSet;
 
-use crate::id::Name;
+use crate::id::Tag;
 use crate::lock::{AtomDep, BoxError, Dep, GitDigest, SetDetails};
-use crate::manifest::AtomSet;
+use crate::manifest::SetMirror;
 use crate::store::UnpackedRef;
 use crate::store::git::{AtomQuery, Root};
 use crate::{AtomId, Manifest};
@@ -22,7 +22,7 @@ enum Error {
 
 pub(crate) struct ResolvedSets {
     pub(crate) atoms: ResolvedAtoms<ObjectId, Root>,
-    pub(crate) roots: HashMap<Name, Root>,
+    pub(crate) roots: HashMap<Tag, Root>,
     _transports: HashMap<gix::Url, Box<dyn Transport + Send>>,
     details: BTreeMap<GitDigest, SetDetails>,
 }
@@ -37,8 +37,8 @@ type ResolvedAtoms<Id, R> = HashMap<AtomId<R>, HashMap<Version, ResolvedAtom<Id,
 pub(crate) struct SetResolver<'a> {
     manifest: &'a Manifest,
     repo: Option<gix::Repository>,
-    names: HashMap<Root, Name>,
-    roots: HashMap<Name, Root>,
+    names: HashMap<Root, Tag>,
+    roots: HashMap<Tag, Root>,
     tasks: JoinSet<MirrorResult>,
     atoms: ResolvedAtoms<ObjectId, Root>,
     sets: BTreeMap<GitDigest, SetDetails>,
@@ -50,7 +50,7 @@ type MirrorResult = Result<
         Option<Box<dyn Transport + Send>>,
         <Vec<AtomQuery> as IntoIterator>::IntoIter,
         Root,
-        Name,
+        Tag,
         gix::Url,
     ),
     BoxError,
@@ -97,14 +97,14 @@ impl<'a> SetResolver<'a> {
     /// - The mirrors for a given set do not all point to the same root hash.
     /// - An atom is advertised with the same version but different revisions across mirrors.
     pub(crate) async fn get_and_check_sets(mut self) -> Result<ResolvedSets, BoxError> {
-        use crate::manifest::AtomSets;
+        use crate::manifest::AtomSet;
 
-        for (k, v) in self.manifest.package.sets.iter() {
-            match v {
-                AtomSets::Singleton(mirror) => self.process_mirror(k, mirror)?,
-                AtomSets::Mirrors(mirrors) => {
+        for (set_tag, set) in self.manifest.package.sets.iter() {
+            match set {
+                AtomSet::Singleton(mirror) => self.process_mirror(set_tag, mirror)?,
+                AtomSet::Mirrors(mirrors) => {
                     for m in mirrors.iter() {
-                        self.process_mirror(k, m)?
+                        self.process_mirror(set_tag, m)?
                     }
                 },
             }
@@ -128,15 +128,15 @@ impl<'a> SetResolver<'a> {
     /// it spawns an asynchronous task to fetch repository data and perform checks.
     fn process_mirror(
         &mut self,
-        name: &'a Name,
-        mirror: &'a crate::manifest::AtomSet,
+        set_tag: &'a Tag,
+        mirror: &'a crate::manifest::SetMirror,
     ) -> Result<(), BoxError> {
         use crate::id::Origin;
-        use crate::manifest::AtomSet;
+        use crate::manifest::SetMirror;
         use crate::store::{QueryStore, QueryVersion};
 
         match mirror {
-            AtomSet::Local => {
+            SetMirror::Local => {
                 if let Some(repo) = self.repo.as_ref() {
                     let root = {
                         let commit = repo
@@ -145,16 +145,16 @@ impl<'a> SetResolver<'a> {
                             .map_err(Box::new)??;
                         commit.calculate_origin()?
                     };
-                    self.check_set_consistency(name, root)?;
-                    self.update_sets(name, root, AtomSet::Local);
+                    self.check_set_consistency(set_tag, root)?;
+                    self.update_sets(set_tag, root, SetMirror::Local);
                 } else {
                     return Err(Error::NoLocal.into());
                 }
                 Ok(())
             },
-            AtomSet::Url(url) => {
+            SetMirror::Url(url) => {
                 let url = url.to_owned();
-                let set_name = name.to_owned();
+                let set_name = set_tag.to_owned();
                 self.tasks.spawn(async move {
                     let mut transport = url.get_transport().ok();
                     let atoms = url.get_atoms(transport.as_mut())?;
@@ -166,7 +166,7 @@ impl<'a> SetResolver<'a> {
         }
     }
 
-    fn update_sets(&mut self, name: &Name, root: Root, set: AtomSet) {
+    fn update_sets(&mut self, name: &Tag, root: Root, set: SetMirror) {
         let digest = GitDigest::from(*root);
         self.sets
             .entry(digest)
@@ -186,7 +186,7 @@ impl<'a> SetResolver<'a> {
     fn process_remote_mirror_result(&mut self, result: MirrorResult) -> Result<(), BoxError> {
         let (transport, atoms, root, set_name, url) = result?;
         self.check_set_consistency(&set_name, root)?;
-        self.update_sets(&set_name, root, AtomSet::Url(url.to_owned()));
+        self.update_sets(&set_name, root, SetMirror::Url(url.to_owned()));
         if let Some(t) = transport {
             self.transports.insert(url.to_owned(), t);
         }
@@ -266,22 +266,22 @@ impl<'a> SetResolver<'a> {
     /// This check verifies two conditions:
     /// 1. A repository root hash is not associated with more than one package set name.
     /// 2. A package set name is not associated with more than one repository root hash.
-    fn check_set_consistency(&mut self, k: &Name, root: Root) -> Result<(), BoxError> {
-        let prev = self.names.insert(root, k.to_owned());
-        if prev.is_some() && prev.as_ref() != Some(k) {
+    fn check_set_consistency(&mut self, set_tag: &Tag, root: Root) -> Result<(), BoxError> {
+        let prev = self.names.insert(root, set_tag.to_owned());
+        if prev.is_some() && prev.as_ref() != Some(set_tag) {
             tracing::error!(
                 message = "a repository exists in more than one mirror set",
-                set.a = %k,
+                set.a = %set_tag,
                 set.b = ?prev,
                 set.hash = %*root
             );
             return Err(Error::Inconsistent.into());
         }
-        let prev = self.roots.insert(k.to_owned(), root);
+        let prev = self.roots.insert(set_tag.to_owned(), root);
         if prev.is_some() && prev.as_ref() != Some(&root) {
             tracing::error!(
                 message = "the mirrors for this set do not all point at the same set",
-                set.name = %k,
+                set.name = %set_tag,
                 set.a = %*root,
                 set.b = ?prev,
             );
@@ -292,7 +292,7 @@ impl<'a> SetResolver<'a> {
 }
 
 impl ResolvedSets {
-    pub(crate) fn roots(&self) -> &HashMap<Name, Root> {
+    pub(crate) fn roots(&self) -> &HashMap<Tag, Root> {
         &self.roots
     }
 

@@ -89,6 +89,7 @@ use std::path::{Path, PathBuf};
 use bstr::BStr;
 use semver::{Version, VersionReq};
 
+use crate::publish::Publish;
 use crate::{AtomId, Label};
 
 pub mod git;
@@ -111,6 +112,16 @@ pub struct UnpackedRef<Id, R> {
 //================================================================================================
 // Traits
 //================================================================================================
+
+trait Set<P, R, T, Ref, Id, C>:
+    Init<R, Ref, T> + NormalizeStorePath<P> + QueryVersion<Ref, Id, C, T, R> + Publish<R>
+where
+    C: FromIterator<UnpackedRef<Id, R>> + IntoIterator<Item = UnpackedRef<Id, R>>,
+    P: AsRef<Path>,
+    Ref: UnpackRef<Id, R> + std::fmt::Debug,
+    T: Send,
+{
+}
 
 /// A trait representing the methods required to initialize an Ekala store.
 pub trait Init<R, O, T: Send> {

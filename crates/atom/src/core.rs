@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 
-use super::id::{Label, Name};
-use crate::manifest::AtomSets;
+use super::id::{Label, Tag};
+use crate::manifest::AtomSet;
 
 //================================================================================================
 // Types
@@ -36,7 +36,7 @@ pub struct Atom {
 
     /// A table of named atom sets, defining the sources for resolving atom dependencies.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub sets: HashMap<Name, AtomSets>,
+    pub sets: HashMap<Tag, AtomSet>,
 }
 
 /// Represents the file system paths associated with an atom.

@@ -114,7 +114,7 @@ pub enum AtomError {
 
 /// A strongly-typed representation of a source for an atom set.
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum AtomSet {
+pub enum SetMirror {
     /// Represents the local repository, allowing atoms to be resolved by path.
     #[serde(rename = "::")]
     Local,
@@ -130,16 +130,16 @@ pub enum AtomSet {
 /// Represents the possible values for a named atom set in the manifest.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 #[serde(untagged)]
-pub enum AtomSets {
+pub enum AtomSet {
     /// A single source for an atom set.
-    Singleton(AtomSet),
+    Singleton(SetMirror),
     /// A set of mirrors for an atom set.
     ///
     /// Since sets can be determined to be equivalent by their root hash, this allows a user to
     /// provide multiple sources for the same set. The resolver will check for equivalence at
     /// runtime by fetching the root commit from each URL. Operations like `publish` will
     /// error if inconsistent mirrors are detected.
-    Mirrors(BTreeSet<AtomSet>),
+    Mirrors(BTreeSet<SetMirror>),
 }
 
 /// Represents the structure of an `atom.toml` manifest file.
@@ -182,7 +182,7 @@ pub(crate) struct AtomMap(BTreeMap<Label, PathBuf>);
 
 /// A writer to assist with writing into the Ekala manifest.
 #[derive(Debug)]
-pub struct EkalaWriter {
+pub struct EkalaManager {
     path: PathBuf,
     doc: TypedDocument<EkalaManifest>,
     repo: Option<Repository>,
@@ -454,8 +454,9 @@ impl MetaData {
     }
 }
 
-impl EkalaWriter {
-    /// Create a new manifest writer, traversing upward to locate the nearest ekala.toml
+impl EkalaManager {
+    /// Create a new manifest writer, traversing upward to locate the nearest ekala.toml if
+    /// necessary.
     pub fn new(repo: Option<&ThreadSafeRepository>) -> Result<Self, AtomError> {
         let path = if let Some(repo) = repo {
             repo.work_dir()
@@ -471,7 +472,7 @@ impl EkalaWriter {
             TypedDocument::new(&content)?
         };
 
-        Ok(EkalaWriter {
+        Ok(EkalaManager {
             doc,
             path,
             manifest,

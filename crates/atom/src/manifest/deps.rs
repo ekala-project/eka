@@ -61,7 +61,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use toml_edit::DocumentMut;
 use url::Url;
 
-use crate::id::{Label, Name};
+use crate::id::{Label, Name, Tag};
 use crate::lock::{Dep, SetDetails};
 use crate::manifest::sets::{ResolvedSets, SetResolver};
 use crate::store::git::Root;
@@ -72,7 +72,7 @@ use crate::{AtomId, Lockfile, Manifest};
 // Types
 //================================================================================================
 
-type AtomFrom = HashMap<Name, HashMap<Label, VersionReq>>;
+type AtomFrom = HashMap<Tag, HashMap<Label, VersionReq>>;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
 #[serde(deny_unknown_fields)]
@@ -214,7 +214,7 @@ pub struct NixFetch {
     ///
     /// This field is omitted from serialization if None.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub from_version: Option<(Name, Label)>,
+    pub from_version: Option<(Tag, Label)>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -485,7 +485,7 @@ impl ManifestWriter {
         });
     }
 
-    fn lock_atom(&mut self, req: VersionReq, id: AtomId<Root>, name: Name) {
+    fn lock_atom(&mut self, req: VersionReq, id: AtomId<Root>, set_tag: Tag) {
         if let Some(dep) = self.resolved.resolve_atom(&id, &req) {
             if self
                 .lock
@@ -497,7 +497,7 @@ impl ManifestWriter {
                 tracing::warn!(
                     message = Self::UPDATE_DEPENDENCY,
                     label = %id.label(),
-                    set = %name,
+                    set = %set_tag,
                     r#type = "atom"
                 );
             }
@@ -510,7 +510,7 @@ impl ManifestWriter {
                 .unwrap_or_default();
             tracing::warn!(
                 message = Self::RESOLUTION_ERR_MSG,
-                set = %name,
+                set = %set_tag,
                 atom = %id.label(),
                 requested.version = %req,
                 avaliable.versions = %toml_edit::ser::to_string(&versions).unwrap_or_default()
@@ -518,14 +518,14 @@ impl ManifestWriter {
         }
     }
 
-    fn synchronize_atom(&mut self, req: VersionReq, id: AtomId<Root>, name: Name) {
+    fn synchronize_atom(&mut self, req: VersionReq, id: AtomId<Root>, set_tag: Tag) {
         if !self
             .lock
             .deps
             .as_ref()
             .contains_key(&either::Either::Left(id.to_owned()))
         {
-            self.lock_atom(req, id, name);
+            self.lock_atom(req, id, set_tag);
         } else if let Some(Dep::Atom(dep)) = self
             .lock
             .deps
@@ -533,7 +533,7 @@ impl ManifestWriter {
             .get(&either::Either::Left(id.to_owned()))
         {
             if !req.matches(dep.version()) {
-                self.lock_atom(req, id, name);
+                self.lock_atom(req, id, set_tag);
             }
         }
     }
@@ -542,22 +542,22 @@ impl ManifestWriter {
     /// It resolves any new dependencies, updates existing ones if their version
     /// requirements have changed, and ensures the lockfile is fully consistent.
     pub(crate) async fn synchronize(&mut self, manifest: Manifest) -> Result<(), DocError> {
-        for (name, set) in manifest.deps.from {
-            let maybe_root = self.resolved.roots().get(&name).map(ToOwned::to_owned);
+        for (set_tag, set) in manifest.deps.from {
+            let maybe_root = self.resolved.roots().get(&set_tag).map(ToOwned::to_owned);
             if let Some(root) = maybe_root {
                 for (label, req) in set {
                     let id = AtomId::construct(&root, label.to_owned()).map_err(|e| {
                         DocError::AtomIdConstruct(format!(
                             "set: {}, atom: {}, err: {}",
-                            &name, &label, e
+                            &set_tag, &label, e
                         ))
                     })?;
-                    self.synchronize_atom(req, id, name.to_owned());
+                    self.synchronize_atom(req, id, set_tag.to_owned());
                 }
             } else {
                 tracing::warn!(
                     message = "set was not resolved to an origin id, can't syncrhonize it",
-                    set = %name,
+                    set = %set_tag,
                 );
             }
         }
@@ -624,8 +624,8 @@ impl ManifestWriter {
     pub fn add_uri(&mut self, uri: Uri, _set: Option<Name>) -> Result<(), DocError> {
         let (_atom_req, lock_entry) = uri.resolve(None).map_err(Box::new)?;
 
-        let _label = lock_entry.label().to_owned();
-        let _id = lock_entry.id().to_owned();
+        let label = lock_entry.label().to_owned();
+        let id = lock_entry.id().to_owned();
 
         // self.doc.write_dep(&label, &dep)?;
         // if !self.lock.deps.as_mut().insert(Dep::Atom(lock_entry)) {
