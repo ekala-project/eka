@@ -37,6 +37,7 @@ pub struct Args {
     /// Defaults to the last path segment if not specified.
     ///
     /// This option is ignored when the url already correlates with a known set.
+    #[clap(long, short)]
     set: Option<Tag>,
     #[command(subcommand)]
     sub: Option<AddSubs>,
