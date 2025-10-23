@@ -54,7 +54,7 @@ use std::str::FromStr;
 
 use bstr::{BString, ByteSlice};
 use either::Either;
-use gix::ThreadSafeRepository;
+use gix::{Repository, ThreadSafeRepository};
 use semver::{Prerelease, VersionReq};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -68,7 +68,7 @@ use crate::manifest::{AtomError, SetMirror};
 use crate::store::UnpackedRef;
 use crate::store::git::Root;
 use crate::uri::{AliasedUrl, Uri};
-use crate::{AtomId, Lockfile, Manifest, Origin};
+use crate::{ATOM_MANIFEST_NAME, AtomId, Lockfile, Manifest, Origin};
 
 //================================================================================================
 // Types
@@ -428,7 +428,7 @@ impl NixFetch {
 impl ManifestWriter {
     const ATOM_BUG: &str = "bug, `AtomId` construction is infallible when derived directly from a \
                             root and doesn't need to be calculated";
-    const RESOLUTION_ERR_MSG: &str = "unlocked dependency could not be resolved";
+    const RESOLUTION_ERR_MSG: &str = "unlocked dependency could not be resolved remotely";
     const UPDATE_DEPENDENCY: &str = "updating out of date dependency in accordance with spec";
 
     /// Constructs a new `ManifestWriter`, ensuring that the manifest and lock file constraints
@@ -486,7 +486,7 @@ impl ManifestWriter {
             Dep::Atom(atom_dep) => {
                 if let Some(SetDetails { name, .. }) = self.lock.sets.get(&atom_dep.set()) {
                     if let Some(set) = manifest.deps().from().get(name) {
-                        set.contains_key(atom_dep.label())
+                        return set.contains_key(atom_dep.label());
                     } else {
                         false
                     };
@@ -586,7 +586,6 @@ impl ManifestWriter {
                         ))
                     })?;
                     self.synchronize_atom(req.to_owned(), id.to_owned(), set_tag.to_owned())
-                        .map_err(|e| tracing::warn!(error = %e))
                         .ok();
                 }
             } else {
@@ -673,6 +672,51 @@ impl ManifestWriter {
         Ok((req, dep))
     }
 
+    fn resolve_from_local(
+        &self,
+        uri: &Uri,
+        repo: &Repository,
+    ) -> Result<(AtomReq, AtomDep), crate::store::git::Error> {
+        /* we are in a local git repository */
+
+        // FIXME?: do we need to add a flag to make this configurable?
+        let root = repo.head_commit()?.calculate_origin()?;
+
+        if let Ok(res) = self.resolve_from_uri(uri, &root) {
+            /* local store has a mirror which resolved this atom successfully */
+            Ok(res)
+        } else {
+            let path = self
+                .resolved
+                .ekala
+                .manifest
+                .set
+                .packages
+                .as_ref()
+                .get(uri.label())
+                .ok_or(DocError::NoLocal)?;
+            let content = std::fs::read_to_string(path.join(ATOM_MANIFEST_NAME.as_str()))?;
+            let atom = Manifest::get_atom(&content)?;
+            if &atom.label != uri.label() {
+                return Err(DocError::SetError(sets::Error::Inconsistent).into());
+            }
+            let req = AtomReq::new(
+                uri.version()
+                    .unwrap_or(&VersionReq::parse(atom.version.to_string().as_str())?)
+                    .to_owned(),
+            );
+            let id = AtomId::construct(&root, uri.label().to_owned()).expect(Self::ATOM_BUG);
+            let mut version = atom.version.clone();
+            version.pre = Prerelease::new("local")?;
+            let dep = AtomDep::from(UnpackedRef {
+                id,
+                version,
+                rev: None,
+            });
+            Ok((req, dep))
+        }
+    }
+
     /// Adds a user-requested atom URI to the manifest and lock files, ensuring they remain in sync.
     pub fn add_uri(
         &mut self,
@@ -684,10 +728,13 @@ impl ManifestWriter {
         } else {
             SetMirror::Local
         };
-        let (atom_req, lock_entry) = if let Some(root) =
-            self.resolved.roots.get(&Either::Right(mirror.to_owned()))
-        {
-            /* set exists in the manifest, we can resolve from a mirror */
+        // FIXME: we still need to handle when users pass a filepath (i.e. file://)
+        let (atom_req, lock_entry) = if let (Some(root), SetMirror::Url(_)) = (
+            self.resolved.roots.get(&Either::Right(mirror.to_owned())),
+            &mirror,
+        ) {
+            /* set is remote and exists in the manifest, we can grab from an already resolved
+             * mirror */
             self.resolve_from_uri(&uri, root)?
         } else if let SetMirror::Url(url) = &mirror {
             /* set doesn't exist, we need to resolve from the passed url */
@@ -696,42 +743,7 @@ impl ManifestWriter {
         } else if let Some(repo) = &self.resolved.repo {
             /* we are in a local git repository */
 
-            // FIXME?: do we need to add a flag to make this configurable?
-            let root = repo.head_commit()?.calculate_origin()?;
-
-            if let Ok(res) = self.resolve_from_uri(&uri, &root) {
-                /* local store has a mirror which resolved this atom successfully */
-                res
-            } else {
-                let path = self
-                    .resolved
-                    .ekala
-                    .manifest
-                    .set
-                    .packages
-                    .as_ref()
-                    .get(uri.label())
-                    .ok_or(DocError::NoLocal)?;
-                let content = std::fs::read_to_string(path)?;
-                let atom = Manifest::get_atom(&content)?;
-                if &atom.label != uri.label() {
-                    return Err(DocError::SetError(sets::Error::Inconsistent).into());
-                }
-                let req = AtomReq::new(
-                    uri.version()
-                        .unwrap_or(&VersionReq::parse(atom.version.to_string().as_str())?)
-                        .to_owned(),
-                );
-                let id = AtomId::construct(&root, uri.label().to_owned()).expect(Self::ATOM_BUG);
-                let mut version = atom.version.clone();
-                version.pre = Prerelease::new("-local")?;
-                let dep = AtomDep::from(UnpackedRef {
-                    id,
-                    version,
-                    rev: None,
-                });
-                (req, dep)
-            }
+            self.resolve_from_local(&uri, repo)?
         } else {
             // TODO: we need a notion of "root" for an ekala set outside of a repository
             // maybe just a constant would do for a basic remoteless store?
@@ -756,10 +768,10 @@ impl ManifestWriter {
                 if let Some(url) = uri.url() {
                     lock::url_filename_as_tag(url).ok()
                 } else if let Some(repo) = &self.resolved.repo {
-                    repo.current_dir()
-                        .parent()
-                        .and_then(|p| p.file_stem())
-                        .and_then(|f| Tag::try_from(f).ok())
+                    repo.workdir()
+                        .and_then(|p| p.canonicalize().ok())
+                        .and_then(|p| p.file_stem().map(ToOwned::to_owned))
+                        .and_then(|f| Tag::try_from(f.as_os_str()).ok())
                 } else {
                     Tag::try_from("default").ok()
                 }
@@ -849,6 +861,11 @@ impl ManifestWriter {
 
     fn resolved(&self) -> &ResolvedSets {
         &self.resolved
+    }
+
+    /// acquire a reference to the lockfile structure
+    pub fn lock(&self) -> &Lockfile {
+        &self.lock
     }
 }
 
