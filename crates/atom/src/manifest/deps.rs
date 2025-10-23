@@ -68,7 +68,7 @@ use crate::manifest::{AtomError, SetMirror};
 use crate::store::UnpackedRef;
 use crate::store::git::Root;
 use crate::uri::{AliasedUrl, Uri};
-use crate::{ATOM_MANIFEST_NAME, AtomId, Lockfile, Manifest, Origin};
+use crate::{ATOM_MANIFEST_NAME, AtomId, Lockfile, Manifest, Origin, lock};
 
 //================================================================================================
 // Types
@@ -230,6 +230,7 @@ pub struct NixFetch {
 /// Represents a nix eval-time git fetch.
 pub struct NixGit {
     /// The URL of the git repository.
+    #[serde(serialize_with = "serialize_url", deserialize_with = "deserialize_url")]
     pub git: gix::Url,
     /// A git ref or version constraint
     #[serde(flatten, skip_serializing_if = "Option::is_none")]
@@ -398,7 +399,14 @@ impl NixFetch {
             NixFetch {
                 kind: NixReq::Git(NixGit {
                     git: url,
-                    spec: git,
+                    spec: git.and_then(|x| {
+                        // writing head to the manifest is redundant
+                        if x == GitSpec::Ref("HEAD".into()) {
+                            None
+                        } else {
+                            Some(x)
+                        }
+                    }),
                 }),
                 from_version: from,
             }
@@ -518,10 +526,18 @@ impl ManifestWriter {
                         r#type = "atom"
                     );
                 },
-                Dep::Nix(nix_dep) => todo!(),
-                Dep::NixGit(nix_git_dep) => todo!(),
-                Dep::NixTar(nix_tar_dep) => todo!(),
-                Dep::NixSrc(build_src) => todo!(),
+                Dep::Nix(dep) => {
+                    tracing::warn!(message = "updating lock entry", direct.nix = %dep.name())
+                },
+                Dep::NixGit(dep) => {
+                    tracing::warn!(message = "updating lock entry", direct.nix = %dep.name())
+                },
+                Dep::NixTar(dep) => {
+                    tracing::warn!(message = "updating lock entry", direct.nix = %dep.name())
+                },
+                Dep::NixSrc(dep) => {
+                    tracing::warn!(message = "updating lock entry", direct.nix = %dep.name())
+                },
             }
         }
     }
@@ -849,12 +865,10 @@ impl ManifestWriter {
         unpack: Option<bool>,
     ) -> Result<(), DocError> {
         let dep = NixFetch::determine(url, git, tar, build, unpack)?;
-        let (_key, _lock_entry) = self.resolve_nix(dep, key.as_ref()).await?;
+        let (key, lock_entry) = self.resolve_nix(dep.to_owned(), key.as_ref()).await?;
 
-        // self.doc.write_dep(&key, todo!())?;
-        // if self.lock.deps.as_mut().insert(lock_entry) {
-        //     tracing::warn!(message = "updating lock entry", direct.nix = %key);
-        // }
+        dep.write_dep(key.to_owned(), &mut self.doc)?;
+        self.insert_or_update_and_log(Either::Right(key), &lock_entry);
         Ok(())
     }
 
@@ -911,6 +925,43 @@ impl<T: Serialize + DeserializeOwned> TypedDocument<T> {
             },
             validated,
         ))
+    }
+}
+
+impl WriteDeps<Manifest, Label> for NixFetch {
+    type Error = toml_edit::ser::Error;
+
+    fn write_dep(&self, key: Label, doc: &mut TypedDocument<Manifest>) -> Result<(), Self::Error> {
+        use toml_edit::{Item, Value};
+        let doc = doc.as_mut();
+        let nix_table = toml_edit::ser::to_document(self)?.as_table().to_owned();
+        let dotted = nix_table.len() == 1;
+        let mut nix_table = nix_table.into_inline_table();
+        nix_table.set_dotted(dotted);
+
+        let nix_deps = doc
+            .entry("deps")
+            .or_insert(toml_edit::table())
+            .as_table_mut()
+            .and_then(|t| {
+                t.set_implicit(true);
+                t.entry("direct")
+                    .or_insert(toml_edit::table())
+                    .as_table_mut()
+            })
+            .and_then(|t| {
+                t.set_implicit(true);
+                t.entry("nix").or_insert(toml_edit::table()).as_table_mut()
+            })
+            .ok_or(toml_edit::ser::Error::Custom(format!(
+                "writing `[deps.direct.nix]` dependency failed: {}",
+                &key
+            )))?;
+        nix_deps.set_implicit(true);
+        nix_deps[key.as_str()] = Item::Value(Value::InlineTable(nix_table));
+        doc.fmt();
+
+        Ok(())
     }
 }
 

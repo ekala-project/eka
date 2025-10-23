@@ -67,7 +67,7 @@ pub struct NixArgs {
     ///
     /// Version requests are resolved intelligently compared against the git tags in the repo which
     /// conform to semantic version constraints, returning the highest match of the users request.
-    #[clap(long, conflicts_with_all = ["build", "tar"], default_missing_value = "HEAD")]
+    #[clap(long, conflicts_with_all = ["build", "tar"], num_args = 0..=1, default_missing_value = "HEAD", )]
     git: Option<GitSpec>,
     /// Use the `builtins.fetchTarball` fetcher. If the url contains a `.tar` extension, this
     /// flag is assumed, but can be disabled with `--tar=false` to fetch with `builtins.fetchurl`.
@@ -87,14 +87,13 @@ pub struct NixArgs {
     #[clap(
         long,
         conflicts_with_all = ["git", "tar"],
-        default_value_if("exec", "true", Some("true")),
         default_value_if("unpack", "true", Some("true"))
     )]
     build: bool,
     /// Implies the `--build` flag, and will pass `unpack = true` to `<nix/fetchurl>`. This
     /// will be assumed if the `--build` flag is passed, and the url path contains a `.tar`
     /// extension. You can disable this auto-detection behavior by passing `--unpack=false`.
-    #[clap(long, requires = "build", conflicts_with = "exec")]
+    #[clap(long, requires = "build")]
     unpack: Option<bool>,
 }
 

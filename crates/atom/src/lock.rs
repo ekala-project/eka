@@ -736,18 +736,30 @@ impl NixDep {
 }
 
 impl NixGitDep {
+    pub(crate) fn name(&self) -> &Name {
+        &self.name
+    }
+
     pub(crate) fn url(&self) -> &gix::Url {
         &self.url
     }
 }
 
 impl NixTarDep {
+    pub(crate) fn name(&self) -> &Name {
+        &self.name
+    }
+
     pub(crate) fn url(&self) -> &Url {
         &self.url
     }
 }
 
 impl BuildSrc {
+    pub(crate) fn name(&self) -> &Name {
+        &self.name
+    }
+
     pub(crate) fn url(&self) -> &Url {
         &self.url
     }
