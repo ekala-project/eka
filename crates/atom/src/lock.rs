@@ -199,7 +199,7 @@ pub enum GitDigest {
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq, PartialOrd, Ord)]
 /// The set of locked mirrors from the manifest
 pub struct SetDetails {
-    pub(crate) name: Tag,
+    pub(crate) tag: Tag,
     pub(crate) mirrors: BTreeSet<SetMirror>,
 }
 

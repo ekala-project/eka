@@ -329,6 +329,17 @@ impl FromStr for Uri {
     }
 }
 
+/// useful primarily for creating a uri from a local atom reference (since we have no url component)
+impl From<(Label, Option<VersionReq>)> for Uri {
+    fn from((label, version): (Label, Option<VersionReq>)) -> Self {
+        Uri {
+            url: None,
+            label,
+            version,
+        }
+    }
+}
+
 impl<'a> TryFrom<&'a str> for Uri {
     type Error = UriError;
 

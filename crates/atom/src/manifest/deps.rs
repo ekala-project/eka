@@ -62,7 +62,7 @@ use toml_edit::DocumentMut;
 use url::Url;
 
 use crate::id::{Label, Name, Tag, VerifiedName};
-use crate::lock::{AtomDep, Dep, SetDetails};
+use crate::lock::{AtomDep, Dep, GitDigest, SetDetails};
 use crate::manifest::sets::{self, ResolvedSets, SetResolver};
 use crate::manifest::{AtomError, SetMirror};
 use crate::store::UnpackedRef;
@@ -484,7 +484,7 @@ impl ManifestWriter {
     fn sanitize(&mut self, manifest: &Manifest) {
         self.lock.deps.as_mut().retain(|_, dep| match dep {
             Dep::Atom(atom_dep) => {
-                if let Some(SetDetails { name, .. }) = self.lock.sets.get(&atom_dep.set()) {
+                if let Some(SetDetails { tag: name, .. }) = self.lock.sets.get(&atom_dep.set()) {
                     if let Some(set) = manifest.deps().from().get(name) {
                         return set.contains_key(atom_dep.label());
                     } else {
@@ -500,28 +500,47 @@ impl ManifestWriter {
         });
     }
 
+    fn insert_or_update_and_log(&mut self, key: Either<AtomId<Root>, Name>, dep: &Dep) {
+        if self
+            .lock
+            .deps
+            .as_mut()
+            .insert(key, dep.to_owned())
+            .is_some()
+        {
+            match &dep {
+                Dep::Atom(dep) => {
+                    let tag = self.resolved.details().get(&dep.set()).map(|d| &d.tag);
+                    tracing::warn!(
+                        message = Self::UPDATE_DEPENDENCY,
+                        label = %dep.label(),
+                        set = ?tag,
+                        r#type = "atom"
+                    );
+                },
+                Dep::Nix(nix_dep) => todo!(),
+                Dep::NixGit(nix_git_dep) => todo!(),
+                Dep::NixTar(nix_tar_dep) => todo!(),
+                Dep::NixSrc(build_src) => todo!(),
+            }
+        }
+    }
+
     fn lock_atom(
         &mut self,
         req: VersionReq,
         id: AtomId<Root>,
         set_tag: Tag,
-    ) -> Result<Dep, DocError> {
+    ) -> Result<Dep, crate::store::git::Error> {
         if let Ok(dep) = self.resolved.resolve_atom(&id, &req) {
             let dep = Dep::Atom(dep);
-            if self
-                .lock
-                .deps
-                .as_mut()
-                .insert(Either::Left(id.to_owned()), dep.to_owned())
-                .is_some()
-            {
-                tracing::warn!(
-                    message = Self::UPDATE_DEPENDENCY,
-                    label = %id.label(),
-                    set = %set_tag,
-                    r#type = "atom"
-                );
-            }
+            self.insert_or_update_and_log(Either::Left(id), &dep);
+            Ok(dep)
+        } else if let Some(repo) = &self.resolved.repo {
+            let uri = Uri::from((id.label().to_owned(), Some(req)));
+            let (_, dep) = self.resolve_from_local(&uri, repo)?;
+            let dep = Dep::Atom(dep);
+            self.insert_or_update_and_log(Either::Left(id), &dep);
             Ok(dep)
         } else {
             let versions: Vec<_> = self
@@ -537,7 +556,7 @@ impl ManifestWriter {
                 requested.version = %req,
                 avaliable.versions = %toml_edit::ser::to_string(&versions).unwrap_or_default()
             );
-            Err(Box::new(crate::store::git::Error::NoMatchingVersion).into())
+            Err(DocError::Error(Box::new(crate::store::git::Error::NoMatchingVersion)).into())
         }
     }
 
@@ -546,7 +565,7 @@ impl ManifestWriter {
         req: VersionReq,
         id: AtomId<Root>,
         set_tag: Tag,
-    ) -> Result<(), DocError> {
+    ) -> Result<(), crate::store::git::Error> {
         if !self
             .lock
             .deps
@@ -717,33 +736,27 @@ impl ManifestWriter {
         }
     }
 
-    /// Adds a user-requested atom URI to the manifest and lock files, ensuring they remain in sync.
-    pub fn add_uri(
+    fn resolve_uri(
         &mut self,
-        uri: Uri,
-        set_tag: Option<Tag>,
-    ) -> Result<(), crate::store::git::Error> {
-        let mirror = if let Some(url) = uri.url() {
-            SetMirror::Url(url.to_owned())
-        } else {
-            SetMirror::Local
-        };
+        uri: &Uri,
+        mirror: &SetMirror,
+    ) -> Result<(AtomReq, AtomDep), crate::store::git::Error> {
         // FIXME: we still need to handle when users pass a filepath (i.e. file://)
-        let (atom_req, lock_entry) = if let (Some(root), SetMirror::Url(_)) = (
+        if let (Some(root), SetMirror::Url(_)) = (
             self.resolved.roots.get(&Either::Right(mirror.to_owned())),
             &mirror,
         ) {
             /* set is remote and exists in the manifest, we can grab from an already resolved
              * mirror */
-            self.resolve_from_uri(&uri, root)?
-        } else if let SetMirror::Url(url) = &mirror {
+            self.resolve_from_uri(uri, root)
+        } else if let SetMirror::Url(url) = mirror {
             /* set doesn't exist, we need to resolve from the passed url */
             let transport = self.resolved.transports.get_mut(url);
-            uri.resolve(transport)?
+            uri.resolve(transport)
         } else if let Some(repo) = &self.resolved.repo {
             /* we are in a local git repository */
 
-            self.resolve_from_local(&uri, repo)?
+            self.resolve_from_local(uri, repo)
         } else {
             // TODO: we need a notion of "root" for an ekala set outside of a repository
             // maybe just a constant would do for a basic remoteless store?
@@ -753,17 +766,16 @@ impl ManifestWriter {
                 "haven't yet implemented adding local dependencies outside of git"
             );
             todo!()
-        };
+        }
+    }
 
+    fn get_set_tag(&self, lock_entry: &AtomDep, uri: &Uri, set_tag_from_user: Option<Tag>) -> Tag {
         use crate::lock;
-        let label = lock_entry.label().to_owned();
-        let id = AtomId::from(&lock_entry);
-        let set_tag = self
-            .resolved
+        self.resolved
             .details()
             .get(&lock_entry.set())
-            .map(|s| s.name.to_owned())
-            .or(set_tag)
+            .map(|s| s.tag.to_owned())
+            .or(set_tag_from_user)
             .or_else(|| {
                 if let Some(url) = uri.url() {
                     lock::url_filename_as_tag(url).ok()
@@ -776,29 +788,15 @@ impl ManifestWriter {
                     Tag::try_from("default").ok()
                 }
             })
-            .expect("bug; default tag should be infallible");
+            .expect("bug; default tag should be infallible")
+    }
 
-        let atom_writer = AtomWriter {
-            set_tag: set_tag.to_owned(),
-            atom_req,
-            mirror: mirror.to_owned(),
-        };
-        let set = lock_entry.set().to_owned();
-        atom_writer.write_dep(label, &mut self.doc)?;
-        if self
-            .lock
-            .deps
-            .as_mut()
-            .insert(Either::Left(id.to_owned()), Dep::Atom(lock_entry))
-            .is_some()
-        {
-            tracing::warn!(message = "updating lock entry", atom.id = %id);
-        }
+    fn update_lock_set(&mut self, set: GitDigest, mirror: SetMirror, tag: Tag) {
         use std::collections::btree_map::Entry;
         match self.lock.sets.entry(set) {
             Entry::Vacant(entry) => {
                 entry.insert(SetDetails {
-                    name: set_tag,
+                    tag,
                     mirrors: BTreeSet::from([mirror]),
                 });
             },
@@ -806,6 +804,36 @@ impl ManifestWriter {
                 entry.get_mut().mirrors.insert(mirror);
             },
         };
+    }
+
+    /// Adds a user-requested atom URI to the manifest and lock files, ensuring they remain in sync.
+    pub fn add_uri(
+        &mut self,
+        uri: Uri,
+        set_tag: Option<Tag>,
+    ) -> Result<(), crate::store::git::Error> {
+        let mirror = if let Some(url) = uri.url() {
+            SetMirror::Url(url.to_owned())
+        } else {
+            SetMirror::Local
+        };
+        let (atom_req, lock_entry) = self.resolve_uri(&uri, &mirror)?;
+
+        let label = lock_entry.label().to_owned();
+        let id = AtomId::from(&lock_entry);
+        let set_tag = self.get_set_tag(&lock_entry, &uri, set_tag);
+
+        let atom_writer = AtomWriter {
+            set_tag: set_tag.to_owned(),
+            atom_req,
+            mirror: mirror.to_owned(),
+        };
+
+        let set = lock_entry.set().to_owned();
+        atom_writer.write_dep(label, &mut self.doc)?;
+        self.insert_or_update_and_log(Either::Left(id.to_owned()), &Dep::Atom(lock_entry));
+
+        self.update_lock_set(set, mirror, set_tag);
 
         Ok(())
     }

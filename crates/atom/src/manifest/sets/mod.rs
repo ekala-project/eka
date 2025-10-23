@@ -187,7 +187,7 @@ impl<'a> SetResolver<'a> {
                 e.mirrors.insert(set.to_owned());
             })
             .or_insert(SetDetails {
-                name: name.to_owned(),
+                tag: name.to_owned(),
                 mirrors: BTreeSet::from([set]),
             });
     }
