@@ -318,14 +318,6 @@ impl AtomDep {
         &self.label
     }
 
-    pub(crate) fn id(&self) -> &AtomDigest {
-        &self.id
-    }
-
-    pub(crate) fn rev(&self) -> Option<GitDigest> {
-        self.rev
-    }
-
     pub(crate) fn set(&self) -> GitDigest {
         self.set
     }

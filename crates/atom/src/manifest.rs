@@ -253,6 +253,15 @@ impl Manifest {
     }
 }
 
+impl std::fmt::Display for SetMirror {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SetMirror::Local => write!(f, "::"),
+            SetMirror::Url(url) => write!(f, "{}", url),
+        }
+    }
+}
+
 impl FromStr for Manifest {
     type Err = de::Error;
 

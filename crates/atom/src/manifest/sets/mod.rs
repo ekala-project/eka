@@ -27,7 +27,6 @@ pub(crate) struct ResolvedSets {
     pub(crate) roots: HashMap<Either<Tag, SetMirror>, Root>,
     pub(crate) transports: HashMap<gix::Url, Box<dyn Transport + Send>>,
     details: BTreeMap<GitDigest, SetDetails>,
-    pub(crate) names: HashMap<Root, Tag>,
     pub(crate) ekala: EkalaManager,
     pub(crate) repo: Option<gix::Repository>,
 }
@@ -128,7 +127,6 @@ impl<'a> SetResolver<'a> {
         Ok(ResolvedSets {
             atoms: self.atoms,
             ekala: self.ekala,
-            names: self.names,
             transports: self.transports,
             roots: self.roots,
             details: self.sets,

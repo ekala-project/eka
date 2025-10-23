@@ -191,7 +191,7 @@ pub trait Origin<R> {
 /// The default implementations are the rules used for atom labels described in the top-level module
 /// documentation, but can be modified to allow for some flexibility, e.g. tags have identical
 /// rules with the exception of allowing `:` as an additional allowed separator.
-trait VerifiedName: VerifiedSeal + Deref {
+pub(crate) trait VerifiedName: private::VerifiedSeal + Deref {
     /// Validates that a character is a valid starting character.
     fn validate_start(c: char) -> Result<(), Error> {
         if !Self::is_valid_start(c) {
@@ -226,7 +226,7 @@ trait VerifiedName: VerifiedSeal + Deref {
 
         Self::extra_validation(&normalized)?;
 
-        Ok(VerifiedSeal::new_unverified(normalized))
+        Ok(private::VerifiedSeal::new_unverified(normalized))
     }
 
     /// Checks if a character is an invalid starting character.
@@ -246,14 +246,16 @@ trait VerifiedName: VerifiedSeal + Deref {
     }
 }
 
-/// A private trait for constructing verified identifiers after validation.
-trait VerifiedSeal
-where
-    Self: Sized,
-{
-    /// used solely in the `VerifiedName` trait to construct the final value after it has been
-    /// verified. This function should never be exposed publicly.
-    fn new_unverified(s: String) -> Self;
+mod private {
+    /// A private trait for constructing verified identifiers after validation.
+    pub trait VerifiedSeal
+    where
+        Self: Sized,
+    {
+        /// used solely in the `VerifiedName` trait to construct the final value after it has been
+        /// verified. This function should never be exposed publicly.
+        fn new_unverified(s: String) -> Self;
+    }
 }
 
 //================================================================================================
@@ -294,7 +296,7 @@ where
 
 /// Unicode UAX #31 compliant identifier
 impl VerifiedName for Identifier {}
-impl VerifiedSeal for Identifier {
+impl private::VerifiedSeal for Identifier {
     fn new_unverified(s: String) -> Self {
         Self(s)
     }
@@ -306,7 +308,7 @@ impl VerifiedName for Label {
     }
 }
 
-impl VerifiedSeal for Label {
+impl private::VerifiedSeal for Label {
     fn new_unverified(s: String) -> Self {
         Self(s)
     }
@@ -324,7 +326,7 @@ impl VerifiedName for Tag {
         Ok(())
     }
 }
-impl VerifiedSeal for Tag {
+impl private::VerifiedSeal for Tag {
     fn new_unverified(s: String) -> Self {
         Self(s)
     }

@@ -113,6 +113,7 @@ pub struct UnpackedRef<Id, R> {
 // Traits
 //================================================================================================
 
+#[allow(dead_code)]
 trait Set<P, R, T, Ref, Id, C>:
     Init<R, Ref, T> + NormalizeStorePath<P> + QueryVersion<Ref, Id, C, T, R> + Publish<R>
 where

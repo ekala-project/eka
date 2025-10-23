@@ -57,6 +57,9 @@ pub enum Error {
     /// A transparent wrapper for a [`Box<gix::refspec::parse::Error>`]
     #[error(transparent)]
     AddRefFailed(#[from] Box<gix::refspec::parse::Error>),
+    /// A transparent wrapper for a [`tempfile::PersistError`]
+    #[error(transparent)]
+    Persist(#[from] tempfile::PersistError),
     /// A transparent wrapper for a [`gix::reference::head_commit::Error`]
     #[error(transparent)]
     HeadCommit(#[from] gix::reference::head_commit::Error),
