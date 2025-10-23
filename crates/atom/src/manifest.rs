@@ -71,6 +71,7 @@ use gix::{Repository, ThreadSafeRepository};
 use path_clean::PathClean;
 use semver::Version;
 use serde::{Deserialize, Serialize};
+use tempfile::NamedTempFile;
 use thiserror::Error;
 use toml_edit::{DocumentMut, de};
 
@@ -495,27 +496,35 @@ impl EkalaManager {
         use std::fs;
         use std::io::Write;
 
-        self.write_package(&package_path)?;
+        let mut tmp = NamedTempFile::with_prefix_in(format!(".new_atom-{}", label.as_str()), ".")?;
 
         let atom = Manifest::new(label.to_owned(), version, description);
         let atom_str = toml_edit::ser::to_string_pretty(&atom)?;
         let atom_toml = package_path.as_ref().join(ATOM_MANIFEST_NAME.as_str());
 
-        fs::create_dir_all(&package_path)?;
+        tmp.write_all(atom_str.as_bytes())?;
 
-        let mut dir = fs::read_dir(&package_path)?;
+        if package_path.as_ref().exists() {
+            let mut dir = fs::read_dir(&package_path)?;
 
-        if dir.next().is_some() {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::AlreadyExists,
-                format!(
-                    "Directory exists and is not empty: {:?}",
-                    package_path.as_ref().display()
-                ),
-            ))?;
+            if dir.next().is_some() {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    format!(
+                        "Directory exists and is not empty: {:?}",
+                        package_path.as_ref().display()
+                    ),
+                ))?;
+            }
+            self.write_package(&package_path, label.to_owned())?;
+        } else {
+            fs::create_dir_all(&package_path)?;
+            self.write_package(&package_path, label.to_owned())
+                .inspect_err(|_| {
+                    fs::remove_dir_all(&package_path).ok();
+                })?;
         }
-        let mut toml_file = fs::File::create(atom_toml)?;
-        toml_file.write_all(atom_str.as_bytes())?;
+        tmp.persist(atom_toml)?;
         self.write_atomic()?;
         tracing::info!(
             message = "successfully added package to set",
@@ -530,12 +539,9 @@ impl EkalaManager {
     fn write_package(
         &mut self,
         package_path: impl AsRef<Path>,
+        label: Label,
     ) -> Result<(), crate::store::git::Error> {
         use toml_edit::{Array, Value};
-
-        let content =
-            std::fs::read_to_string(package_path.as_ref().join(ATOM_MANIFEST_NAME.as_str()))?;
-        let label = Manifest::get_atom(&content)?.label;
 
         if let Some(path) = self.manifest.set.packages.as_ref().get(&label) {
             tracing::error!(
