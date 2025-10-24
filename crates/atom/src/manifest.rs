@@ -100,8 +100,8 @@ pub enum AtomError {
     /// The manifest is not valid TOML.
     #[error(transparent)]
     InvalidToml(#[from] toml_edit::TomlError),
-    /// An Label is missing or malformed
-    #[error("failed to locate Ekala manifest in directory parents")]
+    /// could not locate ekala manifest
+    #[error("failed to locate Ekala manifest")]
     EkalaManifest,
     /// An I/O error occurred while reading the manifest file.
     #[error(transparent)]
@@ -482,7 +482,13 @@ impl EkalaManager {
         };
 
         let (doc, manifest) = {
-            let content = std::fs::read_to_string(&path)?;
+            let content = std::fs::read_to_string(&path).inspect_err(|_| {
+                tracing::error!(
+                    suggestion = "did you run `eka init`?",
+                    "{}",
+                    AtomError::EkalaManifest
+                )
+            })?;
             TypedDocument::new(&content)?
         };
 

@@ -75,10 +75,10 @@ use snix_store::pathinfoservice::PathInfoService;
 use url::Url;
 
 use crate::id::{AtomDigest, Label, Name, Tag};
-use crate::manifest::SetMirror;
 use crate::manifest::deps::{
     AtomReq, GitSpec, NixFetch, NixGit, NixReq, deserialize_url, serialize_url,
 };
+use crate::manifest::{SetMirror, deps};
 use crate::store::git::Root;
 use crate::store::{QueryStore, QueryVersion, UnpackedRef};
 use crate::uri::{Uri, VERSION_PLACEHOLDER};
