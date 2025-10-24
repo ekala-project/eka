@@ -1,0 +1,5 @@
+[set]
+packages = ["foo", "bar", "baz"]
+
+[metadata]
+tags = []
