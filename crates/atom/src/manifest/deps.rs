@@ -68,7 +68,7 @@ use crate::manifest::{AtomError, SetMirror};
 use crate::store::UnpackedRef;
 use crate::store::git::Root;
 use crate::uri::{AliasedUrl, Uri};
-use crate::{ATOM_MANIFEST_NAME, AtomId, Lockfile, Manifest, Origin, lock};
+use crate::{ATOM_MANIFEST_NAME, AtomId, Lockfile, Manifest, Origin};
 
 //================================================================================================
 // Types
@@ -193,7 +193,6 @@ pub struct ManifestWriter {
 
 /// Represents the underlying type of Nix dependency
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
-#[serde(untagged)]
 pub enum NixReq {
     /// A tarball url which will be unpacked before being hashed
     #[serde(rename = "tar")]
@@ -210,7 +209,6 @@ pub enum NixReq {
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
-#[serde(deny_unknown_fields)]
 /// Represents a nix fetch, either direct or tarball.
 pub struct NixFetch {
     /// The URL of the resource.
