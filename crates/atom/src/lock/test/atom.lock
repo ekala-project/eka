@@ -1,9 +1,9 @@
 version = 1
 
 [sets]
-b7d610651b8dd7975eb0265fbf93ee70bc39c291 = {name = "foo", mirrors = ["ssh://git@github.com/nrdxp/home.git"]}
-f36300e6cd435c5b56751f2792e67f32cf1b666e = {name = "bar", mirrors = ["https://git.example.com/my-repo.git"]}
-47478f45ed0de99d42495a0842b1fa41eac1ce14 = {name = "baz", mirrors = ["::"]}
+b7d610651b8dd7975eb0265fbf93ee70bc39c291 = {tag = "foo", mirrors = ["ssh://git@github.com/nrdxp/home.git"]}
+f36300e6cd435c5b56751f2792e67f32cf1b666e = {tag = "bar", mirrors = ["https://git.example.com/my-repo.git"]}
+47478f45ed0de99d42495a0842b1fa41eac1ce14 = {tag = "baz", mirrors = ["::"]}
 
 [[deps]]
 type = "atom"

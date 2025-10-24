@@ -112,8 +112,11 @@ pub enum DocError {
     #[error("there is more than one atom with the same label in the set")]
     DuplicateAtoms,
     /// A local atom by the requested label doesn't exist
-    #[error("a local atom by the requested label doesn't exist, or isn't specified")]
+    #[error("a local atom by the requested label isn't specified in ekala.toml")]
     NoLocal,
+    /// Duplicate atoms were found in the ekala manifest
+    #[error("locked atoms could not be synchronized with manifest")]
+    SyncFailed,
     /// A TOML deserialization error occurred.
     #[error(transparent)]
     De(#[from] toml_edit::de::Error),
@@ -170,7 +173,7 @@ pub enum GitSpec {
 /// ```rust,no_run
 /// use std::path::Path;
 ///
-/// use atom::id::Name;
+/// use atom::id::Tag;
 /// use atom::manifest::deps::ManifestWriter;
 /// use atom::uri::Uri;
 ///
@@ -179,7 +182,7 @@ pub enum GitSpec {
 ///         .await
 ///         .unwrap();
 ///     let uri = "my-atom@^1.0.0".parse::<Uri>().unwrap();
-///     let key = "my-atom".parse::<Name>().unwrap();
+///     let key = "my-atom".parse::<Tag>().unwrap();
 ///     writer.add_uri(uri, Some(key)).unwrap();
 ///     writer.write_atomic().unwrap();
 /// };
@@ -492,7 +495,16 @@ impl ManifestWriter {
             Dep::Atom(atom_dep) => {
                 if let Some(SetDetails { tag: name, .. }) = self.lock.sets.get(&atom_dep.set()) {
                     if let Some(set) = manifest.deps().from().get(name) {
-                        return set.contains_key(atom_dep.label());
+                        return set.contains_key(atom_dep.label())
+                            && (atom_dep.version().pre.is_empty()
+                                || self
+                                    .resolved
+                                    .ekala
+                                    .manifest
+                                    .set
+                                    .packages
+                                    .as_ref()
+                                    .contains_key(atom_dep.label()));
                     } else {
                         false
                     };
@@ -619,7 +631,15 @@ impl ManifestWriter {
                         ))
                     })?;
                     self.synchronize_atom(req.to_owned(), id.to_owned(), set_tag.to_owned())
-                        .ok();
+                        .map_err(|error| {
+                            tracing::error!(
+                                atom.label = %label,
+                                atom.requested = %req,
+                                set = %set_tag,
+                                %error, "lock synchronization failed"
+                            );
+                            DocError::SyncFailed
+                        })?;
                 }
             } else {
                 tracing::warn!(
