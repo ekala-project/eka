@@ -157,8 +157,7 @@ impl<'a> SetResolver<'a> {
                             .map_err(Box::new)??;
                         commit.calculate_origin()?
                     };
-                    self.check_set_consistency(set_tag, root)?;
-                    self.roots.insert(Either::Right(SetMirror::Local), root);
+                    self.check_set_consistency(set_tag, root, &SetMirror::Local)?;
                     self.update_sets(set_tag, root, SetMirror::Local);
                 } else {
                     return Err(Error::NoLocal.into());
@@ -171,7 +170,13 @@ impl<'a> SetResolver<'a> {
                 self.tasks.spawn(async move {
                     let mut transport = url.get_transport().ok();
                     let atoms = url.get_atoms(transport.as_mut())?;
-                    let root = atoms.calculate_origin()?;
+                    let root = atoms.calculate_origin().inspect_err(|_| {
+                        tracing::warn!(
+                            set.tag = %set_name,
+                            set.mirror = %url,
+                            "remote advertised no atoms in:"
+                        )
+                    })?;
                     Ok((transport, atoms, root, set_name, url))
                 });
                 Ok(())
@@ -198,9 +203,8 @@ impl<'a> SetResolver<'a> {
     /// consistency checks, and aggregates the results into the provided hashmaps.
     fn process_remote_mirror_result(&mut self, result: MirrorResult) -> Result<(), BoxError> {
         let (transport, atoms, root, set_name, url) = result?;
-        self.roots
-            .insert(Either::Right(SetMirror::Url(url.to_owned())), root);
-        self.check_set_consistency(&set_name, root)?;
+        let mirror = SetMirror::Url(url.to_owned());
+        self.check_set_consistency(&set_name, root, &mirror)?;
         self.update_sets(&set_name, root, SetMirror::Url(url.to_owned()));
         if let Some(t) = transport {
             self.transports.insert(url.to_owned(), t);
@@ -272,27 +276,38 @@ impl<'a> SetResolver<'a> {
     /// This check verifies two conditions:
     /// 1. A repository root hash is not associated with more than one package set name.
     /// 2. A package set name is not associated with more than one repository root hash.
-    fn check_set_consistency(&mut self, set_tag: &Tag, root: Root) -> Result<(), BoxError> {
+    fn check_set_consistency(
+        &mut self,
+        set_tag: &Tag,
+        root: Root,
+        mirror: &SetMirror,
+    ) -> Result<(), BoxError> {
         let prev = self.names.insert(root, set_tag.to_owned());
-        if prev.is_some() && prev.as_ref() != Some(set_tag) {
-            tracing::error!(
-                message = "a repository exists in more than one mirror set",
-                set.a = %set_tag,
-                set.b = ?prev,
-                set.hash = %*root
-            );
-            return Err(Error::Inconsistent.into());
+        if let Some(prev_tag) = &prev {
+            if prev_tag != set_tag {
+                tracing::error!(
+                    message = "the same mirror exists in more than one set",
+                    set.mirror = %mirror,
+                    set.conflict.a = %set_tag,
+                    set.conflict.b = %prev_tag,
+                );
+                return Err(Error::Inconsistent.into());
+            }
         }
         let prev = self.roots.insert(Either::Left(set_tag.to_owned()), root);
-        if prev.is_some() && prev.as_ref() != Some(&root) {
-            tracing::error!(
-                message = "the mirrors for this set do not all point at the same set",
-                set.name = %set_tag,
-                set.a = %*root,
-                set.b = ?prev,
-            );
-            return Err(Error::Inconsistent.into());
+        if let Some(prev) = &prev {
+            if prev != &root {
+                tracing::error!(
+                    message = "the mirrors in this set do not all point at the same set",
+                    set.name = %set_tag,
+                    set.mirror = %mirror,
+                    set.root.mirror = %*root,
+                    set.root.previous = %**prev,
+                );
+                return Err(Error::Inconsistent.into());
+            }
         }
+        self.roots.insert(Either::Right(mirror.to_owned()), root);
         Ok(())
     }
 }

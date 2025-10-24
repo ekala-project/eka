@@ -120,6 +120,9 @@ pub enum Error {
     /// The repository root calculation failed.
     #[error("Failed to calculate the repositories root commit")]
     RootNotFound,
+    /// The repository root calculation failed.
+    #[error("The remote is initialized, but reported no published atoms")]
+    NoAtoms,
     /// Repo is in a detached head state
     #[error("The repository is in a detached head state")]
     DetachedHead,
@@ -586,7 +589,7 @@ impl Origin<Root> for std::vec::IntoIter<AtomQuery> {
             None => Ok(Some(item.id.root().to_owned())),
             _ => Err(Error::RootInconsistent),
         })
-        .and_then(|x| x.ok_or(Error::RootNotFound))
+        .and_then(|x| x.ok_or(Error::NoAtoms))
     }
 }
 
