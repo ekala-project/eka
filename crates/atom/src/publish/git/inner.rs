@@ -252,7 +252,7 @@ impl<'a> GitContext<'a> {
     ///
     /// # Errors
     ///
-    /// Returns an error if the underlying [`gix::object::tree::Tree::lookup_entry`] call fails.
+    /// Returns an error if the underlying `gix::object::tree::Tree::lookup_entry` call fails.
     pub fn tree_search(&self, path: &Path) -> GitResult<Option<Entry<'a>>> {
         let search = path.components().map(|c| c.as_os_str().as_bytes());
         Ok(self.tree.clone().lookup_entry(search)?)

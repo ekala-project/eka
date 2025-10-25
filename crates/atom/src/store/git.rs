@@ -348,7 +348,7 @@ impl<'repo> Init<Root, Ref, Box<dyn Transport + Send>> for gix::Remote<'repo> {
     ///     - `refs/ekala/init`: The Ekala root reference.
     ///
     /// 2. **Validates References**: It ensures both `HEAD` and the Ekala root reference exist in
-    ///    the fetched refs. If either is missing, it returns a [`RootNotFound`] error.
+    ///    the fetched refs. If either is missing, it returns a RootNotFound error.
     ///
     /// 3. **Calculates Roots**: For both the HEAD commit and the Ekala root reference:
     ///     - If the commit has no parents (is the initial commit), uses that commit's ID directly.
@@ -357,7 +357,7 @@ impl<'repo> Init<Root, Ref, Box<dyn Transport + Send>> for gix::Remote<'repo> {
     ///
     /// 4. **Verifies Consistency**: Compares the calculated root from HEAD with the calculated root
     ///    from the Ekala reference. If they match, the store is consistent. If they differ, returns
-    ///    a [`RootInconsistent`] error.
+    ///    a RootInconsistent error.
     ///
     /// ## Purpose
     ///
@@ -436,18 +436,18 @@ impl<'repo> Init<Root, Ref, Box<dyn Transport + Send>> for gix::Remote<'repo> {
     ///
     /// 1. **Transport Setup**: Obtains or uses the provided transport for remote communication.
     ///
-    /// 2. **Sync with Remote**: Calls [`sync`] to fetch the latest `HEAD` from the remote, ensuring
+    /// 2. **Sync with Remote**: Calls `sync` to fetch the latest `HEAD` from the remote, ensuring
     ///    initialization is based on the current repository state.
     ///
     /// 3. **Root Calculation**: Calculates the repository's true root commit by traversing the
     ///    commit history from the synced `HEAD` back to the initial commit (the one with no
     ///    parents).
     ///
-    /// 4. **Consistency Check**: Attempts to call [`ekala_root`] to check if the remote is already
+    /// 4. **Consistency Check**: Attempts to call `ekala_root` to check if the remote is already
     ///    initialized.
     ///     - If already initialized, verifies that the existing root matches the calculated root.
     ///     - If they match, returns the existing root reference name (idempotent behavior).
-    ///     - If they differ, returns a [`RootInconsistent`] error.
+    ///     - If they differ, returns a RootInconsistent error.
     ///
     /// 5. **Root Reference Creation**: If not already initialized, creates a new Git reference
     ///    named `refs/ekala/init` that points directly to the calculated root commit.

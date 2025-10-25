@@ -2,42 +2,100 @@
 //!
 //! This module provides the core types for working with an Atom manifest's dependencies.
 //! It defines the structure for specifying different types of dependencies in an atom's
-//! manifest file, including atom references, direct pins, and build-time sources.
+//! manifest file, including atom references, direct Nix fetchers, and build-time sources.
 //!
 //! ## Dependency Types
 //!
-//! The manifest supports three main categories of dependencies:
+//! The manifest supports two main categories of dependencies:
 //!
-//! - **Atom dependencies** - References to other atoms by ID and version.
-//! - **Pin dependencies** - Direct references to external sources (URLs, Git repos, tarballs).
-//! - **Source dependencies** - Build-time dependencies like source code or config files.
+//! - **Atom dependencies** (`[deps.from.<set-name>]`) - References to other atoms by label and
+//!   version constraint.
+//! - **Direct Nix dependencies** (`[deps.direct.nix]`) - Direct references to external sources
+//!   using Nix fetchers (URLs, Git repos, tarballs, build-time sources).
 //!
 //! ## Key Types
 //!
 //! - [`Dependency`] - The main dependency structure containing all dependency types.
-//! - [`AtomReq`] - Requirements for atom dependencies.
-//! - [`SrcReq`] - Requirements for build-time sources.
+//! - [`AtomReq`] - Requirements for atom dependencies (version constraints).
+//! - [`NixFetch`] - Direct Nix fetcher dependencies with optional version interpolation.
 //!
-//! ## Example Usage
+//! ## Manifest Format
+//!
+//! ### Package Configuration
 //!
 //! ```toml
-//! [deps.atoms]
-//! # Reference to another atom
-//! other-atom = { version = "^1.0.0", path = "../other-atom" }
+//! [package]
+//! label = "my-atom"
+//! version = "0.1.0"
 //!
-//! [deps.pins]
-//! # pin to external evaluation time source code
-//! external-lib = { url = "https://example.com/lib.tar.gz" }
+//! [package.sets]
+//! # Remote atom sets
+//! company-atoms = "git@github.com:our-company/atoms"
+//! # Local atom set (current repository)
+//! local-atoms = "::"
+//! # Sets with mirrors
+//! public-atoms = ["https://registry-a.com/atoms", "https://registry-b.com/atoms"]
+//! ```
 //!
-//! # Git pin
-//! git-dep = { url = "https://github.com/user/repo.git", ref = "main" }
+//! ### Atom Dependencies
 //!
-//! # Indirect pin (from another atom)
-//! shared-lib = { from = "other-atom", get = "lib" }
+//! ```toml
+//! [deps.from.company-atoms]
+//! auth-service = "^1.5"
+//! database = "^2.0"
 //!
-//! [deps.srcs]
-//! # Build-time source
-//! src-code = { url = "https://registry.example.com/code.tar.gz" }
+//! [deps.from.local-atoms]
+//! shared-utils = "^0.1"
+//! ```
+//!
+//! ### Direct Nix Dependencies
+//!
+//! ```toml
+//! [deps.direct.nix]
+//! # URL fetch (direct download)
+//! nix-installer.url = "https://nixos.org/nix/install"
+//!
+//! # Git fetch with static ref (inline table syntax)
+//! nixpkgs = { git = "https://github.com/NixOS/nixpkgs", ref = "nixos-unstable" }
+//!
+//! # Git fetch with version constraint
+//! other-repo = { git = "https://github.com/other/repo", version = "^1.2" }
+//!
+//! # Alternative dotted syntax for simple cases
+//! # nixpkgs.git = "https://github.com/NixOS/nixpkgs"
+//! # nixpkgs.ref = "nixos-unstable"
+//!
+//! # Tarball fetch with version interpolation
+//! docs = { tar = "https://docs.company.com/api/__VERSION__/docs.tar.gz", version = "from.company-atoms.auth-service" }
+//!
+//! # Build-time source (FOD)
+//! source-archive = { build = "https://dist.company.com/my-atom/__VERSION__/source.tar.gz", version = "from.local-atoms.my-atom" }
+//! ```
+//!
+//! ## Lockfile Format
+//!
+//! The lockfile captures resolved dependencies with cryptographic hashes:
+//!
+//! ```toml
+//! version = 1
+//!
+//! [sets.<root-hash>]
+//! tag = "company-atoms"
+//! mirrors = ["git@github.com:our-company/atoms"]
+//!
+//! [[deps]]
+//! type = "atom"
+//! label = "auth-service"
+//! version = "1.5.2"
+//! set = "<root-hash>"
+//! rev = "<commit-hash>"
+//! id = "<blake3-hash>"
+//!
+//! [[deps]]
+//! type = "nix+git"
+//! name = "nixpkgs"
+//! url = "https://github.com/NixOS/nixpkgs"
+//! rev = "<commit-hash>"
 //! ```
 //!
 //! ## Validation
@@ -872,7 +930,8 @@ impl ManifestWriter {
         Ok(())
     }
 
-    /// Adds a user-requested pin URL to the manifest and lock files, ensuring they remain in sync.
+    /// Adds a user-requested direct URL to the manifest and lock files, ensuring they remain in
+    /// sync.
     pub async fn add_url(
         &mut self,
         url: AliasedUrl,

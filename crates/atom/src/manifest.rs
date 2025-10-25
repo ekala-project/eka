@@ -6,28 +6,43 @@
 //! ## Manifest Structure
 //!
 //! Every atom must have a manifest file named `atom.toml` that contains at minimum
-//! a `[atom]` section with the atom's ID, version, and optional description.
-//! Additional sections can specify dependencies and other configuration.
+//! a `[package]` section with the atom's label, version, and optional description.
+//! Additional sections can specify package sets and dependencies.
+//!
+//! ## Package Sets and Mirrors
+//!
+//! The `[package.sets]` table defines named sources for atom dependencies. Each set
+//! can be a single URL or an array of mirror URLs. The special value `"::"` represents
+//! the local repository and enables efficient development workflows by allowing atoms
+//! to reference each other without requiring `eka publish` after every change.
+//!
+//! This mirrors the URI format where `::<atom-name>` indicates a local atom from the
+//! current repository (as opposed to remote atoms which would be prefixed with a URL or alias).
 //!
 //! ## Key Types
 //!
 //! - [`Manifest`] - The complete manifest structure, representing the `atom.toml` file.
-//! - [`Atom`] - The core atom metadata (`label`, `version`, `description`).
+//! - [`Atom`] - The core atom metadata (`label`, `version`, `description`, `sets`).
+//! - [`Dependency`] - Atom and direct Nix dependencies (see [`deps`] module).
 //! - [`AtomError`] - Errors that can occur during manifest processing.
 //!
 //! ## Example Manifest
 //!
 //! ```toml
-//! [atom]
+//! [package]
 //! label = "my-atom"
 //! version = "1.0.0"
 //! description = "A sample atom for demonstration"
 //!
-//! [deps.atoms]
-//! other-atom = { version = "^1.0.0", path = "../other-atom" }
+//! [package.sets]
+//! company-atoms = "git@github.com:our-company/atoms"
+//! local-atoms = "::"
 //!
-//! [deps.pins]
-//! external-lib = { url = "https://example.com/lib.tar.gz", hash = "sha256:abc123..." }
+//! [deps.from.company-atoms]
+//! other-atom = "^1.0.0"
+//!
+//! [deps.direct.nix]
+//! external-lib.url = "https://example.com/lib.tar.gz"
 //! ```
 //!
 //! ## Validation

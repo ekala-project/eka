@@ -225,7 +225,7 @@ pub trait QueryStore<Ref, T: Send> {
     /// Query a remote store for a single reference.
     ///
     /// This is a convenience method that queries for a single reference and returns
-    /// the first result. See [`get_refs`] for details on network behavior.
+    /// the first result. See `get_refs` for details on network behavior.
     ///
     /// # Arguments
     /// * `target` - The reference specification to query (e.g., "main", "refs/tags/v1.0")

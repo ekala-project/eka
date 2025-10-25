@@ -10,49 +10,65 @@
 //! portability across different tools and languages. Each dependency is represented
 //! as a tagged union that can represent different types of dependencies:
 //!
-//! - **Atom dependencies** - References to other atoms by ID and version
-//! - **Direct pins** - Direct references to external URLs with integrity verification
-//! - **Git pins** - References to specific Git repositories and commits
-//! - **Tarball pins** - References to tarball/zip archives
-//! - **Cross-atom references** - Dependencies sourced from other atoms
+//! - **Atom dependencies** (`atom`) - References to other atoms by label, version, and
+//!   cryptographic ID
+//! - **Direct Nix dependencies** (`nix`, `nix+git`, `nix+tar`, `nix+build`) - Direct references to
+//!   external sources with integrity verification
 //!
 //! ## Key Types
 //!
-//! - [`Lockfile`] - The root structure containing all resolved dependencies
-//! - [`Dep`] - Enum representing different types of dependencies
-//! - [`Src`] - Enum representing build-time sources
-//! - [`ResolutionMode`] - Controls whether to resolve direct or transitive dependencies
+//! - [`Lockfile`] - The root structure containing all resolved dependencies and sets
+//! - [`Dep`] - Enum representing different types of locked dependencies
+//! - [`AtomDep`] - Structure for locked atom dependencies with cryptographic verification
+//! - [`NixDep`], [`NixGitDep`], [`NixTarDep`], [`BuildSrc`] - Structures for different Nix fetcher
+//!   types
 //!
-//! ## Example Lockfile
+//! Note: Some types are marked as `pub(crate)` for internal use within the atom crate.
+//!
+//! ## Lockfile Structure
 //!
 //! ```toml
 //! version = 1
 //!
+//! [sets.<root-hash>]
+//! tag = "company-atoms"
+//! mirrors = ["git@github.com:our-company/atoms", "https://mirror.com/atoms"]
+//!
 //! [[deps]]
 //! type = "atom"
-//! label = "my-atom"
-//! version = "1.0.0"
-//! rev = "abc123..."
+//! label = "auth-service"
+//! version = "1.5.2"
+//! set = "<root-hash>"
+//! rev = "<commit-hash>"
+//! id = "<blake3-hash>"
 //!
 //! [[deps]]
-//! type = "pin"
-//! name = "external-lib"
-//! url = "https://example.com/lib.tar.gz"
-//! hash = "sha256:def456..."
+//! type = "nix+git"
+//! name = "nixpkgs"
+//! url = "https://github.com/NixOS/nixpkgs"
+//! rev = "<commit-hash>"
 //!
-//! [[srcs]]
-//! type = "build"
-//! name = "registry"
-//! url = "https://registry.example.com"
-//! hash = "sha256:ghi789..."
+//! [[deps]]
+//! type = "nix+tar"
+//! name = "master"
+//! url = "https://github.com/ekala-project/atom/archive/master.tar.gz"
+//! hash = "sha256:..."
+//!
+//! [[deps]]
+//! type = "nix+build"
+//! name = "source-archive"
+//! url = "https://dist.company.com/my-atom/0.2.0/source.tar.gz"
+//! hash = "sha256:..."
 //! ```
 //!
 //! ## Security Features
 //!
-//! - **Cryptographic verification** using BLAKE3 hashes for atom content
-//! - **Nix-compatible hashing** for tarballs and archives
+//! - **Cryptographic identity** using BLAKE3 hashes for atom identification
+//! - **Backend-dependent content verification** (currently SHA1 for Git, will migrate to SHA256)
+//! - **Nix-compatible hashing** for tarballs and archives with SHA256
 //! - **Strict field validation** with `#[serde(deny_unknown_fields)]`
 //! - **Type-safe dependency resolution** preventing invalid configurations
+//! - **Repository root hash verification** for atom set integrity
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Deref;
@@ -147,19 +163,19 @@ pub(crate) enum Dep {
     /// and Git revision.
     #[serde(rename = "atom")]
     Atom(AtomDep),
-    /// A direct pin to an external source variant.
+    /// A direct reference to an external source variant.
     ///
     /// Represents a dependency pinned to a specific URL with integrity verification.
     /// Used for dependencies that are not atoms but need to be fetched from external sources.
     #[serde(rename = "nix")]
     Nix(NixDep),
-    /// A Git-specific pin variant.
+    /// A Git-specific nix variant.
     ///
     /// Represents a dependency pinned to a specific Git repository and commit.
     /// Similar to Pin but specifically for Git repositories.
     #[serde(rename = "nix+git")]
     NixGit(NixGitDep),
-    /// A tarball pin variant.
+    /// A tarball nix variant.
     ///
     /// Represents a dependency pinned to a tarball or archive file.
     /// Used for dependencies distributed as compressed archives.
@@ -298,7 +314,7 @@ pub(crate) enum NixUrls<'a> {
 }
 
 /// A type alias for the fetcher used for pinned dependencies.
-type PinFetcher = Fetcher<
+type NixFetcher = Fetcher<
     Arc<dyn BlobService>,
     Arc<dyn DirectoryService>,
     Arc<dyn PathInfoService>,
@@ -505,7 +521,7 @@ impl<R, T: Ord> DepMap<R, T> {
 }
 
 impl NixFetch {
-    pub(crate) async fn get_fetcher() -> Result<PinFetcher, BoxError> {
+    pub(crate) async fn get_fetcher() -> Result<NixFetcher, BoxError> {
         use snix_castore::{blobservice, directoryservice};
         use snix_glue::fetchers::Fetcher;
         use snix_store::nar::SimpleRenderer;
