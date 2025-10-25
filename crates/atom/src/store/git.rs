@@ -25,7 +25,8 @@ use thiserror::Error as ThisError;
 
 use crate::id::Origin;
 use crate::lock::GitDigest;
-use crate::manifest::EkalaManifest;
+use crate::manifest::deps::DocError;
+use crate::manifest::{AtomError, EkalaManifest};
 use crate::store::{Init, NormalizeStorePath, QueryStore, QueryVersion, UnpackedRef};
 use crate::{AtomId, Label};
 
@@ -56,6 +57,12 @@ pub enum Error {
     /// A transparent wrapper for a [`Box<gix::refspec::parse::Error>`]
     #[error(transparent)]
     AddRefFailed(#[from] Box<gix::refspec::parse::Error>),
+    /// A transparent wrapper for a [`tempfile::PersistError`]
+    #[error(transparent)]
+    Persist(#[from] tempfile::PersistError),
+    /// A transparent wrapper for a [`gix::reference::head_commit::Error`]
+    #[error(transparent)]
+    HeadCommit(#[from] gix::reference::head_commit::Error),
     /// A transparent wrapper for a [`Box<gix::remote::connect::Error>`]
     #[error(transparent)]
     Connect(#[from] Box<gix::remote::connect::Error>),
@@ -113,6 +120,9 @@ pub enum Error {
     /// The repository root calculation failed.
     #[error("Failed to calculate the repositories root commit")]
     RootNotFound,
+    /// The repository root calculation failed.
+    #[error("The remote is initialized, but reported no published atoms")]
+    NoAtoms,
     /// Repo is in a detached head state
     #[error("The repository is in a detached head state")]
     DetachedHead,
@@ -137,6 +147,12 @@ pub enum Error {
     /// A transparent wrapper for a [`toml_edit::ser::Error`]
     #[error(transparent)]
     Serial(#[from] toml_edit::ser::Error),
+    /// A transparent wrapper for a [`AtomError`]
+    #[error(transparent)]
+    Atom(#[from] AtomError),
+    /// A transparent wrapper for a [`DocError`]
+    #[error(transparent)]
+    Doc(#[from] DocError),
     /// A generic boxed error variant
     #[error(transparent)]
     Generic(Box<dyn std::error::Error + Send + Sync>),
@@ -332,7 +348,7 @@ impl<'repo> Init<Root, Ref, Box<dyn Transport + Send>> for gix::Remote<'repo> {
     ///     - `refs/ekala/init`: The Ekala root reference.
     ///
     /// 2. **Validates References**: It ensures both `HEAD` and the Ekala root reference exist in
-    ///    the fetched refs. If either is missing, it returns a [`RootNotFound`] error.
+    ///    the fetched refs. If either is missing, it returns a RootNotFound error.
     ///
     /// 3. **Calculates Roots**: For both the HEAD commit and the Ekala root reference:
     ///     - If the commit has no parents (is the initial commit), uses that commit's ID directly.
@@ -341,7 +357,7 @@ impl<'repo> Init<Root, Ref, Box<dyn Transport + Send>> for gix::Remote<'repo> {
     ///
     /// 4. **Verifies Consistency**: Compares the calculated root from HEAD with the calculated root
     ///    from the Ekala reference. If they match, the store is consistent. If they differ, returns
-    ///    a [`RootInconsistent`] error.
+    ///    a RootInconsistent error.
     ///
     /// ## Purpose
     ///
@@ -420,18 +436,18 @@ impl<'repo> Init<Root, Ref, Box<dyn Transport + Send>> for gix::Remote<'repo> {
     ///
     /// 1. **Transport Setup**: Obtains or uses the provided transport for remote communication.
     ///
-    /// 2. **Sync with Remote**: Calls [`sync`] to fetch the latest `HEAD` from the remote, ensuring
+    /// 2. **Sync with Remote**: Calls `sync` to fetch the latest `HEAD` from the remote, ensuring
     ///    initialization is based on the current repository state.
     ///
     /// 3. **Root Calculation**: Calculates the repository's true root commit by traversing the
     ///    commit history from the synced `HEAD` back to the initial commit (the one with no
     ///    parents).
     ///
-    /// 4. **Consistency Check**: Attempts to call [`ekala_root`] to check if the remote is already
+    /// 4. **Consistency Check**: Attempts to call `ekala_root` to check if the remote is already
     ///    initialized.
     ///     - If already initialized, verifies that the existing root matches the calculated root.
     ///     - If they match, returns the existing root reference name (idempotent behavior).
-    ///     - If they differ, returns a [`RootInconsistent`] error.
+    ///     - If they differ, returns a RootInconsistent error.
     ///
     /// 5. **Root Reference Creation**: If not already initialized, creates a new Git reference
     ///    named `refs/ekala/init` that points directly to the calculated root commit.
@@ -521,10 +537,10 @@ impl<'repo> Init<Root, Ref, Box<dyn Transport + Send>> for gix::Remote<'repo> {
     }
 }
 
-impl NormalizeStorePath for Repository {
+impl<P: AsRef<Path>> NormalizeStorePath<P> for Repository {
     type Error = Error;
 
-    fn normalize<P: AsRef<Path>>(&self, path: P) -> Result<PathBuf, Error> {
+    fn normalize(&self, path: P) -> Result<PathBuf, Error> {
         use std::fs;
 
         use path_clean::PathClean;
@@ -573,7 +589,7 @@ impl Origin<Root> for std::vec::IntoIter<AtomQuery> {
             None => Ok(Some(item.id.root().to_owned())),
             _ => Err(Error::RootInconsistent),
         })
-        .and_then(|x| x.ok_or(Error::RootNotFound))
+        .and_then(|x| x.ok_or(Error::NoAtoms))
     }
 }
 

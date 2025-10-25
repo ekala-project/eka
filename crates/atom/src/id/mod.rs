@@ -40,6 +40,10 @@
 //! - All subsequent characters must have the `XID_Continue` property, with one exception: the
 //!   hyphen (`-`) is allowed.
 //!
+//! In this sense atom labels are a superset of UAX #31 with an explicit exception for `-`. Tags are
+//! also a superset of labels for purposes of meta-data and allow `:` and `.` as additional
+//! separators. The explicit hierarchy is: Identifier ⊂ Label ⊂ Tag.
+//!
 //! ## Usage Example
 //!
 //! ```rust,no_run
@@ -106,7 +110,7 @@ pub type Name = Label;
 #[serde(try_from = "String")]
 pub struct Identifier(String);
 
-/// A type like `Identifier` but with exceptions for `:` and `.` characters for metadata tags
+/// A type like `Label` but with exceptions for `:` and `.` characters for metadata tags
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(try_from = "String")]
 pub struct Tag(String);
@@ -187,7 +191,7 @@ pub trait Origin<R> {
 /// The default implementations are the rules used for atom labels described in the top-level module
 /// documentation, but can be modified to allow for some flexibility, e.g. tags have identical
 /// rules with the exception of allowing `:` as an additional allowed separator.
-trait VerifiedName: VerifiedSeal + Deref {
+pub(crate) trait VerifiedName: private::VerifiedSeal + Deref {
     /// Validates that a character is a valid starting character.
     fn validate_start(c: char) -> Result<(), Error> {
         if !Self::is_valid_start(c) {
@@ -222,7 +226,7 @@ trait VerifiedName: VerifiedSeal + Deref {
 
         Self::extra_validation(&normalized)?;
 
-        Ok(VerifiedSeal::new_unverified(normalized))
+        Ok(private::VerifiedSeal::new_unverified(normalized))
     }
 
     /// Checks if a character is an invalid starting character.
@@ -232,7 +236,7 @@ trait VerifiedName: VerifiedSeal + Deref {
 
     /// Checks if a character is valid for use.
     fn is_valid_char(c: char) -> bool {
-        unicode_ident::is_xid_continue(c) || c == '-'
+        unicode_ident::is_xid_continue(c)
     }
 
     /// Adds additional validation logic without overriding the default if required, does nothing by
@@ -242,14 +246,16 @@ trait VerifiedName: VerifiedSeal + Deref {
     }
 }
 
-/// A private trait for constructing verified identifiers after validation.
-trait VerifiedSeal
-where
-    Self: Sized,
-{
-    /// used solely in the `VerifiedName` trait to construct the final value after it has been
-    /// verified. This function should never be exposed publicly.
-    fn new_unverified(s: String) -> Self;
+mod private {
+    /// A private trait for constructing verified identifiers after validation.
+    pub trait VerifiedSeal
+    where
+        Self: Sized,
+    {
+        /// used solely in the `VerifiedName` trait to construct the final value after it has been
+        /// verified. This function should never be exposed publicly.
+        fn new_unverified(s: String) -> Self;
+    }
 }
 
 //================================================================================================
@@ -288,19 +294,21 @@ where
     }
 }
 
-impl VerifiedName for Label {}
-
-impl VerifiedSeal for Label {
+/// Unicode UAX #31 compliant identifier
+impl VerifiedName for Identifier {}
+impl private::VerifiedSeal for Identifier {
     fn new_unverified(s: String) -> Self {
         Self(s)
     }
 }
-impl VerifiedName for Identifier {
+
+impl VerifiedName for Label {
     fn is_valid_char(c: char) -> bool {
-        unicode_ident::is_xid_continue(c)
+        Identifier::is_valid_char(c) || c == '-'
     }
 }
-impl VerifiedSeal for Identifier {
+
+impl private::VerifiedSeal for Label {
     fn new_unverified(s: String) -> Self {
         Self(s)
     }
@@ -308,7 +316,7 @@ impl VerifiedSeal for Identifier {
 
 impl VerifiedName for Tag {
     fn is_valid_char(c: char) -> bool {
-        unicode_ident::is_xid_continue(c) || c == '.' || c == ':'
+        Label::is_valid_char(c) || c == '.' || c == ':'
     }
 
     fn extra_validation(s: &str) -> Result<(), Error> {
@@ -318,7 +326,7 @@ impl VerifiedName for Tag {
         Ok(())
     }
 }
-impl VerifiedSeal for Tag {
+impl private::VerifiedSeal for Tag {
     fn new_unverified(s: String) -> Self {
         Self(s)
     }
@@ -404,6 +412,11 @@ impl fmt::Display for Identifier {
         write!(f, "{}", self.0)
     }
 }
+impl fmt::Display for Tag {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 
 impl Display for AtomDigest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -469,6 +482,14 @@ impl FromStr for Identifier {
     }
 }
 
+impl FromStr for Tag {
+    type Err = Error;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        Tag::validate(s)
+    }
+}
+
 impl<R: AsRef<[u8]>> Serialize for AtomId<R> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -525,6 +546,23 @@ impl TryFrom<String> for Tag {
 
     fn try_from(s: String) -> Result<Self, Self::Error> {
         Tag::validate(&s)
+    }
+}
+
+impl TryFrom<&str> for Tag {
+    type Error = Error;
+
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
+        Tag::from_str(s)
+    }
+}
+
+impl TryFrom<&OsStr> for Tag {
+    type Error = Error;
+
+    fn try_from(s: &OsStr) -> Result<Self, Self::Error> {
+        let s = s.to_str().ok_or(Error::InvalidUnicode)?;
+        Tag::from_str(s)
     }
 }
 

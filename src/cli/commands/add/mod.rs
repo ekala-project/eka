@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use atom::id::Name;
+use atom::id::{Name, Tag};
 use atom::manifest::deps::GitSpec;
 use atom::uri::{AliasedUrl, Uri};
 use clap::{Parser, Subcommand};
@@ -33,9 +33,12 @@ pub struct Args {
     #[clap(required = true)]
     uri: Option<Uri>, /* a required optional is used so that the subcommand properly negates it
                        * without causing a parser failure */
-    /// The name of the package set to add this source to inside the manifest. Defaults to the last
-    /// path segment if not specified.
-    set: Option<Name>,
+    /// The name of the package set to add this source to if not pre-existing inside the manifest.
+    /// Defaults to the last path segment if not specified.
+    ///
+    /// This option is ignored when the url already correlates with a known set.
+    #[clap(long, short)]
+    set: Option<Tag>,
     #[command(subcommand)]
     sub: Option<AddSubs>,
 }
@@ -64,7 +67,7 @@ pub struct NixArgs {
     ///
     /// Version requests are resolved intelligently compared against the git tags in the repo which
     /// conform to semantic version constraints, returning the highest match of the users request.
-    #[clap(long, conflicts_with_all = ["build", "tar"], default_missing_value = "HEAD")]
+    #[clap(long, conflicts_with_all = ["build", "tar"], num_args = 0..=1, default_missing_value = "HEAD", )]
     git: Option<GitSpec>,
     /// Use the `builtins.fetchTarball` fetcher. If the url contains a `.tar` extension, this
     /// flag is assumed, but can be disabled with `--tar=false` to fetch with `builtins.fetchurl`.
@@ -84,14 +87,13 @@ pub struct NixArgs {
     #[clap(
         long,
         conflicts_with_all = ["git", "tar"],
-        default_value_if("exec", "true", Some("true")),
         default_value_if("unpack", "true", Some("true"))
     )]
     build: bool,
     /// Implies the `--build` flag, and will pass `unpack = true` to `<nix/fetchurl>`. This
     /// will be assumed if the `--build` flag is passed, and the url path contains a `.tar`
     /// extension. You can disable this auto-detection behavior by passing `--unpack=false`.
-    #[clap(long, requires = "build", conflicts_with = "exec")]
+    #[clap(long, requires = "build")]
     unpack: Option<bool>,
 }
 

@@ -64,18 +64,13 @@ impl<'a> AtomContext<'a> {
             author: sig.clone(),
             committer: sig,
             encoding: None,
-            message: format!("{}: {}", self.atom.spec.label, self.atom.spec.version).into(),
+            message: format!(
+                "publish({}): {}",
+                self.atom.spec.label, self.atom.spec.version
+            )
+            .into(),
             extra_headers: [
                 (ATOM_ORIGIN.into(), self.git.commit.id.to_string().into()),
-                (
-                    "path".into(),
-                    self.paths
-                        .content()
-                        .to_str()
-                        .and_then(|s| if s.is_empty() { None } else { Some(s) })
-                        .unwrap_or("/")
-                        .into(),
-                ),
                 ("format".into(), ATOM_FORMAT_VERSION.into()),
             ]
             .into(),
@@ -257,7 +252,7 @@ impl<'a> GitContext<'a> {
     ///
     /// # Errors
     ///
-    /// Returns an error if the underlying [`gix::object::tree::Tree::lookup_entry`] call fails.
+    /// Returns an error if the underlying `gix::object::tree::Tree::lookup_entry` call fails.
     pub fn tree_search(&self, path: &Path) -> GitResult<Option<Entry<'a>>> {
         let search = path.components().map(|c| c.as_os_str().as_bytes());
         Ok(self.tree.clone().lookup_entry(search)?)

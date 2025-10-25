@@ -89,6 +89,7 @@ use std::path::{Path, PathBuf};
 use bstr::BStr;
 use semver::{Version, VersionReq};
 
+use crate::publish::Publish;
 use crate::{AtomId, Label};
 
 pub mod git;
@@ -112,6 +113,17 @@ pub struct UnpackedRef<Id, R> {
 // Traits
 //================================================================================================
 
+#[allow(dead_code)]
+trait Set<P, R, T, Ref, Id, C>:
+    Init<R, Ref, T> + NormalizeStorePath<P> + QueryVersion<Ref, Id, C, T, R> + Publish<R>
+where
+    C: FromIterator<UnpackedRef<Id, R>> + IntoIterator<Item = UnpackedRef<Id, R>>,
+    P: AsRef<Path>,
+    Ref: UnpackRef<Id, R> + std::fmt::Debug,
+    T: Send,
+{
+}
+
 /// A trait representing the methods required to initialize an Ekala store.
 pub trait Init<R, O, T: Send> {
     /// The error type returned by the methods of this trait.
@@ -130,14 +142,14 @@ pub trait Init<R, O, T: Send> {
 
 /// A trait containing a path normalization method, to normalize paths in an Ekala store
 /// relative to its root.
-pub trait NormalizeStorePath {
+pub trait NormalizeStorePath<P: AsRef<Path>> {
     /// The error type returned by the [`NormalizeStorePath::normalize`] function.
     type Error;
     /// Normalizes a given path to be relative to the store root.
     ///
     /// This function takes a path (relative or absolute) and attempts to normalize it
     /// relative to the store root, based on the current working directory within
-    /// the store within system.
+    /// the store system.
     ///
     /// # Behavior:
     /// - For relative paths (e.g., "foo/bar" or "../foo"):
@@ -147,7 +159,20 @@ pub trait NormalizeStorePath {
     /// - For absolute paths (e.g., "/foo/bar"):
     ///   - Treated as if the repository root is the filesystem root.
     ///   - The leading slash is ignored, and the path is considered relative to the repo root.
-    fn normalize<P: AsRef<Path>>(&self, path: P) -> Result<PathBuf, Self::Error>;
+    fn normalize(&self, path: P) -> Result<PathBuf, Self::Error>;
+    /// Same as normalization but gives the relative difference between the path given and the
+    /// root of the store (e.g. foo/bar -> ../..). Path must be an ancestor of the store root or
+    /// this will fail.
+    fn rel_from_root(&self, path: P) -> Result<PathBuf, Self::Error> {
+        let path = self.normalize(path)?;
+        let mut res = PathBuf::new();
+        let mut iter = path.ancestors();
+        iter.next();
+        for _ in iter {
+            res.push("..");
+        }
+        Ok(res)
+    }
 }
 
 /// A trait for querying remote stores to retrieve references.
@@ -200,7 +225,7 @@ pub trait QueryStore<Ref, T: Send> {
     /// Query a remote store for a single reference.
     ///
     /// This is a convenience method that queries for a single reference and returns
-    /// the first result. See [`get_refs`] for details on network behavior.
+    /// the first result. See `get_refs` for details on network behavior.
     ///
     /// # Arguments
     /// * `target` - The reference specification to query (e.g., "main", "refs/tags/v1.0")

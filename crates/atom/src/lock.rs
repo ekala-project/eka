@@ -10,49 +10,65 @@
 //! portability across different tools and languages. Each dependency is represented
 //! as a tagged union that can represent different types of dependencies:
 //!
-//! - **Atom dependencies** - References to other atoms by ID and version
-//! - **Direct pins** - Direct references to external URLs with integrity verification
-//! - **Git pins** - References to specific Git repositories and commits
-//! - **Tarball pins** - References to tarball/zip archives
-//! - **Cross-atom references** - Dependencies sourced from other atoms
+//! - **Atom dependencies** (`atom`) - References to other atoms by label, version, and
+//!   cryptographic ID
+//! - **Direct Nix dependencies** (`nix`, `nix+git`, `nix+tar`, `nix+build`) - Direct references to
+//!   external sources with integrity verification
 //!
 //! ## Key Types
 //!
-//! - [`Lockfile`] - The root structure containing all resolved dependencies
-//! - [`Dep`] - Enum representing different types of dependencies
-//! - [`Src`] - Enum representing build-time sources
-//! - [`ResolutionMode`] - Controls whether to resolve direct or transitive dependencies
+//! - [`Lockfile`] - The root structure containing all resolved dependencies and sets
+//! - [`Dep`] - Enum representing different types of locked dependencies
+//! - [`AtomDep`] - Structure for locked atom dependencies with cryptographic verification
+//! - [`NixDep`], [`NixGitDep`], [`NixTarDep`], [`BuildSrc`] - Structures for different Nix fetcher
+//!   types
 //!
-//! ## Example Lockfile
+//! Note: Some types are marked as `pub(crate)` for internal use within the atom crate.
+//!
+//! ## Lockfile Structure
 //!
 //! ```toml
 //! version = 1
 //!
+//! [sets.<root-hash>]
+//! tag = "company-atoms"
+//! mirrors = ["git@github.com:our-company/atoms", "https://mirror.com/atoms"]
+//!
 //! [[deps]]
 //! type = "atom"
-//! label = "my-atom"
-//! version = "1.0.0"
-//! rev = "abc123..."
+//! label = "auth-service"
+//! version = "1.5.2"
+//! set = "<root-hash>"
+//! rev = "<commit-hash>"
+//! id = "<blake3-hash>"
 //!
 //! [[deps]]
-//! type = "pin"
-//! name = "external-lib"
-//! url = "https://example.com/lib.tar.gz"
-//! hash = "sha256:def456..."
+//! type = "nix+git"
+//! name = "nixpkgs"
+//! url = "https://github.com/NixOS/nixpkgs"
+//! rev = "<commit-hash>"
 //!
-//! [[srcs]]
-//! type = "build"
-//! name = "registry"
-//! url = "https://registry.example.com"
-//! hash = "sha256:ghi789..."
+//! [[deps]]
+//! type = "nix+tar"
+//! name = "master"
+//! url = "https://github.com/ekala-project/atom/archive/master.tar.gz"
+//! hash = "sha256:..."
+//!
+//! [[deps]]
+//! type = "nix+build"
+//! name = "source-archive"
+//! url = "https://dist.company.com/my-atom/0.2.0/source.tar.gz"
+//! hash = "sha256:..."
 //! ```
 //!
 //! ## Security Features
 //!
-//! - **Cryptographic verification** using BLAKE3 hashes for atom content
-//! - **Nix-compatible hashing** for tarballs and archives
+//! - **Cryptographic identity** using BLAKE3 hashes for atom identification
+//! - **Backend-dependent content verification** (currently SHA1 for Git, will migrate to SHA256)
+//! - **Nix-compatible hashing** for tarballs and archives with SHA256
 //! - **Strict field validation** with `#[serde(deny_unknown_fields)]`
 //! - **Type-safe dependency resolution** preventing invalid configurations
+//! - **Repository root hash verification** for atom set integrity
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Deref;
@@ -74,8 +90,8 @@ use snix_store::nar::SimpleRenderer;
 use snix_store::pathinfoservice::PathInfoService;
 use url::Url;
 
-use crate::id::{AtomDigest, Label, Name};
-use crate::manifest::AtomSet;
+use crate::id::{AtomDigest, Label, Name, Tag};
+use crate::manifest::SetMirror;
 use crate::manifest::deps::{
     AtomReq, GitSpec, NixFetch, NixGit, NixReq, deserialize_url, serialize_url,
 };
@@ -83,7 +99,6 @@ use crate::store::git::Root;
 use crate::store::{QueryStore, QueryVersion, UnpackedRef};
 use crate::uri::{Uri, VERSION_PLACEHOLDER};
 use crate::{AtomId, Compute, Origin};
-
 //================================================================================================
 // Statics
 //================================================================================================
@@ -109,8 +124,11 @@ pub(crate) struct AtomDep {
     version: Version,
     /// The location of the atom, whether local or remote.
     set: GitDigest,
-    /// The resolved Git revision (commit hash) for verification.
-    rev: GitDigest,
+    /// The resolved Git revision (commit hash) for verification. If it is `None`, it applies a
+    /// local only dependency which must be looked up by path. Atom's without revsions for all
+    /// other atoms in their lock cannot themsevles be published.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rev: Option<GitDigest>,
     /// The cryptographic identity of the atom.
     id: AtomDigest,
 }
@@ -145,19 +163,19 @@ pub(crate) enum Dep {
     /// and Git revision.
     #[serde(rename = "atom")]
     Atom(AtomDep),
-    /// A direct pin to an external source variant.
+    /// A direct reference to an external source variant.
     ///
     /// Represents a dependency pinned to a specific URL with integrity verification.
     /// Used for dependencies that are not atoms but need to be fetched from external sources.
     #[serde(rename = "nix")]
     Nix(NixDep),
-    /// A Git-specific pin variant.
+    /// A Git-specific nix variant.
     ///
     /// Represents a dependency pinned to a specific Git repository and commit.
     /// Similar to Pin but specifically for Git repositories.
     #[serde(rename = "nix+git")]
     NixGit(NixGitDep),
-    /// A tarball pin variant.
+    /// A tarball nix variant.
     ///
     /// Represents a dependency pinned to a tarball or archive file.
     /// Used for dependencies distributed as compressed archives.
@@ -197,8 +215,8 @@ pub enum GitDigest {
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq, PartialOrd, Ord)]
 /// The set of locked mirrors from the manifest
 pub struct SetDetails {
-    pub(crate) name: Name,
-    pub(crate) mirrors: BTreeSet<AtomSet>,
+    pub(crate) tag: Tag,
+    pub(crate) mirrors: BTreeSet<SetMirror>,
 }
 
 /// The root structure for the lockfile, containing resolved dependencies and sources.
@@ -296,7 +314,7 @@ pub(crate) enum NixUrls<'a> {
 }
 
 /// A type alias for the fetcher used for pinned dependencies.
-type PinFetcher = Fetcher<
+type NixFetcher = Fetcher<
     Arc<dyn BlobService>,
     Arc<dyn DirectoryService>,
     Arc<dyn PathInfoService>,
@@ -314,14 +332,6 @@ impl AtomDep {
 
     pub(crate) fn label(&self) -> &Label {
         &self.label
-    }
-
-    pub(crate) fn id(&self) -> &AtomDigest {
-        &self.id
-    }
-
-    pub(crate) fn _rev(&self) -> GitDigest {
-        self.rev
     }
 
     pub(crate) fn set(&self) -> GitDigest {
@@ -367,7 +377,7 @@ impl Uri {
                 version,
                 set: GitDigest::Sha1(root),
                 rev: match oid {
-                    ObjectId::Sha1(bytes) => GitDigest::Sha1(bytes),
+                    ObjectId::Sha1(bytes) => Some(GitDigest::Sha1(bytes)),
                 },
                 id: id.into(),
             }))
@@ -459,16 +469,28 @@ impl<R, T: Ord> AsRef<BTreeMap<DepKey<R>, T>> for DepMap<R, T> {
     }
 }
 
-impl From<UnpackedRef<ObjectId, Root>> for AtomDep {
-    fn from(value: UnpackedRef<ObjectId, Root>) -> Self {
+impl From<UnpackedRef<Option<ObjectId>, Root>> for AtomDep {
+    fn from(value: UnpackedRef<Option<ObjectId>, Root>) -> Self {
         let UnpackedRef { id, version, rev } = value;
         AtomDep {
             label: id.label().to_owned(),
             version,
             set: GitDigest::from(id.root().deref().to_owned()),
-            rev: GitDigest::from(rev),
+            rev: rev.map(GitDigest::from),
             id: id.compute_hash(),
         }
+    }
+}
+
+impl From<UnpackedRef<ObjectId, Root>> for AtomDep {
+    fn from(value: UnpackedRef<ObjectId, Root>) -> Self {
+        let UnpackedRef { id, version, rev } = value;
+
+        AtomDep::from(UnpackedRef {
+            id,
+            version,
+            rev: Some(rev),
+        })
     }
 }
 
@@ -499,7 +521,7 @@ impl<R, T: Ord> DepMap<R, T> {
 }
 
 impl NixFetch {
-    pub(crate) async fn get_fetcher() -> Result<PinFetcher, BoxError> {
+    pub(crate) async fn get_fetcher() -> Result<NixFetcher, BoxError> {
         use snix_castore::{blobservice, directoryservice};
         use snix_glue::fetchers::Fetcher;
         use snix_store::nar::SimpleRenderer;
@@ -730,18 +752,30 @@ impl NixDep {
 }
 
 impl NixGitDep {
+    pub(crate) fn name(&self) -> &Name {
+        &self.name
+    }
+
     pub(crate) fn url(&self) -> &gix::Url {
         &self.url
     }
 }
 
 impl NixTarDep {
+    pub(crate) fn name(&self) -> &Name {
+        &self.name
+    }
+
     pub(crate) fn url(&self) -> &Url {
         &self.url
     }
 }
 
 impl BuildSrc {
+    pub(crate) fn name(&self) -> &Name {
+        &self.name
+    }
+
     pub(crate) fn url(&self) -> &Url {
         &self.url
     }
@@ -786,6 +820,11 @@ fn extract_and_parse_semver(input: &str) -> Option<Version> {
     );
 
     Version::parse(&version_str).ok()
+}
+
+pub(crate) fn url_filename_as_tag(url: &gix::Url) -> Result<Tag, crate::id::Error> {
+    let str = get_url_filename(&NixUrls::Git(url));
+    Tag::try_from(str)
 }
 
 /// Extracts a filename from a URL, suitable for use as a dependency name.

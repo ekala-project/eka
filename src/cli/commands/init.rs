@@ -46,6 +46,8 @@ pub(super) fn run(store: Option<Detected>, args: Args) -> anyhow::Result<()> {
     Ok(())
 }
 
+// FIXME: this should be run as a minimal implementation of the `Init` traits for repository-less
+// sets
 fn init_ekala<P: AsRef<Path>>(path: P) -> anyhow::Result<()> {
     if let Ok(content) = std::fs::read_to_string(&path) {
         toml_edit::de::from_str(&content)?

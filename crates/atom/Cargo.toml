@@ -13,6 +13,7 @@ path-clean = "^1"
 
 either.workspace                = true
 lazy-regex.workspace            = true
+pathdiff.workspace              = true
 prodash.workspace               = true
 semver.workspace                = true
 serde.workspace                 = true

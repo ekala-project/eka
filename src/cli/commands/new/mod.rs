@@ -4,14 +4,12 @@
 //! specified directory.
 
 use std::ffi::OsStr;
-use std::fs;
 use std::future::Future;
-use std::io::Write;
 use std::path::PathBuf;
 
 use anyhow::Result;
-use atom::manifest::EkalaWriter;
-use atom::{Label, Manifest};
+use atom::Label;
+use atom::manifest::EkalaManager;
 use clap::Parser;
 use semver::Version;
 
@@ -52,37 +50,16 @@ pub(super) async fn run(
     } else {
         args.path.file_name().unwrap_or(OsStr::new("")).try_into()?
     };
-    let atom = Manifest::new(label.to_owned(), args.version, args.description);
-    let atom_str = toml_edit::ser::to_string_pretty(&atom)?;
-    let atom_toml = args.path.join(atom::ATOM_MANIFEST_NAME.as_str());
-
-    fs::create_dir_all(&args.path)?;
-
-    let mut dir = fs::read_dir(&args.path)?;
-
-    if dir.next().is_some() {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::AlreadyExists,
-            format!("Directory exists and is not empty: {:?}", args.path),
-        ))?;
-    }
-
-    let mut toml_file = fs::File::create(atom_toml)?;
-    toml_file.write_all(atom_str.as_bytes())?;
-    tracing::info!(message = "successfully created new atom", %label);
-
     let repo = if let Ok(Detected::Git(repo)) = store.await {
         Some(repo)
     } else {
         None
     };
-    if let Ok(mut writer) = EkalaWriter::new(repo).map_err(|error| {
+    if let Ok(mut manager) = EkalaManager::new(repo).map_err(|error| {
         tracing::error!(%error);
         error
     }) {
-        writer.write_package(&args.path)?;
-        writer.write_atomic()?;
-        tracing::info!(message = "successfully added to package to set", atom = %label);
+        manager.new_atom_at_path(label, args.path, args.version, args.description)?;
     } else {
         tracing::warn!(
             message = "package set not yet initialized",

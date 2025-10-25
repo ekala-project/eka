@@ -1,19 +1,21 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
+use either::Either;
 use gix::protocol::transport::client::Transport;
 use gix::{ObjectId, ThreadSafeRepository};
 use semver::{Version, VersionReq};
 use tokio::task::JoinSet;
 
-use crate::id::Name;
-use crate::lock::{AtomDep, BoxError, Dep, GitDigest, SetDetails};
-use crate::manifest::AtomSet;
+use crate::id::Tag;
+use crate::lock::{AtomDep, BoxError, GitDigest, SetDetails};
+use crate::manifest::deps::DocError;
+use crate::manifest::{AtomError, EkalaManager, SetMirror};
 use crate::store::UnpackedRef;
 use crate::store::git::{AtomQuery, Root};
 use crate::{AtomId, Manifest};
 
 #[derive(thiserror::Error, Debug)]
-enum Error {
+pub enum Error {
     #[error("manifest is in an inconsistent state")]
     Inconsistent,
     #[error("You are not inside a structured local set, `::` has no meaning as a mirror")]
@@ -22,9 +24,11 @@ enum Error {
 
 pub(crate) struct ResolvedSets {
     pub(crate) atoms: ResolvedAtoms<ObjectId, Root>,
-    pub(crate) roots: HashMap<Name, Root>,
-    _transports: HashMap<gix::Url, Box<dyn Transport + Send>>,
+    pub(crate) roots: HashMap<Either<Tag, SetMirror>, Root>,
+    pub(crate) transports: HashMap<gix::Url, Box<dyn Transport + Send>>,
     details: BTreeMap<GitDigest, SetDetails>,
+    pub(crate) ekala: EkalaManager,
+    pub(crate) repo: Option<gix::Repository>,
 }
 
 pub(crate) struct ResolvedAtom<Id, R> {
@@ -37,12 +41,13 @@ type ResolvedAtoms<Id, R> = HashMap<AtomId<R>, HashMap<Version, ResolvedAtom<Id,
 pub(crate) struct SetResolver<'a> {
     manifest: &'a Manifest,
     repo: Option<gix::Repository>,
-    names: HashMap<Root, Name>,
-    roots: HashMap<Name, Root>,
+    names: HashMap<Root, Tag>,
+    roots: HashMap<Either<Tag, SetMirror>, Root>,
     tasks: JoinSet<MirrorResult>,
     atoms: ResolvedAtoms<ObjectId, Root>,
     sets: BTreeMap<GitDigest, SetDetails>,
     transports: HashMap<gix::Url, Box<dyn Transport + Send>>,
+    ekala: EkalaManager,
 }
 
 type MirrorResult = Result<
@@ -50,7 +55,7 @@ type MirrorResult = Result<
         Option<Box<dyn Transport + Send>>,
         <Vec<AtomQuery> as IntoIterator>::IntoIter,
         Root,
-        Name,
+        Tag,
         gix::Url,
     ),
     BoxError,
@@ -58,10 +63,15 @@ type MirrorResult = Result<
 
 impl<'a> SetResolver<'a> {
     /// Creates a new `SetResolver` to validate the package sets in a manifest.
-    pub(crate) fn new(repo: Option<&ThreadSafeRepository>, manifest: &'a Manifest) -> Self {
+    pub(crate) fn new(
+        repo: Option<&ThreadSafeRepository>,
+        manifest: &'a Manifest,
+    ) -> Result<Self, AtomError> {
         let len = manifest.package.sets.len();
-        Self {
+        let ekala = EkalaManager::new(repo)?;
+        Ok(Self {
             manifest,
+            ekala,
             repo: repo.map(|r| r.to_thread_local()),
             names: HashMap::with_capacity(len),
             roots: HashMap::with_capacity(len),
@@ -69,7 +79,7 @@ impl<'a> SetResolver<'a> {
             atoms: HashMap::with_capacity(len * 10),
             transports: HashMap::with_capacity(len * 3),
             sets: BTreeMap::new(),
-        }
+        })
     }
 
     /// Verifies the integrity of declared package sets and collects atom references.
@@ -97,14 +107,14 @@ impl<'a> SetResolver<'a> {
     /// - The mirrors for a given set do not all point to the same root hash.
     /// - An atom is advertised with the same version but different revisions across mirrors.
     pub(crate) async fn get_and_check_sets(mut self) -> Result<ResolvedSets, BoxError> {
-        use crate::manifest::AtomSets;
+        use crate::manifest::AtomSet;
 
-        for (k, v) in self.manifest.package.sets.iter() {
-            match v {
-                AtomSets::Singleton(mirror) => self.process_mirror(k, mirror)?,
-                AtomSets::Mirrors(mirrors) => {
+        for (set_tag, set) in self.manifest.package.sets.iter() {
+            match set {
+                AtomSet::Singleton(mirror) => self.process_mirror(set_tag, mirror)?,
+                AtomSet::Mirrors(mirrors) => {
                     for m in mirrors.iter() {
-                        self.process_mirror(k, m)?
+                        self.process_mirror(set_tag, m)?
                     }
                 },
             }
@@ -116,9 +126,11 @@ impl<'a> SetResolver<'a> {
 
         Ok(ResolvedSets {
             atoms: self.atoms,
-            _transports: self.transports,
+            ekala: self.ekala,
+            transports: self.transports,
             roots: self.roots,
             details: self.sets,
+            repo: self.repo,
         })
     }
 
@@ -128,15 +140,15 @@ impl<'a> SetResolver<'a> {
     /// it spawns an asynchronous task to fetch repository data and perform checks.
     fn process_mirror(
         &mut self,
-        name: &'a Name,
-        mirror: &'a crate::manifest::AtomSet,
+        set_tag: &'a Tag,
+        mirror: &'a crate::manifest::SetMirror,
     ) -> Result<(), BoxError> {
         use crate::id::Origin;
-        use crate::manifest::AtomSet;
+        use crate::manifest::SetMirror;
         use crate::store::{QueryStore, QueryVersion};
 
         match mirror {
-            AtomSet::Local => {
+            SetMirror::Local => {
                 if let Some(repo) = self.repo.as_ref() {
                     let root = {
                         let commit = repo
@@ -145,20 +157,26 @@ impl<'a> SetResolver<'a> {
                             .map_err(Box::new)??;
                         commit.calculate_origin()?
                     };
-                    self.check_set_consistency(name, root)?;
-                    self.update_sets(name, root, AtomSet::Local);
+                    self.check_set_consistency(set_tag, root, &SetMirror::Local)?;
+                    self.update_sets(set_tag, root, SetMirror::Local);
                 } else {
                     return Err(Error::NoLocal.into());
                 }
                 Ok(())
             },
-            AtomSet::Url(url) => {
+            SetMirror::Url(url) => {
                 let url = url.to_owned();
-                let set_name = name.to_owned();
+                let set_name = set_tag.to_owned();
                 self.tasks.spawn(async move {
                     let mut transport = url.get_transport().ok();
                     let atoms = url.get_atoms(transport.as_mut())?;
-                    let root = atoms.calculate_origin()?;
+                    let root = atoms.calculate_origin().inspect_err(|_| {
+                        tracing::warn!(
+                            set.tag = %set_name,
+                            set.mirror = %url,
+                            "remote advertised no atoms in:"
+                        )
+                    })?;
                     Ok((transport, atoms, root, set_name, url))
                 });
                 Ok(())
@@ -166,7 +184,7 @@ impl<'a> SetResolver<'a> {
         }
     }
 
-    fn update_sets(&mut self, name: &Name, root: Root, set: AtomSet) {
+    fn update_sets(&mut self, name: &Tag, root: Root, set: SetMirror) {
         let digest = GitDigest::from(*root);
         self.sets
             .entry(digest)
@@ -174,7 +192,7 @@ impl<'a> SetResolver<'a> {
                 e.mirrors.insert(set.to_owned());
             })
             .or_insert(SetDetails {
-                name: name.to_owned(),
+                tag: name.to_owned(),
                 mirrors: BTreeSet::from([set]),
             });
     }
@@ -185,8 +203,9 @@ impl<'a> SetResolver<'a> {
     /// consistency checks, and aggregates the results into the provided hashmaps.
     fn process_remote_mirror_result(&mut self, result: MirrorResult) -> Result<(), BoxError> {
         let (transport, atoms, root, set_name, url) = result?;
-        self.check_set_consistency(&set_name, root)?;
-        self.update_sets(&set_name, root, AtomSet::Url(url.to_owned()));
+        let mirror = SetMirror::Url(url.to_owned());
+        self.check_set_consistency(&set_name, root, &mirror)?;
+        self.update_sets(&set_name, root, SetMirror::Url(url.to_owned()));
         if let Some(t) = transport {
             self.transports.insert(url.to_owned(), t);
         }
@@ -248,15 +267,6 @@ impl<'a> SetResolver<'a> {
                 });
             },
         }
-        // .and_modify(|e| {
-        //     e.remotes.insert(mirror_url.to_owned());
-        // })
-        // .or_insert(ResolvedAtom {
-        //     version,
-        //     rev,
-        //     remotes: BTreeSet::from([mirror_url.to_owned()]),
-        //     digest: id.compute_hash(),
-        // });
 
         Ok(())
     }
@@ -266,33 +276,44 @@ impl<'a> SetResolver<'a> {
     /// This check verifies two conditions:
     /// 1. A repository root hash is not associated with more than one package set name.
     /// 2. A package set name is not associated with more than one repository root hash.
-    fn check_set_consistency(&mut self, k: &Name, root: Root) -> Result<(), BoxError> {
-        let prev = self.names.insert(root, k.to_owned());
-        if prev.is_some() && prev.as_ref() != Some(k) {
-            tracing::error!(
-                message = "a repository exists in more than one mirror set",
-                set.a = %k,
-                set.b = ?prev,
-                set.hash = %*root
-            );
-            return Err(Error::Inconsistent.into());
+    fn check_set_consistency(
+        &mut self,
+        set_tag: &Tag,
+        root: Root,
+        mirror: &SetMirror,
+    ) -> Result<(), BoxError> {
+        let prev = self.names.insert(root, set_tag.to_owned());
+        if let Some(prev_tag) = &prev {
+            if prev_tag != set_tag {
+                tracing::error!(
+                    message = "the same mirror exists in more than one set",
+                    set.mirror = %mirror,
+                    set.conflict.a = %set_tag,
+                    set.conflict.b = %prev_tag,
+                );
+                return Err(Error::Inconsistent.into());
+            }
         }
-        let prev = self.roots.insert(k.to_owned(), root);
-        if prev.is_some() && prev.as_ref() != Some(&root) {
-            tracing::error!(
-                message = "the mirrors for this set do not all point at the same set",
-                set.name = %k,
-                set.a = %*root,
-                set.b = ?prev,
-            );
-            return Err(Error::Inconsistent.into());
+        let prev = self.roots.insert(Either::Left(set_tag.to_owned()), root);
+        if let Some(prev) = &prev {
+            if prev != &root {
+                tracing::error!(
+                    message = "the mirrors in this set do not all point at the same set",
+                    set.name = %set_tag,
+                    set.mirror = %mirror,
+                    set.root.mirror = %*root,
+                    set.root.previous = %**prev,
+                );
+                return Err(Error::Inconsistent.into());
+            }
         }
+        self.roots.insert(Either::Right(mirror.to_owned()), root);
         Ok(())
     }
 }
 
 impl ResolvedSets {
-    pub(crate) fn roots(&self) -> &HashMap<Name, Root> {
+    pub(crate) fn roots(&self) -> &HashMap<Either<Tag, SetMirror>, Root> {
         &self.roots
     }
 
@@ -304,16 +325,24 @@ impl ResolvedSets {
         &self.details
     }
 
-    pub(crate) fn resolve_atom(&self, id: &AtomId<Root>, req: &VersionReq) -> Option<Dep> {
-        let versions = self.atoms.get(id)?;
+    pub(crate) fn resolve_atom(
+        &self,
+        id: &AtomId<Root>,
+        req: &VersionReq,
+    ) -> Result<AtomDep, DocError> {
+        use crate::store::git;
+        let versions = self
+            .atoms
+            .get(id)
+            .ok_or(DocError::Git(Box::new(git::Error::NoMatchingVersion)))?;
         if let Some((_, atom)) = versions
             .iter()
             .filter(|(v, _)| req.matches(v))
             .max_by_key(|(ref version, _)| version.to_owned())
         {
-            Some(Dep::Atom(AtomDep::from(atom.unpack().to_owned())))
+            Ok(AtomDep::from(atom.unpack().to_owned()))
         } else {
-            None
+            Err(Box::new(git::Error::NoMatchingVersion).into())
         }
     }
 }

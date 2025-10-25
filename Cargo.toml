@@ -32,6 +32,7 @@ atom.path = "crates/atom"
 [workspace.dependencies]
 anyhow                = "^1"
 lazy-regex            = "3.4.1"
+pathdiff              = "0.2.3"
 tempfile              = "^3.13"
 thiserror             = "^1"
 tracing               = "^0.1"
@@ -50,7 +51,7 @@ insta = { version = "^1", features = ["yaml"] }
 semver = { version = "^1", features = ["serde"] }
 serde = { version = "^1", features = ["derive"] }
 tokio = { version = "^1", features = ["full"] }
-toml_edit = { version = "^0.22", features = ["serde", "parse"] }
+toml_edit = { version = "^0.23", features = ["serde", "parse"] }
 tracing-subscriber = { version = "^0.3", features = [
   "env-filter",
   "json",

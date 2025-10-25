@@ -22,7 +22,7 @@
 //!
 //! - [`Record`] - Contains the result of publishing a single atom
 //! - [`Stats`] - Aggregated statistics for a publishing operation
-//! - [`PublishOutcome`] - Result type for individual atom publishing attempts
+//! - [`PublishOutcome`] - Result type for individual atom publishing attempts (internal)
 //! - [`Content`] - Backend-specific content information
 //!
 //! ## Backends
@@ -92,7 +92,7 @@ mod private {
 // Constants
 //================================================================================================
 
-const ATOM_FORMAT_VERSION: &str = "pre1.0";
+const ATOM_FORMAT_VERSION: &str = "pre1";
 const ATOM_MANIFEST: &str = "manifest";
 const ATOM_META_REF: &str = "meta";
 const ATOM_ORIGIN: &str = "origin";
@@ -201,7 +201,7 @@ pub trait Publish<R>: private::Sealed {
     /// # Return Value
     ///
     /// Returns a vector of results. The outer `Result` represents a failure
-    /// to publish an atom, while the inner `Result` ([`PublishOutcome`])
+    /// to publish an atom, while the inner `Result` (PublishOutcome)
     /// indicates whether an atom was published or safely skipped because it
     /// already exists.
     fn publish<C>(
@@ -218,8 +218,8 @@ pub trait Publish<R>: private::Sealed {
     ///
     /// # Return Value
     ///
-    /// - An [`Ok`] variant containing a [`PublishOutcome`], which is either the [`Record<R>`] of
-    ///   the successfully published atom or the [`Label`] if it was safely skipped.
+    /// - An [`Ok`] variant containing a PublishOutcome, which is either the [`Record<R>`] of the
+    ///   successfully published atom or the [`Label`] if it was safely skipped.
     /// - An [`Err`] variant containing a [`Self::Error`] if the atom could not be published for any
     ///   reason (e.g., an invalid manifest).
     fn publish_atom<P: AsRef<Path>>(
