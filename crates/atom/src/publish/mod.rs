@@ -92,7 +92,7 @@ mod private {
 // Constants
 //================================================================================================
 
-const ATOM_FORMAT_VERSION: &str = "pre1.0";
+const ATOM_FORMAT_VERSION: &str = "pre1";
 const ATOM_MANIFEST: &str = "manifest";
 const ATOM_META_REF: &str = "meta";
 const ATOM_ORIGIN: &str = "origin";

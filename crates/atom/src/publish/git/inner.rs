@@ -64,18 +64,13 @@ impl<'a> AtomContext<'a> {
             author: sig.clone(),
             committer: sig,
             encoding: None,
-            message: format!("{}: {}", self.atom.spec.label, self.atom.spec.version).into(),
+            message: format!(
+                "publish({}): {}",
+                self.atom.spec.label, self.atom.spec.version
+            )
+            .into(),
             extra_headers: [
                 (ATOM_ORIGIN.into(), self.git.commit.id.to_string().into()),
-                (
-                    "path".into(),
-                    self.paths
-                        .content()
-                        .to_str()
-                        .and_then(|s| if s.is_empty() { None } else { Some(s) })
-                        .unwrap_or("/")
-                        .into(),
-                ),
                 ("format".into(), ATOM_FORMAT_VERSION.into()),
             ]
             .into(),
