@@ -31,9 +31,10 @@ pub(crate) struct ResolvedSets {
     pub(crate) repo: Option<gix::Repository>,
 }
 
+#[derive(Clone)]
 pub(crate) struct ResolvedAtom<Id, R> {
-    unpacked: UnpackedRef<Id, R>,
-    remotes: BTreeSet<gix::Url>,
+    pub(crate) unpacked: UnpackedRef<Id, R>,
+    pub(crate) remotes: BTreeSet<gix::Url>,
 }
 
 type ResolvedAtoms<Id, R> = HashMap<AtomId<R>, HashMap<Version, ResolvedAtom<Id, R>>>;
@@ -340,7 +341,7 @@ impl ResolvedSets {
             .filter(|(v, _)| req.matches(v))
             .max_by_key(|(ref version, _)| version.to_owned())
         {
-            Ok(AtomDep::from(atom.unpack().to_owned()))
+            Ok(AtomDep::from(atom.to_owned()))
         } else {
             Err(Box::new(git::Error::NoMatchingVersion).into())
         }
@@ -350,5 +351,9 @@ impl ResolvedSets {
 impl<Id, R> ResolvedAtom<Id, R> {
     pub(crate) fn unpack(&self) -> &UnpackedRef<Id, R> {
         &self.unpacked
+    }
+
+    pub(crate) fn remotes(&self) -> &BTreeSet<gix::Url> {
+        &self.remotes
     }
 }

@@ -213,11 +213,11 @@ pub trait QueryStore<Ref, T: Send> {
     /// An iterator over the requested references, or an error if the query fails.
     fn get_refs<Spec>(
         &self,
-        targets: impl IntoIterator<Item = Spec>,
+        targets: impl IntoIterator<Item = Spec> + std::fmt::Debug,
         transport: Option<&mut T>,
     ) -> Result<Vec<Ref>, Self::Error>
     where
-        Spec: AsRef<BStr>;
+        Spec: AsRef<BStr> + std::fmt::Debug;
 
     /// Establish a persistent connection to a git server.
     fn get_transport(&self) -> Result<T, Self::Error>;
@@ -236,7 +236,7 @@ pub trait QueryStore<Ref, T: Send> {
     /// The requested reference, or an error if not found or if the query fails.
     fn get_ref<Spec>(&self, target: Spec, transport: Option<&mut T>) -> Result<Ref, Self::Error>
     where
-        Spec: AsRef<BStr>;
+        Spec: AsRef<BStr> + std::fmt::Debug;
 }
 
 /// A trait for querying version information about atoms in remote stores.

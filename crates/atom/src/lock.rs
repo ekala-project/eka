@@ -92,9 +92,8 @@ use url::Url;
 
 use crate::id::{AtomDigest, Label, Name, Tag};
 use crate::manifest::SetMirror;
-use crate::manifest::deps::{
-    AtomReq, GitSpec, NixFetch, NixGit, NixReq, deserialize_url, serialize_url,
-};
+use crate::manifest::deps::{self, AtomReq, GitSpec, NixFetch, NixGit, NixReq};
+use crate::manifest::sets::ResolvedAtom;
 use crate::store::git::Root;
 use crate::store::{QueryStore, QueryVersion, UnpackedRef};
 use crate::uri::{Uri, VERSION_PLACEHOLDER};
@@ -129,6 +128,14 @@ pub(crate) struct AtomDep {
     /// other atoms in their lock cannot themsevles be published.
     #[serde(skip_serializing_if = "Option::is_none")]
     rev: Option<GitDigest>,
+    /// The the primary url the atom was first resolved from. Needed for legacy tools which can't
+    /// resolve mirrors (e.g. nix).
+    #[serde(
+        serialize_with = "deps::maybe_serialize_url",
+        deserialize_with = "deps::maybe_deserialize_url",
+        skip_serializing_if = "Option::is_none"
+    )]
+    mirror: Option<gix::Url>,
     /// The cryptographic identity of the atom.
     id: AtomDigest,
 }
@@ -268,7 +275,10 @@ pub struct NixGitDep {
     /// The name of the pinned Git source.
     pub name: Name,
     /// The Git repository URL.
-    #[serde(serialize_with = "serialize_url", deserialize_with = "deserialize_url")]
+    #[serde(
+        serialize_with = "deps::serialize_url",
+        deserialize_with = "deps::deserialize_url"
+    )]
     pub url: gix::Url,
     /// The version which was resolved (if requested).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -375,6 +385,7 @@ impl Uri {
             Ok((atom_req, AtomDep {
                 label: label.to_owned(),
                 version,
+                mirror: Some(url.to_owned()),
                 set: GitDigest::Sha1(root),
                 rev: match oid {
                     ObjectId::Sha1(bytes) => Some(GitDigest::Sha1(bytes)),
@@ -469,27 +480,32 @@ impl<R, T: Ord> AsRef<BTreeMap<DepKey<R>, T>> for DepMap<R, T> {
     }
 }
 
-impl From<UnpackedRef<Option<ObjectId>, Root>> for AtomDep {
-    fn from(value: UnpackedRef<Option<ObjectId>, Root>) -> Self {
-        let UnpackedRef { id, version, rev } = value;
+impl From<ResolvedAtom<Option<ObjectId>, Root>> for AtomDep {
+    fn from(atom: ResolvedAtom<Option<ObjectId>, Root>) -> Self {
+        let UnpackedRef { id, version, rev } = atom.unpack();
         AtomDep {
             label: id.label().to_owned(),
-            version,
-            set: GitDigest::from(id.root().deref().to_owned()),
+            version: version.to_owned(),
             rev: rev.map(GitDigest::from),
+            set: GitDigest::from(id.root().deref().to_owned()),
             id: id.compute_hash(),
+            mirror: atom.remotes().first().map(ToOwned::to_owned),
         }
     }
 }
-
-impl From<UnpackedRef<ObjectId, Root>> for AtomDep {
-    fn from(value: UnpackedRef<ObjectId, Root>) -> Self {
-        let UnpackedRef { id, version, rev } = value;
-
-        AtomDep::from(UnpackedRef {
-            id,
-            version,
-            rev: Some(rev),
+impl From<ResolvedAtom<ObjectId, Root>> for AtomDep {
+    fn from(value: ResolvedAtom<ObjectId, Root>) -> Self {
+        let ResolvedAtom {
+            unpacked: UnpackedRef { id, version, rev },
+            remotes,
+        } = value;
+        AtomDep::from(ResolvedAtom {
+            unpacked: UnpackedRef {
+                id,
+                version,
+                rev: Some(rev),
+            },
+            remotes,
         })
     }
 }
@@ -680,14 +696,12 @@ impl NixGit {
                     .map_err(|e| LockError::Generic(e.into()))?,
             ),
             Some(GitSpec::Version(req)) => {
-                let queries = [
-                    "refs/tags/v[0-9]*:refs/tags/*",
-                    "refs/tags/[0-9]*:refs/tags/*",
-                ];
+                let queries = ["refs/tags/*:refs/tags/*"];
                 let refs = self
                     .git
                     .get_refs(queries, None)
                     .map_err(|e| LockError::Generic(e.into()))?;
+                tracing::trace!(?refs, "returned git refs");
                 if let Some((v, r)) = NixGit::match_version(req, refs) {
                     (Some(v), r)
                 } else {

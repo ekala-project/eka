@@ -121,7 +121,7 @@ use url::Url;
 
 use crate::id::{Label, Name, Tag, VerifiedName};
 use crate::lock::{AtomDep, Dep, GitDigest, SetDetails};
-use crate::manifest::sets::{self, ResolvedSets, SetResolver};
+use crate::manifest::sets::{self, ResolvedAtom, ResolvedSets, SetResolver};
 use crate::manifest::{AtomError, SetMirror};
 use crate::store::UnpackedRef;
 use crate::store::git::Root;
@@ -682,6 +682,12 @@ impl ManifestWriter {
                 .map(ToOwned::to_owned);
             if let Some(root) = maybe_root {
                 for (label, req) in set {
+                    tracing::debug!(
+                        atom.label = %label,
+                        atom.specified = %req,
+                        set = %set_tag,
+                        "checking sync status"
+                    );
                     let id = AtomId::construct(&root, label.to_owned()).map_err(|e| {
                         DocError::AtomIdConstruct(format!(
                             "set: {}, atom: {}, err: {}",
@@ -708,6 +714,7 @@ impl ManifestWriter {
         }
 
         for (name, dep) in manifest.deps.direct.nix {
+            tracing::debug!(direct.nix.name = %name,  "checking sync status");
             let key = Either::Right(name.to_owned());
             let locked = self.lock.deps.as_ref().get(&key);
             if let Some(lock) = locked {
@@ -819,10 +826,14 @@ impl ManifestWriter {
             let id = AtomId::construct(&root, uri.label().to_owned()).expect(Self::ATOM_BUG);
             let mut version = atom.version.clone();
             version.pre = Prerelease::new("local")?;
-            let dep = AtomDep::from(UnpackedRef {
+            let unpacked = UnpackedRef {
                 id,
                 version,
                 rev: None,
+            };
+            let dep = AtomDep::from(ResolvedAtom {
+                unpacked,
+                remotes: BTreeSet::new(),
             });
             Ok((req, dep))
         }
@@ -1118,6 +1129,14 @@ where
     gix::url::parse(name.as_bstr())
         .map_err(|e| <D::Error as serde::de::Error>::custom(e.to_string()))
 }
+pub(crate) fn maybe_deserialize_url<'de, D>(
+    deserializer: D,
+) -> Result<Option<gix::url::Url>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    deserialize_url(deserializer).map(Some)
+}
 
 /// A helper function for `serde(skip_serializing_if)` to omit `false` boolean values.
 pub(crate) fn not(b: &bool) -> bool {
@@ -1131,4 +1150,18 @@ where
 {
     let str = url.to_string();
     serializer.serialize_str(&str)
+}
+
+pub(crate) fn maybe_serialize_url<S>(
+    url: &Option<gix::url::Url>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    if let Some(url) = url {
+        serialize_url(url, serializer)
+    } else {
+        Err(serde::ser::Error::custom("no url to serialize"))
+    }
 }

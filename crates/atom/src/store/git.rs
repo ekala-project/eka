@@ -639,14 +639,14 @@ impl super::QueryStore<Ref, Box<dyn Transport + Send>> for gix::Url {
     /// reference queries.
     fn get_refs<Spec>(
         &self,
-        targets: impl IntoIterator<Item = Spec>,
+        targets: impl IntoIterator<Item = Spec> + std::fmt::Debug,
         transport: Option<&mut Box<dyn Transport + Send>>,
     ) -> std::result::Result<
         Vec<Ref>,
         <Self as super::QueryStore<Ref, Box<dyn Transport + Send>>>::Error,
     >
     where
-        Spec: AsRef<BStr>,
+        Spec: AsRef<BStr> + std::fmt::Debug,
     {
         use gix::open::permissions::Environment;
         use gix::refspec::RefSpec;
@@ -686,10 +686,15 @@ impl super::QueryStore<Ref, Box<dyn Transport + Send>> for gix::Url {
         )
         .map_err(Box::new)?;
 
+        tracing::debug!(?targets, url = %self, "checking remote for refs");
         use gix::refspec::parse::Operation;
         let refs: Vec<_> = targets
             .into_iter()
-            .map(|t| gix::refspec::parse(t.as_ref(), Operation::Fetch).map(RefSpec::from))
+            .map(|t| {
+                gix::refspec::parse(t.as_ref(), Operation::Fetch)
+                    .map(RefSpec::from)
+                    .inspect_err(|_| tracing::error!(ref = ?t, "failed to parse ref"))
+            })
             .collect::<Result<Vec<_>, _>>()?;
 
         use gix::protocol::fetch::refmap::init::Options as RefOptions;
@@ -717,7 +722,7 @@ impl super::QueryStore<Ref, Box<dyn Transport + Send>> for gix::Url {
         transport: Option<&mut Box<dyn Transport + Send>>,
     ) -> Result<Ref, Self::Error>
     where
-        Spec: AsRef<BStr>,
+        Spec: AsRef<BStr> + std::fmt::Debug,
     {
         let name = target.as_ref().to_string();
         self.get_refs(Some(target), transport).and_then(|r| {
@@ -822,7 +827,7 @@ impl<'repo> super::QueryStore<Ref, Box<dyn Transport + Send>> for gix::Remote<'r
         transport: Option<&mut Box<dyn Transport + Send>>,
     ) -> Result<Ref, Self::Error>
     where
-        Spec: AsRef<BStr>,
+        Spec: AsRef<BStr> + std::fmt::Debug,
     {
         let name = target.as_ref().to_string();
         self.get_refs(Some(target), transport).and_then(|r| {
