@@ -131,6 +131,7 @@ pub(crate) struct AtomDep {
     /// The the primary url the atom was first resolved from. Needed for legacy tools which can't
     /// resolve mirrors (e.g. nix).
     #[serde(
+        default,
         serialize_with = "deps::maybe_serialize_url",
         deserialize_with = "deps::maybe_deserialize_url",
         skip_serializing_if = "Option::is_none"

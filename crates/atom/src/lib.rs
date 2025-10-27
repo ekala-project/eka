@@ -50,11 +50,7 @@
 //! use semver::Version;
 //!
 //! // Create a new atom manifest
-//! let manifest = Manifest::new(
-//!     Label::try_from("my-atom").unwrap(),
-//!     Version::new(1, 0, 0),
-//!     Some("A sample atom".to_string()),
-//! );
+//! let manifest = Manifest::new(Label::try_from("my-atom").unwrap(), Version::new(1, 0, 0));
 //! ```
 //!
 //! ## Features

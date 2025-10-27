@@ -10,6 +10,7 @@ type = "atom"
 label = "hosts"
 version = "0.1.1"
 set = "b7d610651b8dd7975eb0265fbf93ee70bc39c291"
+mirror = "ssh://git@github.com/nrdxp/home.git"
 rev = "e38c54245b638eae16bdca1a65dcdc453fe33624"
 id = "nei65m8kevs1l37b2eefu440k725fsj6pqj3mq3ob20sfhb64ud0"
 
@@ -31,14 +32,14 @@ label = "home"
 id = "nei65m8kevs1l37b2eefu440k725fsj6pqj3mq3ob20sfhb64ud0"
 version = "0.1.8"
 rev = "795ae541b7fd67dd3c6e1a9dddf903312696aa17"
+mirror = "https://git.example.com/my-repo.git"
 set = "f36300e6cd435c5b56751f2792e67f32cf1b666e"
 
 [[deps]]
 type = "atom"
 id = "nei65m8kevs1l37b2eefu440k725fsj6pqj3mq3ob20sfhb64ud0"
 label = "users"
-version = "0.1.4"
-rev = "a460f02d145b870bb4f8762fd7a163afee68512e"
+version = "0.1.4-local"
 set = "47478f45ed0de99d42495a0842b1fa41eac1ce14"
 
 [[deps]]

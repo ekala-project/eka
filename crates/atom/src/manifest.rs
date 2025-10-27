@@ -63,11 +63,7 @@
 //! use semver::Version;
 //!
 //! // Create a manifest programmatically.
-//! let manifest = Manifest::new(
-//!     Label::try_from("my-atom").unwrap(),
-//!     Version::new(1, 0, 0),
-//!     Some("My first atom".to_string()),
-//! );
+//! let manifest = Manifest::new(Label::try_from("my-atom").unwrap(), Version::new(1, 0, 0));
 //!
 //! // Parse a manifest from a string.
 //! let manifest_str = r#"
