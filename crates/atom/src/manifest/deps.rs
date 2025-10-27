@@ -673,7 +673,7 @@ impl ManifestWriter {
     /// Updates the lockfile to match the dependencies specified in the manifest.
     /// It resolves any new dependencies, updates existing ones if their version
     /// requirements have changed, and ensures the lockfile is fully consistent.
-    pub(crate) async fn synchronize(&mut self, manifest: Manifest) -> Result<(), DocError> {
+    async fn synchronize(&mut self, manifest: Manifest) -> Result<(), DocError> {
         for (set_tag, set) in manifest.deps.from {
             let maybe_root = self
                 .resolved
@@ -815,16 +815,16 @@ impl ManifestWriter {
                 .ok_or(DocError::NoLocal)?;
             let content = std::fs::read_to_string(path.join(ATOM_MANIFEST_NAME.as_str()))?;
             let atom = Manifest::get_atom(&content)?;
-            if &atom.label != uri.label() {
+            if atom.label() != uri.label() {
                 return Err(DocError::SetError(sets::Error::Inconsistent).into());
             }
             let req = AtomReq::new(
                 uri.version()
-                    .unwrap_or(&VersionReq::parse(atom.version.to_string().as_str())?)
+                    .unwrap_or(&VersionReq::parse(atom.version().to_string().as_str())?)
                     .to_owned(),
             );
             let id = AtomId::construct(&root, uri.label().to_owned()).expect(Self::ATOM_BUG);
-            let mut version = atom.version.clone();
+            let mut version = atom.version().clone();
             version.pre = Prerelease::new("local")?;
             let unpacked = UnpackedRef {
                 id,
@@ -962,17 +962,19 @@ impl ManifestWriter {
 
     /// Atomically writes the changes to the manifest and lock files on disk.
     /// This method should be called last, after all changes have been processed.
-    pub fn write_atomic(&mut self) -> Result<(), DocError> {
+    ///
+    /// To enforce this, the writer instance will be consumed and dropped after calling this method.
+    pub fn write_atomic(mut self) -> Result<(), DocError> {
         use std::io::Write;
 
         use tempfile::NamedTempFile;
 
         let _validate: Manifest = toml_edit::de::from_str(&self.doc.as_mut().to_string())?;
         let dir = self
-            .path
+            .path()
             .parent()
-            .ok_or(DocError::Missing(self.path.clone()))?;
-        let lock_path = self.path.with_file_name(crate::LOCK_NAME.as_str());
+            .ok_or_else(|| DocError::Missing(self.path.clone()))?;
+        let lock_path = self.path().with_file_name(crate::LOCK_NAME.as_str());
         let mut tmp =
             NamedTempFile::with_prefix_in(format!(".{}", crate::ATOM_MANIFEST_NAME.as_str()), dir)?;
         let mut tmp_lock =
@@ -983,8 +985,8 @@ impl ManifestWriter {
              editing.\n"
                 .as_bytes(),
         )?;
-        tmp_lock.write_all(toml_edit::ser::to_string_pretty(&self.lock)?.as_bytes())?;
-        tmp.persist(&self.path)?;
+        tmp_lock.write_all(toml_edit::ser::to_string_pretty(self.lock())?.as_bytes())?;
+        tmp.persist(self.path())?;
         tmp_lock.persist(lock_path)?;
         Ok(())
     }
@@ -996,6 +998,10 @@ impl ManifestWriter {
     /// acquire a reference to the lockfile structure
     pub fn lock(&self) -> &Lockfile {
         &self.lock
+    }
+
+    fn path(&self) -> &Path {
+        self.path.as_path()
     }
 }
 

@@ -78,7 +78,7 @@
 //! let parsed = Manifest::from_str(manifest_str).unwrap();
 //! ```
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
@@ -167,10 +167,10 @@ pub enum AtomSet {
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
     /// The required `[package]` table, containing core metadata.
-    pub package: Atom,
+    package: Atom,
     /// The dependencies of the atom.
     #[serde(default, skip_serializing_if = "Dependency::is_empty")]
-    pub(crate) deps: Dependency,
+    deps: Dependency,
 }
 
 /// A specialized result type for manifest operations.
@@ -227,14 +227,9 @@ impl AsMut<BTreeMap<Label, PathBuf>> for AtomMap {
 
 impl Manifest {
     /// Creates a new `Manifest` with the given label, version, and description.
-    pub fn new(label: Label, version: Version, description: Option<String>) -> Self {
+    pub fn new(label: Label, version: Version) -> Self {
         Manifest {
-            package: Atom {
-                label,
-                version,
-                description,
-                sets: HashMap::new(),
-            },
+            package: Atom::new(label, version),
             deps: Dependency::new(),
         }
     }
@@ -260,7 +255,7 @@ impl Manifest {
     pub(crate) fn get_atom_label<P: AsRef<Path>>(path: P) -> AtomResult<Label> {
         let content = std::fs::read_to_string(&path)?;
         let atom = Self::get_atom(&content)?;
-        Ok(atom.label)
+        Ok(atom.take_label())
     }
 
     pub(crate) fn deps(&self) -> &Dependency {
@@ -521,14 +516,13 @@ impl EkalaManager {
         label: Label,
         package_path: impl AsRef<Path>,
         version: Version,
-        description: Option<String>,
     ) -> Result<(), crate::store::git::Error> {
         use std::fs;
         use std::io::Write;
 
         let mut tmp = NamedTempFile::with_prefix_in(format!(".new_atom-{}", label.as_str()), ".")?;
 
-        let atom = Manifest::new(label.to_owned(), version, description);
+        let atom = Manifest::new(label.to_owned(), version);
         let atom_str = toml_edit::ser::to_string_pretty(&atom)?;
         let atom_toml = package_path.as_ref().join(ATOM_MANIFEST_NAME.as_str());
 

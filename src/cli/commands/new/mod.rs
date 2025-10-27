@@ -25,9 +25,6 @@ use crate::cli::store::Detected;
 pub struct Args {
     /// The path to create the new atom in.
     path: PathBuf,
-    /// The verbatim description of the atom.
-    #[arg(short, long)]
-    description: Option<String>,
     /// The version to initialize the atom at.
     #[arg(short = 'V', long, default_value = "0.1.0")]
     version: Version,
@@ -59,7 +56,7 @@ pub(super) async fn run(
         tracing::error!(%error);
         error
     }) {
-        manager.new_atom_at_path(label, args.path, args.version, args.description)?;
+        manager.new_atom_at_path(label, args.path, args.version)?;
     } else {
         tracing::warn!(
             message = "package set not yet initialized",

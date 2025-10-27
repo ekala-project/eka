@@ -360,7 +360,7 @@ impl<'a> Publish<Root> for GitContext<'a> {
             if let Some((v, id)) = remotes.get(context.atom.id.label()) {
                 if r.version == v && lr.id().detach() == *id {
                     // Remote and local atoms are identical; skip.
-                    return Ok(Skipped(context.atom.spec.label.clone()));
+                    return Ok(Skipped(context.atom.spec.take_label()));
                 }
             }
         }
@@ -403,16 +403,16 @@ impl<'a> StateValidator<Root> for GitPublisher<'a> {
                 if let Ok(obj) = publisher.repo.find_object(entry.oid) {
                     match publisher.verify_manifest(&obj, &path) {
                         Ok(atom) => {
-                            if let Some(duplicate) = atoms.get(&atom.label) {
+                            if let Some(duplicate) = atoms.get(atom.label()) {
                                 tracing::warn!(
                                     message = "Two atoms share the same ID",
-                                    duplicate.label = %atom.label,
+                                    duplicate.label = %atom.label(),
                                     fst = %path.display(),
                                     snd = %duplicate.display(),
                                 );
                                 return Err(Error::Duplicates);
                             }
-                            atoms.insert(atom.label, path);
+                            atoms.insert(atom.take_label(), path);
                         },
                         Err(e) => e.warn(),
                     }

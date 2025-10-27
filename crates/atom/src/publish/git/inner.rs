@@ -41,7 +41,7 @@ impl<'a> AtomContext<'a> {
         AtomRef::new(
             self.atom.id.label().to_string(),
             kind,
-            &self.atom.spec.version,
+            self.atom.spec.version(),
         )
     }
 
@@ -66,7 +66,8 @@ impl<'a> AtomContext<'a> {
             encoding: None,
             message: format!(
                 "publish({}): {}",
-                self.atom.spec.label, self.atom.spec.version
+                self.atom.spec.label(),
+                self.atom.spec.version()
             )
             .into(),
             extra_headers: [
@@ -224,7 +225,7 @@ impl<'a> GitContext<'a> {
 
         self.verify_manifest(&entry.object()?, paths.spec())
             .and_then(|spec| {
-                let id = AtomId::construct(&self.commit, spec.label.clone()).map_err(Box::new)?;
+                let id = AtomId::construct(&self.commit, spec.label().clone()).map_err(Box::new)?;
                 if self.root != *id.root() {
                     return Err(Error::InconsistentRoot {
                         remote: self.root,
@@ -306,7 +307,9 @@ fn write_ref<'a>(
         PreviousValue::MustNotExist,
         format!(
             "publish: {}: {}-{}",
-            atom.spec.label, atom.spec.version, atom_ref
+            atom.spec.label(),
+            atom.spec.version(),
+            atom_ref
         ),
     )?)
 }

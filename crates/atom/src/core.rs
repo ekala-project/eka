@@ -4,7 +4,7 @@
 //! file system structure. These types form the foundation of the atom format
 //! and are used throughout the crate.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 use semver::Version;
@@ -25,18 +25,27 @@ use crate::manifest::AtomSet;
 #[serde(deny_unknown_fields)]
 pub struct Atom {
     /// The verified, human-readable Unicode identifier for the Atom.
-    pub label: Label,
+    label: Label,
 
     /// The version of the Atom.
-    pub version: Version,
+    version: Version,
 
-    /// An optional description of the Atom.
+    /// An set of structured meta-data
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
+    meta: Option<Meta>,
 
     /// A table of named atom sets, defining the sources for resolving atom dependencies.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub sets: HashMap<Tag, AtomSet>,
+    sets: HashMap<Tag, AtomSet>,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Default)]
+pub struct Meta {
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    tags: BTreeSet<Tag>,
+    /// An optional description of the Atom.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
 }
 
 /// Represents the file system paths associated with an atom.
@@ -112,5 +121,79 @@ impl AtomPaths<PathBuf> {
     /// make up the atom's content.
     pub fn content(&self) -> &Path {
         self.content.as_ref()
+    }
+}
+
+impl Atom {
+    pub(crate) fn new(label: Label, version: Version) -> Self {
+        Self {
+            label,
+            version,
+            meta: None,
+            sets: HashMap::new(),
+        }
+    }
+
+    /// return a reference to the atom's label
+    pub fn label(&self) -> &Label {
+        &self.label
+    }
+
+    /// consume the atom and take ownership of the label
+    pub fn take_label(self) -> Label {
+        self.label
+    }
+
+    /// return a reference to the atom's version
+    pub fn version(&self) -> &Version {
+        &self.version
+    }
+
+    /// consume the atom and take ownership of the version
+    pub fn take_version(self) -> Version {
+        self.version
+    }
+
+    /// return a reference to this atom's metadata, if it has any
+    pub fn meta(&self) -> Option<&Meta> {
+        if let Some(meta) = &self.meta {
+            Some(meta)
+        } else {
+            None
+        }
+    }
+
+    /// consume the atom and take ownership of the metadata, if there is any
+    pub fn take_meta(self) -> Option<Meta> {
+        self.meta
+    }
+
+    /// return a reference to this atom's defined sets
+    pub fn sets(&self) -> &HashMap<Tag, AtomSet> {
+        &self.sets
+    }
+}
+
+impl Meta {
+    pub fn tags(&self) -> &BTreeSet<Tag> {
+        &self.tags
+    }
+}
+
+impl AsMut<Option<Meta>> for Atom {
+    fn as_mut(&mut self) -> &mut Option<Meta> {
+        &mut self.meta
+    }
+}
+
+impl AsMut<BTreeSet<Tag>> for Meta {
+    fn as_mut(&mut self) -> &mut BTreeSet<Tag> {
+        &mut self.tags
+    }
+}
+
+impl AsMut<Meta> for Meta {
+    fn as_mut(&mut self) -> &mut Meta {
+        self
     }
 }

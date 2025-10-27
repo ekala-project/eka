@@ -16,12 +16,7 @@ use crate::store::git;
 //================================================================================================
 
 trait MockAtom {
-    fn mock(
-        &self,
-        id: &str,
-        version: &str,
-        description: &str,
-    ) -> Result<(NamedTempFile, ObjectId), anyhow::Error>;
+    fn mock(&self, id: &str, version: &str) -> Result<(NamedTempFile, ObjectId), anyhow::Error>;
 }
 
 //================================================================================================
@@ -29,18 +24,13 @@ trait MockAtom {
 //================================================================================================
 
 impl MockAtom for gix::Repository {
-    fn mock(
-        &self,
-        label: &str,
-        version: &str,
-        description: &str,
-    ) -> Result<(NamedTempFile, ObjectId), anyhow::Error> {
+    fn mock(&self, label: &str, version: &str) -> Result<(NamedTempFile, ObjectId), anyhow::Error> {
         use gix::objs::Tree;
         use gix::objs::tree::Entry;
         use semver::Version;
         use toml_edit::ser;
 
-        use crate::{Atom, Manifest};
+        use crate::Manifest;
 
         let work_dir = self.workdir().context("No workdir")?;
         let atom_dir = Builder::new().tempdir_in(work_dir)?;
@@ -50,15 +40,7 @@ impl MockAtom for gix::Repository {
             .suffix(".toml")
             .tempfile_in(&atom_dir)?;
 
-        let manifest = Manifest {
-            package: Atom {
-                label: label.try_into()?,
-                version: Version::from_str(version)?,
-                description: (!description.is_empty()).then_some(description.into()),
-                sets: HashMap::new(),
-            },
-            deps: Default::default(),
-        };
+        let manifest = Manifest::new(label.try_into()?, Version::from_str(version)?);
 
         let buf = ser::to_string_pretty(&manifest)?;
         atom_file.write_all(buf.as_bytes())?;
@@ -135,7 +117,7 @@ async fn publish_atom() -> Result<(), anyhow::Error> {
     remote.get_refs(Some("refs/heads/*:refs/heads/*"), None)?;
 
     let label = "foo";
-    let (file_path, src) = repo.mock(label, "0.1.0", "some atom")?;
+    let (file_path, src) = repo.mock(label, "0.1.0")?;
 
     let (paths, publisher) = GitPublisher::new(&repo, "origin", "HEAD", progress)?.build()?;
     let path = paths

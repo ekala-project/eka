@@ -64,11 +64,11 @@ type MirrorResult = Result<
 
 impl<'a> SetResolver<'a> {
     /// Creates a new `SetResolver` to validate the package sets in a manifest.
-    pub(crate) fn new(
+    pub(super) fn new(
         repo: Option<&ThreadSafeRepository>,
         manifest: &'a Manifest,
     ) -> Result<Self, AtomError> {
-        let len = manifest.package.sets.len();
+        let len = manifest.package.sets().len();
         let ekala = EkalaManager::new(repo)?;
         Ok(Self {
             manifest,
@@ -110,7 +110,7 @@ impl<'a> SetResolver<'a> {
     pub(crate) async fn get_and_check_sets(mut self) -> Result<ResolvedSets, BoxError> {
         use crate::manifest::AtomSet;
 
-        for (set_tag, set) in self.manifest.package.sets.iter() {
+        for (set_tag, set) in self.manifest.package.sets().iter() {
             match set {
                 AtomSet::Singleton(mirror) => self.process_mirror(set_tag, mirror)?,
                 AtomSet::Mirrors(mirrors) => {
