@@ -90,12 +90,16 @@ impl ResolvedSets {
         &self.roots
     }
 
-    pub(super) fn atoms(&self) -> &ResolvedAtoms<ObjectId, Root> {
+    pub fn atoms(&self) -> &ResolvedAtoms<ObjectId, Root> {
         &self.atoms
     }
 
-    pub(super) fn details(&self) -> &BTreeMap<GitDigest, SetDetails> {
+    pub fn details(&self) -> &BTreeMap<GitDigest, SetDetails> {
         &self.details
+    }
+
+    pub fn ekala(&self) -> &EkalaManager {
+        &self.ekala
     }
 }
 

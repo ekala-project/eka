@@ -1,7 +1,7 @@
 //! # Atom Packages
 
 pub use metadata::EkalaManifest;
-pub use metadata::manifest::GitSpec;
+pub use metadata::manifest::{GitSpec, Manifest, ManifestWriter};
 
 pub mod publish;
 

@@ -72,25 +72,15 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Deref;
-use std::path::PathBuf;
-use std::sync::Arc;
 
-use bstr::ByteSlice;
 use gix::ObjectId;
-use gix::protocol::handshake::Ref;
 use gix::protocol::transport::client::Transport;
 use id::{AtomDigest, Label, Name, Tag};
-use lazy_regex::{Lazy, Regex, lazy_regex};
-use manifest::{AtomReq, GitSpec, NixFetch, NixGit, NixReq, SetMirror};
+use manifest::{AtomReq, NixFetch, NixReq, SetMirror};
 use nix_compat::nixhash::NixHash;
 use package::sets::ResolvedAtom;
 use semver::{Version, VersionReq};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use snix_castore::blobservice::BlobService;
-use snix_castore::directoryservice::DirectoryService;
-use snix_glue::fetchers::Fetcher;
-use snix_store::nar::SimpleRenderer;
-use snix_store::pathinfoservice::PathInfoService;
 use storage::git::Root;
 use storage::{QueryStore, QueryVersion, UnpackedRef};
 use uri::{Uri, VERSION_PLACEHOLDER};
@@ -98,13 +88,6 @@ use url::Url;
 
 use super::{GitDigest, manifest};
 use crate::{AtomId, BoxError, Compute, Origin, id, package, storage, uri};
-//================================================================================================
-// Statics
-//================================================================================================
-
-static SEMVER_REGEX: Lazy<Regex> = lazy_regex!(
-    r#"^v?(?P<major>0|[1-9]\d*)\.(?P<minor>0|[1-9]\d*)\.(?P<patch>0|[1-9]\d*)(?:-(?P<prerelease>(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+(?P<buildmetadata>[0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$"#
-);
 
 //================================================================================================
 // Types
@@ -293,7 +276,7 @@ pub struct NixTarDep {
 pub(crate) struct WrappedNixHash(pub NixHash);
 
 #[derive(thiserror::Error, Debug)]
-enum LockError {
+pub(in crate::package) enum LockError {
     #[error(transparent)]
     Generic(#[from] BoxError),
     #[error("failed to resolve requested version")]
@@ -301,18 +284,10 @@ enum LockError {
 }
 
 /// An enum to handle different URL types for filename extraction.
-pub(super) enum NixUrls<'a> {
+pub(in crate::package) enum NixUrls<'a> {
     Url(&'a Url),
     Git(&'a gix::Url),
 }
-
-/// A type alias for the fetcher used for pinned dependencies.
-type NixFetcher = Fetcher<
-    Arc<dyn BlobService>,
-    Arc<dyn DirectoryService>,
-    Arc<dyn PathInfoService>,
-    SimpleRenderer<Arc<dyn BlobService>, Arc<dyn DirectoryService>>,
->;
 
 //================================================================================================
 // Impls
@@ -520,32 +495,6 @@ impl<R, T: Ord> DepMap<R, T> {
 }
 
 impl NixFetch {
-    pub(crate) async fn get_fetcher() -> Result<NixFetcher, BoxError> {
-        use snix_castore::{blobservice, directoryservice};
-        use snix_glue::fetchers::Fetcher;
-        use snix_store::nar::SimpleRenderer;
-        use snix_store::pathinfoservice;
-        let cache_root = config::CONFIG.cache.root_dir.to_owned();
-
-        let blob_service_url = format!("objectstore+file://{}", cache_root.join("blobs").display());
-        let dir_service_url = format!("redb://{}", cache_root.join("dirs.redb").display());
-        let path_service_url = format!("redb://{}", cache_root.join("paths.redb").display());
-        let blob_service = blobservice::from_addr(&blob_service_url).await?;
-        let directory_service = directoryservice::from_addr(&dir_service_url).await?;
-        let path_info_service = pathinfoservice::from_addr(&path_service_url, None).await?;
-        let nar_calculation_service =
-            SimpleRenderer::new(blob_service.clone(), directory_service.clone());
-
-        Ok(Fetcher::new(
-            blob_service,
-            directory_service,
-            path_info_service,
-            nar_calculation_service,
-            Vec::new(),
-            Some(cache_root.join("fetcher.redb")),
-        ))
-    }
-
     pub(crate) fn new_from_version(&self, version: &Version) -> Self {
         let replace = |s: &str| s.replace(VERSION_PLACEHOLDER, version.to_string().as_ref());
 
@@ -573,88 +522,12 @@ impl NixFetch {
         clone
     }
 
-    pub(super) fn get_url(&self) -> NixUrls<'_> {
+    pub(in crate::package) fn get_url(&self) -> NixUrls<'_> {
         match &self.kind {
             NixReq::Tar(url) => NixUrls::Url(url),
             NixReq::Url(url) => NixUrls::Url(url),
             NixReq::Build(nix_src) => NixUrls::Url(&nix_src.build),
             NixReq::Git(nix_git) => NixUrls::Git(&nix_git.git),
-        }
-    }
-
-    pub(crate) async fn resolve(&self, key: Option<&Name>) -> Result<(Name, Dep), BoxError> {
-        use snix_glue::fetchers::Fetch;
-
-        let key = if let Some(key) = key {
-            key
-        } else {
-            let url = self.get_url();
-            &Name::try_from(get_url_filename(&url))?
-        };
-
-        match &self.kind {
-            NixReq::Url(url) => {
-                let args = Fetch::URL {
-                    url: url.to_owned(),
-                    exp_hash: None,
-                };
-                let fetcher = Self::get_fetcher();
-
-                let (_, _, hash, _) = fetcher.await?.ingest_and_persist(key, args).await?;
-
-                Ok((
-                    key.to_owned(),
-                    Dep::Nix(NixDep {
-                        name: key.to_owned(),
-                        url: url.to_owned(),
-                        hash: WrappedNixHash(hash),
-                    }),
-                ))
-            },
-            NixReq::Tar(url) => {
-                let args = Fetch::Tarball {
-                    url: url.to_owned(),
-                    exp_nar_sha256: None,
-                };
-                let fetcher = Self::get_fetcher();
-
-                let (_, _, hash, _) = fetcher.await?.ingest_and_persist(key, args).await?;
-                Ok((
-                    key.to_owned(),
-                    Dep::NixTar(NixTarDep {
-                        name: key.to_owned(),
-                        url: url.to_owned(),
-                        hash: WrappedNixHash(hash),
-                    }),
-                ))
-            },
-            NixReq::Git(nix_git) => {
-                return Ok((key.to_owned(), Dep::NixGit(nix_git.resolve(key).await?)));
-            },
-            NixReq::Build(build_src) => {
-                let args = if build_src.unpack {
-                    Fetch::Tarball {
-                        url: build_src.build.to_owned(),
-                        exp_nar_sha256: None,
-                    }
-                } else {
-                    Fetch::URL {
-                        url: build_src.build.to_owned(),
-                        exp_hash: None,
-                    }
-                };
-                let fetcher = Self::get_fetcher();
-
-                let (_, _, hash, _) = fetcher.await?.ingest_and_persist(key, args).await?;
-                Ok((
-                    key.to_owned(),
-                    Dep::NixSrc(BuildSrc {
-                        name: key.to_owned(),
-                        url: build_src.build.to_owned(),
-                        hash: WrappedNixHash(hash),
-                    }),
-                ))
-            },
         }
     }
 }
@@ -664,67 +537,6 @@ impl From<ObjectId> for GitDigest {
         match id {
             ObjectId::Sha1(bytes) => GitDigest::Sha1(bytes),
         }
-    }
-}
-
-impl NixGit {
-    async fn resolve(&self, key: &Name) -> Result<NixGitDep, LockError> {
-        use crate::storage::QueryStore;
-
-        let (version, r) = match &self.spec {
-            Some(GitSpec::Ref(r)) => (
-                None,
-                self.git
-                    .get_ref(format!("{}:{}", r, r).as_str(), None)
-                    .map_err(|e| LockError::Generic(e.into()))?,
-            ),
-            Some(GitSpec::Version(req)) => {
-                let queries = ["refs/tags/*:refs/tags/*"];
-                let refs = self
-                    .git
-                    .get_refs(queries, None)
-                    .map_err(|e| LockError::Generic(e.into()))?;
-                tracing::trace!(?refs, "returned git refs");
-                if let Some((v, r)) = NixGit::match_version(req, refs) {
-                    (Some(v), r)
-                } else {
-                    tracing::error!(message = "could not resolve requested version", %self.git, version = %req);
-                    return Err(LockError::Resolve);
-                }
-            },
-            None => {
-                let q = "HEAD:HEAD";
-                (
-                    None,
-                    self.git
-                        .get_ref(q, None)
-                        .map_err(|e| LockError::Generic(e.into()))?,
-                )
-            },
-        };
-
-        use gix::ObjectId;
-        let ObjectId::Sha1(id) = crate::storage::git::to_id(r);
-
-        Ok(NixGitDep {
-            name: key.to_owned(),
-            url: self.git.to_owned(),
-            rev: GitDigest::Sha1(id),
-            version,
-        })
-    }
-
-    fn match_version(
-        req: &VersionReq,
-        refs: impl IntoIterator<Item = Ref>,
-    ) -> Option<(Version, Ref)> {
-        refs.into_iter()
-            .filter_map(|r| {
-                let (n, ..) = r.unpack();
-                let version = extract_and_parse_semver(n.to_str().ok()?)?;
-                req.matches(&version).then_some((version, r))
-            })
-            .max_by_key(|(ref version, _)| version.to_owned())
     }
 }
 
@@ -739,6 +551,10 @@ impl Default for Lockfile {
 }
 
 impl NixDep {
+    pub(crate) fn new(name: Name, url: Url, hash: WrappedNixHash) -> Self {
+        Self { name, url, hash }
+    }
+
     pub(crate) fn name(&self) -> &Name {
         &self.name
     }
@@ -759,6 +575,10 @@ impl NixGitDep {
 }
 
 impl NixTarDep {
+    pub(in crate::package) fn new(name: Name, url: Url, hash: WrappedNixHash) -> Self {
+        Self { name, url, hash }
+    }
+
     pub(crate) fn name(&self) -> &Name {
         &self.name
     }
@@ -769,6 +589,10 @@ impl NixTarDep {
 }
 
 impl BuildSrc {
+    pub(in crate::package) fn new(name: Name, url: Url, hash: WrappedNixHash) -> Self {
+        Self { name, url, hash }
+    }
+
     pub(crate) fn name(&self) -> &Name {
         &self.name
     }
@@ -790,74 +614,6 @@ impl<'de> Deserialize<'de> for WrappedNixHash {
             serde::de::Error::invalid_value(serde::de::Unexpected::Str(&s), &"NixHash")
         })?;
         Ok(WrappedNixHash(hash))
-    }
-}
-
-//================================================================================================
-// Functions
-//================================================================================================
-
-fn extract_and_parse_semver(input: &str) -> Option<Version> {
-    let re = SEMVER_REGEX.to_owned();
-    println!("{}", input);
-    let captures = re.captures(input)?;
-
-    // Construct the SemVer string from captured groups
-    let version_str = format!(
-        "{}.{}.{}{}{}",
-        &captures["major"],
-        &captures["minor"],
-        &captures["patch"],
-        captures
-            .name("prerelease")
-            .map_or(String::new(), |m| format!("-{}", m.as_str())),
-        captures
-            .name("buildmetadata")
-            .map_or(String::new(), |m| format!("+{}", m.as_str()))
-    );
-
-    Version::parse(&version_str).ok()
-}
-
-pub(crate) fn url_filename_as_tag(url: &gix::Url) -> Result<Tag, crate::id::Error> {
-    let str = get_url_filename(&NixUrls::Git(url));
-    Tag::try_from(str)
-}
-
-/// Extracts a filename from a URL, suitable for use as a dependency name.
-fn get_url_filename(url: &NixUrls) -> String {
-    match url {
-        NixUrls::Url(url) => {
-            if url.path() == "/" {
-                url.host_str().unwrap_or("source").to_string()
-            } else {
-                let s = if let Some(mut s) = url.path_segments() {
-                    s.next_back()
-                        .map(|s| {
-                            if let Some((file, _ext)) = s.split_once('.') {
-                                file
-                            } else {
-                                s
-                            }
-                        })
-                        .unwrap_or(url.path())
-                } else {
-                    url.path()
-                };
-                s.to_string()
-            }
-        },
-        NixUrls::Git(url) => {
-            if url.path_is_root() {
-                url.host().unwrap_or("source").to_string()
-            } else {
-                let path = url.path.to_string();
-                let p = PathBuf::from(path.as_str());
-                p.file_stem()
-                    .and_then(|x| x.to_str().map(ToOwned::to_owned))
-                    .unwrap_or(path)
-            }
-        },
     }
 }
 

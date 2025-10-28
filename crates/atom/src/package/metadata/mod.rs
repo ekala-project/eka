@@ -141,13 +141,13 @@ pub(super) struct TypedDocument<T> {
 }
 
 #[derive(Debug, PartialEq, Eq, Default)]
-struct AtomMap(BTreeMap<Label, PathBuf>);
+pub(in crate::package) struct AtomMap(BTreeMap<Label, PathBuf>);
 
 /// The entrypoint for an ekala manifest describing a set of atoms.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct EkalaManifest {
-    set: EkalaSet,
+    pub(super) set: EkalaSet,
     metadata: Option<MetaData>,
 }
 
@@ -161,7 +161,7 @@ struct MetaData {
 #[serde(deny_unknown_fields)]
 pub struct EkalaSet {
     #[serde(default)]
-    packages: AtomMap,
+    pub(in crate::package) packages: AtomMap,
 }
 
 /// A writer to assist with writing into the Ekala manifest.
@@ -170,7 +170,7 @@ pub struct EkalaManager {
     path: PathBuf,
     doc: TypedDocument<EkalaManifest>,
     repo: Option<Repository>,
-    manifest: EkalaManifest,
+    pub(super) manifest: EkalaManifest,
 }
 
 /// Represents different types of Git commit hashes.

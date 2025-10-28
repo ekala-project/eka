@@ -1,16 +1,49 @@
 use std::collections::{BTreeSet, HashMap};
+use std::path::PathBuf;
+use std::sync::Arc;
 
+use bstr::ByteSlice;
 use either::Either;
-use id::Tag;
-use metadata::lock::{AtomDep, SetDetails};
-use metadata::manifest::SetMirror;
-use metadata::{DocError, GitDigest};
-use semver::VersionReq;
+use gix::Repository;
+use gix::protocol::handshake::Ref;
+use id::{Name, Origin, Tag};
+use lazy_regex::{Lazy, Regex};
+use lock::{AtomDep, BuildSrc, LockError, NixDep, NixGitDep, NixTarDep, NixUrls, SetDetails};
+use metadata::manifest::{AtomReq, AtomWriter, NixFetch, NixGit, NixReq, SetMirror, WriteDeps};
+use metadata::{DocError, GitDigest, lock};
+use semver::{Prerelease, Version, VersionReq};
 use sets::{MirrorResult, ResolvedAtom, ResolvedSets, SetResolver};
+use snix_castore::blobservice::BlobService;
+use snix_castore::directoryservice::DirectoryService;
+use snix_glue::fetchers::Fetcher;
+use snix_store::nar::SimpleRenderer;
+use snix_store::pathinfoservice::PathInfoService;
+use storage::UnpackedRef;
 use storage::git::{AtomQuery, Root};
+use uri::Uri;
 
-use super::{metadata, sets};
-use crate::{AtomId, BoxError, id, storage};
+use super::{GitSpec, Manifest, metadata, sets};
+use crate::{ATOM_MANIFEST_NAME, AtomId, BoxError, ManifestWriter, id, storage, uri};
+
+//================================================================================================
+// Statics
+//================================================================================================
+
+static SEMVER_REGEX: Lazy<Regex> = lazy_regex::lazy_regex!(
+    r#"^v?(?P<major>0|[1-9]\d*)\.(?P<minor>0|[1-9]\d*)\.(?P<patch>0|[1-9]\d*)(?:-(?P<prerelease>(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+(?P<buildmetadata>[0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$"#
+);
+
+//================================================================================================
+// Types
+//================================================================================================
+
+/// A type alias for the fetcher used for pinned dependencies.
+type NixFetcher = Fetcher<
+    Arc<dyn BlobService>,
+    Arc<dyn DirectoryService>,
+    Arc<dyn PathInfoService>,
+    SimpleRenderer<Arc<dyn BlobService>, Arc<dyn DirectoryService>>,
+>;
 
 impl ResolvedSets {
     pub(super) fn resolve_atom(
@@ -258,5 +291,661 @@ impl<'a> SetResolver<'a> {
         }
         self.roots.insert(Either::Right(mirror.to_owned()), root);
         Ok(())
+    }
+}
+
+impl ManifestWriter {
+    /// Adds a user-requested atom URI to the manifest and lock files, ensuring they remain in sync.
+    pub fn add_uri(&mut self, uri: Uri, set_tag: Option<Tag>) -> Result<(), storage::git::Error> {
+        let mirror = if let Some(url) = uri.url() {
+            SetMirror::Url(url.to_owned())
+        } else {
+            SetMirror::Local
+        };
+        let (atom_req, lock_entry) = self.resolve_uri(&uri, &mirror)?;
+
+        let label = lock_entry.label().to_owned();
+        let id = AtomId::from(&lock_entry);
+        let set_tag = self.get_set_tag(&lock_entry, &uri, set_tag);
+
+        let atom_writer = AtomWriter::new(set_tag.to_owned(), atom_req, mirror.to_owned());
+
+        let set = lock_entry.set().to_owned();
+        atom_writer.write_dep(label, self.doc_mut())?;
+        self.insert_or_update_and_log(Either::Left(id.to_owned()), &lock::Dep::Atom(lock_entry));
+
+        self.update_lock_set(set, mirror, set_tag);
+
+        Ok(())
+    }
+
+    /// Adds a user-requested direct URL to the manifest and lock files, ensuring they remain in
+    /// sync.
+    pub async fn add_url(
+        &mut self,
+        url: crate::uri::AliasedUrl,
+        key: Option<Name>,
+        git: Option<GitSpec>,
+        tar: Option<bool>,
+        build: bool,
+        unpack: Option<bool>,
+    ) -> Result<(), DocError> {
+        let dep = NixFetch::determine(url, git, tar, build, unpack)?;
+        let (key, lock_entry) = self.resolve_nix(dep.to_owned(), key.as_ref()).await?;
+
+        dep.write_dep(key.to_owned(), self.doc_mut())?;
+        self.insert_or_update_and_log(Either::Right(key), &lock_entry);
+        Ok(())
+    }
+
+    /// Atomically writes the changes to the manifest and lock files on disk.
+    /// This method should be called last, after all changes have been processed.
+    ///
+    /// To enforce this, the writer instance will be consumed and dropped after calling this method.
+    pub fn write_atomic(mut self) -> Result<(), DocError> {
+        use std::io::Write;
+
+        use tempfile::NamedTempFile;
+
+        let doc_str = self.doc_mut().as_mut().to_string();
+
+        let _validate: Manifest = toml_edit::de::from_str(&doc_str)?;
+        let dir = self
+            .path()
+            .parent()
+            .ok_or_else(|| DocError::Missing(self.path().to_owned()))?;
+        let lock_path = self.path().with_file_name(crate::LOCK_NAME.as_str());
+        let mut tmp =
+            NamedTempFile::with_prefix_in(format!(".{}", crate::ATOM_MANIFEST_NAME.as_str()), dir)?;
+        let mut tmp_lock =
+            NamedTempFile::with_prefix_in(format!(".{}", crate::LOCK_NAME.as_str()), dir)?;
+        tmp.write_all(doc_str.as_bytes())?;
+        tmp_lock.write_all(
+            "# This file is automatically @generated by eka.\n# It is not intended for manual \
+             editing.\n"
+                .as_bytes(),
+        )?;
+        tmp_lock.write_all(toml_edit::ser::to_string_pretty(self.lock())?.as_bytes())?;
+        tmp.persist(self.path())?;
+        tmp_lock.persist(lock_path)?;
+        Ok(())
+    }
+
+    /// Removes any dependencies from the lockfile that are no longer present in the
+    /// manifest, ensuring the lockfile only contains entries that are still relevant,
+    /// then calls into synchronization logic to ensure consistency.
+    pub(super) fn sanitize(&mut self, manifest: &Manifest) {
+        self.lock.deps.as_mut().retain(|_, dep| match dep {
+            lock::Dep::Atom(atom_dep) => {
+                if let Some(SetDetails { tag: name, .. }) = self.lock.sets.get(&atom_dep.set()) {
+                    if let Some(set) = manifest.deps().from().get(name) {
+                        return set.contains_key(atom_dep.label())
+                            && (atom_dep.version().pre.is_empty()
+                                || self
+                                    .resolved
+                                    .ekala
+                                    .manifest
+                                    .set
+                                    .packages
+                                    .as_ref()
+                                    .contains_key(atom_dep.label()));
+                    } else {
+                        false
+                    };
+                }
+                false
+            },
+            lock::Dep::Nix(nix) => manifest.deps().direct().nix().contains_key(nix.name()),
+            lock::Dep::NixGit(nix_git) => {
+                manifest.deps().direct().nix().contains_key(&nix_git.name)
+            },
+            lock::Dep::NixTar(nix_tar) => {
+                manifest.deps().direct().nix().contains_key(&nix_tar.name)
+            },
+            lock::Dep::NixSrc(build_src) => {
+                manifest.deps().direct().nix().contains_key(&build_src.name)
+            },
+        });
+    }
+
+    /// Updates the lockfile to match the dependencies specified in the manifest.
+    /// It resolves any new dependencies, updates existing ones if their version
+    /// requirements have changed, and ensures the lockfile is fully consistent.
+    pub(super) async fn synchronize(&mut self, manifest: Manifest) -> Result<(), DocError> {
+        for (set_tag, set) in manifest.deps().from() {
+            let maybe_root = self
+                .resolved
+                .roots()
+                .get(&Either::Left(set_tag.to_owned()))
+                .map(ToOwned::to_owned);
+            if let Some(root) = maybe_root {
+                for (label, req) in set {
+                    tracing::debug!(
+                        atom.label = %label,
+                        atom.specified = %req,
+                        set = %set_tag,
+                        "checking sync status"
+                    );
+                    let id = AtomId::construct(&root, label.to_owned()).map_err(|e| {
+                        DocError::AtomIdConstruct(format!(
+                            "set: {}, atom: {}, err: {}",
+                            &set_tag, &label, e
+                        ))
+                    })?;
+                    self.synchronize_atom(req.to_owned(), id.to_owned(), set_tag.to_owned())
+                        .map_err(|error| {
+                            tracing::error!(
+                                atom.label = %label,
+                                atom.requested = %req,
+                                set = %set_tag,
+                                %error, "lock synchronization failed"
+                            );
+                            DocError::SyncFailed
+                        })?;
+                }
+            } else {
+                tracing::warn!(
+                    message = "set was not resolved to an origin id, can't syncrhonize it",
+                    set = %set_tag,
+                );
+            }
+        }
+
+        for (name, dep) in manifest.deps().direct().nix() {
+            tracing::debug!(direct.nix.name = %name,  "checking sync status");
+            let key = Either::Right(name.to_owned());
+            let locked = self.lock.deps.as_ref().get(&key);
+            if let Some(lock) = locked {
+                use lock::NixUrls;
+
+                let url = dep.get_url();
+                let mut unmatched = false;
+                match (lock, url, &dep.kind) {
+                    (lock::Dep::Nix(nix), NixUrls::Url(url), _) => unmatched = nix.url() != url,
+                    (
+                        lock::Dep::NixGit(git),
+                        NixUrls::Git(url),
+                        NixReq::Git(NixGit { spec, .. }),
+                    ) => {
+                        // upstream bug: false positive (it is read later unconditionally)
+                        #[allow(unused_assignments)]
+                        if let (Some(GitSpec::Version(req)), Some(version)) = (spec, &git.version) {
+                            unmatched = !req.matches(version);
+                        }
+                        unmatched = git.url() != url;
+                    },
+                    (lock::Dep::NixTar(tar), NixUrls::Url(url), _) => unmatched = tar.url() != url,
+                    (lock::Dep::NixSrc(build), NixUrls::Url(url), _) => {
+                        unmatched = build.url() != url
+                    },
+                    _ => {},
+                }
+                if unmatched {
+                    tracing::warn!(message = "locked URL doesn't match, updating...", direct.nix = %name);
+                    let (_, dep) = self.resolve_nix(dep.to_owned(), Some(name)).await?;
+                    self.lock.deps.as_mut().insert(key, dep);
+                }
+            } else if let Ok((_, dep)) = self.resolve_nix(dep.to_owned(), Some(name)).await {
+                self.lock.deps.as_mut().insert(key, dep);
+            } else {
+                tracing::warn!(message = Self::RESOLUTION_ERR_MSG, direct.nix = %name);
+            }
+        }
+        Ok(())
+    }
+
+    fn synchronize_atom(
+        &mut self,
+        req: VersionReq,
+        id: AtomId<Root>,
+        set_tag: Tag,
+    ) -> Result<(), crate::storage::git::Error> {
+        if !self
+            .lock
+            .deps
+            .as_ref()
+            .contains_key(&either::Either::Left(id.to_owned()))
+        {
+            self.lock_atom(req, id, set_tag)?;
+        } else if let Some(lock::Dep::Atom(dep)) = self
+            .lock
+            .deps
+            .as_ref()
+            .get(&either::Either::Left(id.to_owned()))
+        {
+            if !req.matches(dep.version()) {
+                self.lock_atom(req, id, set_tag)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn lock_atom(
+        &mut self,
+        req: VersionReq,
+        id: AtomId<Root>,
+        set_tag: Tag,
+    ) -> Result<lock::Dep, crate::storage::git::Error> {
+        if let Ok(dep) = self.resolved.resolve_atom(&id, &req) {
+            let dep = lock::Dep::Atom(dep);
+            self.insert_or_update_and_log(Either::Left(id), &dep);
+            Ok(dep)
+        } else if let Some(repo) = &self.resolved.repo {
+            let uri = Uri::from((id.label().to_owned(), Some(req)));
+            let (_, dep) = self.resolve_from_local(&uri, repo)?;
+            let dep = lock::Dep::Atom(dep);
+            self.insert_or_update_and_log(Either::Left(id), &dep);
+            Ok(dep)
+        } else {
+            let versions: Vec<_> = self
+                .resolved()
+                .atoms()
+                .get(&id)
+                .map(|s| s.keys().collect())
+                .unwrap_or_default();
+            tracing::warn!(
+                message = Self::RESOLUTION_ERR_MSG,
+                set = %set_tag,
+                atom = %id.label(),
+                requested.version = %req,
+                avaliable.versions = %toml_edit::ser::to_string(&versions).unwrap_or_default()
+            );
+            Err(DocError::Error(Box::new(crate::storage::git::Error::NoMatchingVersion)).into())
+        }
+    }
+
+    async fn resolve_nix(
+        &self,
+        dep: NixFetch,
+        key: Option<&Name>,
+    ) -> Result<(Name, lock::Dep), DocError> {
+        let get_dep = || {
+            if let Some((set, atom)) = &dep.from_version {
+                if let Some(root) = self.resolved.roots.get(&Either::Left(set.to_owned())) {
+                    if let Ok(id) = AtomId::construct(root, atom.to_owned()) {
+                        if let Some(lock::Dep::Atom(atom)) =
+                            self.lock.deps.as_ref().get(&Either::Left(id))
+                        {
+                            return dep.new_from_version(atom.version());
+                        }
+                    }
+                }
+            }
+            dep
+        };
+        let dep = get_dep();
+        dep.resolve(key).await.map_err(Into::into)
+    }
+
+    fn resolve_from_uri(
+        &self,
+        uri: &Uri,
+        root: &Root,
+    ) -> Result<(AtomReq, AtomDep), crate::storage::git::Error> {
+        let id = AtomId::construct(root, uri.label().to_owned()).expect(Self::ATOM_BUG);
+        let dep = self
+            .resolved()
+            .resolve_atom(&id, uri.version().unwrap_or(&VersionReq::STAR))?;
+
+        let req = AtomReq::new(
+            uri.version()
+                .unwrap_or(&VersionReq::parse(dep.version().to_string().as_str())?)
+                .to_owned(),
+        );
+        Ok((req, dep))
+    }
+
+    fn resolve_from_local(
+        &self,
+        uri: &Uri,
+        repo: &Repository,
+    ) -> Result<(AtomReq, AtomDep), crate::storage::git::Error> {
+        use sets;
+
+        /* we are in a local git repository */
+
+        // FIXME?: do we need to add a flag to make this configurable?
+        let root = repo.head_commit()?.calculate_origin()?;
+
+        if let Ok(res) = self.resolve_from_uri(uri, &root) {
+            /* local store has a mirror which resolved this atom successfully */
+            Ok(res)
+        } else {
+            let path = self
+                .resolved
+                .ekala
+                .manifest
+                .set
+                .packages
+                .as_ref()
+                .get(uri.label())
+                .ok_or(DocError::NoLocal)?;
+            let content = std::fs::read_to_string(path.join(ATOM_MANIFEST_NAME.as_str()))?;
+            let atom = Manifest::get_atom(&content)?;
+            if atom.label() != uri.label() {
+                return Err(DocError::SetError(sets::Error::Inconsistent).into());
+            }
+            let req = AtomReq::new(
+                uri.version()
+                    .unwrap_or(&VersionReq::parse(atom.version().to_string().as_str())?)
+                    .to_owned(),
+            );
+            let id = AtomId::construct(&root, uri.label().to_owned()).expect(Self::ATOM_BUG);
+            let mut version = atom.version().clone();
+            version.pre = Prerelease::new("local")?;
+            let unpacked = UnpackedRef {
+                id,
+                version,
+                rev: None,
+            };
+            let dep = AtomDep::from(ResolvedAtom {
+                unpacked,
+                remotes: BTreeSet::new(),
+            });
+            Ok((req, dep))
+        }
+    }
+
+    fn resolve_uri(
+        &mut self,
+        uri: &Uri,
+        mirror: &SetMirror,
+    ) -> Result<(AtomReq, AtomDep), crate::storage::git::Error> {
+        // FIXME: we still need to handle when users pass a filepath (i.e. file://)
+        if let (Some(root), SetMirror::Url(_)) = (
+            self.resolved.roots.get(&Either::Right(mirror.to_owned())),
+            &mirror,
+        ) {
+            /* set is remote and exists in the manifest, we can grab from an already resolved
+             * mirror */
+            self.resolve_from_uri(uri, root)
+        } else if let SetMirror::Url(url) = mirror {
+            /* set doesn't exist, we need to resolve from the passed url */
+            let transport = self.resolved.transports.get_mut(url);
+            uri.resolve(transport)
+        } else if let Some(repo) = &self.resolved.repo {
+            /* we are in a local git repository */
+
+            self.resolve_from_local(uri, repo)
+        } else {
+            // TODO: we need a notion of "root" for an ekala set outside of a repository
+            // maybe just a constant would do for a basic remoteless store?
+            tracing::error!(
+                suggestion =
+                    "if you add them by hand to the manifest, they will resolve at eval-time",
+                "haven't yet implemented adding local dependencies outside of git"
+            );
+            todo!()
+        }
+    }
+
+    fn insert_or_update_and_log(&mut self, key: Either<AtomId<Root>, Name>, dep: &lock::Dep) {
+        if self
+            .lock
+            .deps
+            .as_mut()
+            .insert(key, dep.to_owned())
+            .is_some()
+        {
+            match &dep {
+                lock::Dep::Atom(dep) => {
+                    let tag = self.resolved.details().get(&dep.set()).map(|d| &d.tag);
+                    tracing::warn!(
+                        message = Self::UPDATE_DEPENDENCY,
+                        label = %dep.label(),
+                        set = ?tag,
+                        r#type = "atom"
+                    );
+                },
+                lock::Dep::Nix(dep) => {
+                    tracing::warn!(message = "updating lock entry", direct.nix = %dep.name())
+                },
+                lock::Dep::NixGit(dep) => {
+                    tracing::warn!(message = "updating lock entry", direct.nix = %dep.name())
+                },
+                lock::Dep::NixTar(dep) => {
+                    tracing::warn!(message = "updating lock entry", direct.nix = %dep.name())
+                },
+                lock::Dep::NixSrc(dep) => {
+                    tracing::warn!(message = "updating lock entry", direct.nix = %dep.name())
+                },
+            }
+        }
+    }
+}
+
+impl NixFetch {
+    pub(crate) async fn get_fetcher() -> Result<NixFetcher, BoxError> {
+        use snix_castore::{blobservice, directoryservice};
+        use snix_glue::fetchers::Fetcher;
+        use snix_store::nar::SimpleRenderer;
+        use snix_store::pathinfoservice;
+        let cache_root = config::CONFIG.cache.root_dir.to_owned();
+
+        let blob_service_url = format!("objectstore+file://{}", cache_root.join("blobs").display());
+        let dir_service_url = format!("redb://{}", cache_root.join("dirs.redb").display());
+        let path_service_url = format!("redb://{}", cache_root.join("paths.redb").display());
+        let blob_service = blobservice::from_addr(&blob_service_url).await?;
+        let directory_service = directoryservice::from_addr(&dir_service_url).await?;
+        let path_info_service = pathinfoservice::from_addr(&path_service_url, None).await?;
+        let nar_calculation_service =
+            SimpleRenderer::new(blob_service.clone(), directory_service.clone());
+
+        Ok(Fetcher::new(
+            blob_service,
+            directory_service,
+            path_info_service,
+            nar_calculation_service,
+            Vec::new(),
+            Some(cache_root.join("fetcher.redb")),
+        ))
+    }
+
+    pub(crate) async fn resolve(&self, key: Option<&Name>) -> Result<(Name, lock::Dep), BoxError> {
+        use snix_glue::fetchers::Fetch;
+
+        let key = if let Some(key) = key {
+            key
+        } else {
+            let url = self.get_url();
+            &Name::try_from(get_url_filename(&url))?
+        };
+
+        match &self.kind {
+            NixReq::Url(url) => {
+                let args = Fetch::URL {
+                    url: url.to_owned(),
+                    exp_hash: None,
+                };
+                let fetcher = Self::get_fetcher();
+
+                let (_, _, hash, _) = fetcher.await?.ingest_and_persist(key, args).await?;
+
+                Ok((
+                    key.to_owned(),
+                    lock::Dep::Nix(NixDep::new(
+                        key.to_owned(),
+                        url.to_owned(),
+                        lock::WrappedNixHash(hash),
+                    )),
+                ))
+            },
+            NixReq::Tar(url) => {
+                let args = Fetch::Tarball {
+                    url: url.to_owned(),
+                    exp_nar_sha256: None,
+                };
+                let fetcher = Self::get_fetcher();
+
+                let (_, _, hash, _) = fetcher.await?.ingest_and_persist(key, args).await?;
+                Ok((
+                    key.to_owned(),
+                    lock::Dep::NixTar(NixTarDep::new(
+                        key.to_owned(),
+                        url.to_owned(),
+                        lock::WrappedNixHash(hash),
+                    )),
+                ))
+            },
+            NixReq::Git(nix_git) => {
+                return Ok((
+                    key.to_owned(),
+                    lock::Dep::NixGit(nix_git.resolve(key).await?),
+                ));
+            },
+            NixReq::Build(build_src) => {
+                let args = if build_src.unpack {
+                    Fetch::Tarball {
+                        url: build_src.build.to_owned(),
+                        exp_nar_sha256: None,
+                    }
+                } else {
+                    Fetch::URL {
+                        url: build_src.build.to_owned(),
+                        exp_hash: None,
+                    }
+                };
+                let fetcher = Self::get_fetcher();
+
+                let (_, _, hash, _) = fetcher.await?.ingest_and_persist(key, args).await?;
+                Ok((
+                    key.to_owned(),
+                    lock::Dep::NixSrc(BuildSrc::new(
+                        key.to_owned(),
+                        build_src.build.to_owned(),
+                        lock::WrappedNixHash(hash),
+                    )),
+                ))
+            },
+        }
+    }
+}
+
+impl NixGit {
+    async fn resolve(&self, key: &Name) -> Result<NixGitDep, LockError> {
+        use crate::storage::QueryStore;
+
+        let (version, r) = match &self.spec {
+            Some(GitSpec::Ref(r)) => (
+                None,
+                self.git
+                    .get_ref(format!("{}:{}", r, r).as_str(), None)
+                    .map_err(|e| LockError::Generic(e.into()))?,
+            ),
+            Some(GitSpec::Version(req)) => {
+                let queries = ["refs/tags/*:refs/tags/*"];
+                let refs = self
+                    .git
+                    .get_refs(queries, None)
+                    .map_err(|e| LockError::Generic(e.into()))?;
+                tracing::trace!(?refs, "returned git refs");
+                if let Some((v, r)) = NixGit::match_version(req, refs) {
+                    (Some(v), r)
+                } else {
+                    tracing::error!(message = "could not resolve requested version", %self.git, version = %req);
+                    return Err(LockError::Resolve);
+                }
+            },
+            None => {
+                let q = "HEAD:HEAD";
+                (
+                    None,
+                    self.git
+                        .get_ref(q, None)
+                        .map_err(|e| LockError::Generic(e.into()))?,
+                )
+            },
+        };
+
+        use gix::ObjectId;
+        let ObjectId::Sha1(id) = crate::storage::git::to_id(r);
+
+        Ok(NixGitDep {
+            name: key.to_owned(),
+            url: self.git.to_owned(),
+            rev: GitDigest::Sha1(id),
+            version,
+        })
+    }
+
+    fn match_version(
+        req: &VersionReq,
+        refs: impl IntoIterator<Item = Ref>,
+    ) -> Option<(Version, Ref)> {
+        refs.into_iter()
+            .filter_map(|r| {
+                let (n, ..) = r.unpack();
+                let version = extract_and_parse_semver(n.to_str().ok()?)?;
+                req.matches(&version).then_some((version, r))
+            })
+            .max_by_key(|(ref version, _)| version.to_owned())
+    }
+}
+
+//================================================================================================
+// Functions
+//================================================================================================
+
+fn extract_and_parse_semver(input: &str) -> Option<Version> {
+    let re = SEMVER_REGEX.to_owned();
+    println!("{}", input);
+    let captures = re.captures(input)?;
+
+    // Construct the SemVer string from captured groups
+    let version_str = format!(
+        "{}.{}.{}{}{}",
+        &captures["major"],
+        &captures["minor"],
+        &captures["patch"],
+        captures
+            .name("prerelease")
+            .map_or(String::new(), |m| format!("-{}", m.as_str())),
+        captures
+            .name("buildmetadata")
+            .map_or(String::new(), |m| format!("+{}", m.as_str()))
+    );
+
+    Version::parse(&version_str).ok()
+}
+
+pub(crate) fn url_filename_as_tag(url: &gix::Url) -> Result<Tag, crate::id::Error> {
+    let str = get_url_filename(&NixUrls::Git(url));
+    Tag::try_from(str)
+}
+
+/// Extracts a filename from a URL, suitable for use as a dependency name.
+fn get_url_filename(url: &NixUrls) -> String {
+    match url {
+        NixUrls::Url(url) => {
+            if url.path() == "/" {
+                url.host_str().unwrap_or("source").to_string()
+            } else {
+                let s = if let Some(mut s) = url.path_segments() {
+                    s.next_back()
+                        .map(|s| {
+                            if let Some((file, _ext)) = s.split_once('.') {
+                                file
+                            } else {
+                                s
+                            }
+                        })
+                        .unwrap_or(url.path())
+                } else {
+                    url.path()
+                };
+                s.to_string()
+            }
+        },
+        NixUrls::Git(url) => {
+            if url.path_is_root() {
+                url.host().unwrap_or("source").to_string()
+            } else {
+                let path = url.path.to_string();
+                let p = PathBuf::from(path.as_str());
+                p.file_stem()
+                    .and_then(|x| x.to_str().map(ToOwned::to_owned))
+                    .unwrap_or(path)
+            }
+        },
     }
 }
