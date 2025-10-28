@@ -1,12 +1,13 @@
 use std::sync::Arc;
 
 use bstr::ByteSlice;
+use direct::{NixFetch, NixGit, NixReq};
 use either::Either;
 use gix::protocol::handshake::Ref;
 use id::Name;
 use lazy_regex::{Lazy, Regex};
 use metadata::lock::{BuildSrc, LockError, NixDep, NixGitDep, NixTarDep};
-use metadata::manifest::{NixFetch, NixGit, NixReq, WriteDeps};
+use metadata::manifest::{WriteDeps, direct};
 use metadata::{DocError, GitDigest, lock};
 use package::{GitSpec, metadata};
 use semver::{Version, VersionReq};

@@ -97,10 +97,6 @@ impl ResolvedSets {
     pub fn details(&self) -> &BTreeMap<GitDigest, SetDetails> {
         &self.details
     }
-
-    pub fn ekala(&self) -> &EkalaManager {
-        &self.ekala
-    }
 }
 
 impl<Id, R> ResolvedAtom<Id, R> {

@@ -220,10 +220,10 @@ impl<'a> SetResolver<'a> {
                 }
             },
             Entry::Vacant(entry) => {
-                entry.insert(ResolvedAtom {
-                    unpacked: atom,
-                    remotes: BTreeSet::from([mirror_url.to_owned()]),
-                });
+                entry.insert(ResolvedAtom::new(
+                    atom,
+                    BTreeSet::from([mirror_url.to_owned()]),
+                ));
             },
         }
 

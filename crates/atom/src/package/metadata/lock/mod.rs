@@ -73,10 +73,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Deref;
 
+use direct::{NixFetch, NixReq};
 use gix::ObjectId;
 use gix::protocol::transport::client::Transport;
 use id::{AtomDigest, Label, Name, Tag};
-use manifest::{AtomReq, NixFetch, NixReq, SetMirror};
+use manifest::{AtomReq, SetMirror, direct};
 use nix_compat::nixhash::NixHash;
 use package::sets::ResolvedAtom;
 use semver::{Version, VersionReq};
@@ -457,14 +458,10 @@ impl From<ResolvedAtom<ObjectId, Root>> for AtomDep {
             unpacked: UnpackedRef { id, version, rev },
             remotes,
         } = value;
-        AtomDep::from(ResolvedAtom {
-            unpacked: UnpackedRef {
-                id,
-                version,
-                rev: Some(rev),
-            },
+        AtomDep::from(ResolvedAtom::new(
+            UnpackedRef::new(id, version, Some(rev)),
             remotes,
-        })
+        ))
     }
 }
 
