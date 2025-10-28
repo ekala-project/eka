@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use atom::manifest::EkalaManifest;
+use atom::package::EkalaManifest;
 use clap::Parser;
 
 use crate::cli::store::Detected;
@@ -14,7 +14,7 @@ pub struct Args {
 }
 
 mod git {
-    use atom::store::git;
+    use atom::storage::git;
     use clap::Parser;
     #[derive(Parser, Debug)]
     #[command(next_help_heading = "Git Options")]
@@ -30,7 +30,7 @@ pub(super) fn run(store: Option<Detected>, args: Args) -> anyhow::Result<()> {
     #[allow(clippy::single_match)]
     match store {
         Some(Detected::Git(repo)) => {
-            use atom::store::Init;
+            use atom::storage::Init;
             let repo = repo.to_thread_local();
             let remote = repo.find_remote(args.git.remote.as_str())?;
 

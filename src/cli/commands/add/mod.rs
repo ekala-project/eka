@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use atom::id::{Name, Tag};
-use atom::manifest::deps::GitSpec;
+use atom::package::GitSpec;
 use atom::uri::{AliasedUrl, Uri};
 use clap::{Parser, Subcommand};
 

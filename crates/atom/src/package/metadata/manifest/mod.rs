@@ -1,3 +1,78 @@
+//! # Atom Manifest
+//!
+//! This module provides the core types for working with an Atom's manifest format.
+//! The manifest is a TOML file that describes an atom's metadata and dependencies.
+//!
+//! ## Manifest Structure
+//!
+//! Every atom must have a manifest file named `atom.toml` that contains at minimum
+//! a `[package]` section with the atom's label, version, and optional description.
+//! Additional sections can specify package sets and dependencies.
+//!
+//! ## Package Sets and Mirrors
+//!
+//! The `[package.sets]` table defines named sources for atom dependencies. Each set
+//! can be a single URL or an array of mirror URLs. The special value `"::"` represents
+//! the local repository and enables efficient development workflows by allowing atoms
+//! to reference each other without requiring `eka publish` after every change.
+//!
+//! This mirrors the URI format where `::<atom-name>` indicates a local atom from the
+//! current repository (as opposed to remote atoms which would be prefixed with a URL or alias).
+//!
+//! ## Key Types
+//!
+//! - [`Manifest`] - The complete manifest structure, representing the `atom.toml` file.
+//! - [`Atom`] - The core atom metadata (`label`, `version`, `description`, `sets`).
+//! - [`Dependency`] - Atom and direct Nix dependencies (see [`deps`] module).
+//! - [`AtomError`] - Errors that can occur during manifest processing.
+//!
+//! ## Example Manifest
+//!
+//! ```toml
+//! [package]
+//! label = "my-atom"
+//! version = "1.0.0"
+//! description = "A sample atom for demonstration"
+//!
+//! [package.sets]
+//! company-atoms = "git@github.com:our-company/atoms"
+//! local-atoms = "::"
+//!
+//! [deps.from.company-atoms]
+//! other-atom = "^1.0.0"
+//!
+//! [deps.direct.nix]
+//! external-lib.url = "https://example.com/lib.tar.gz"
+//! ```
+//!
+//! ## Validation
+//!
+//! Manifests are strictly validated to ensure they contain all required fields
+//! and have valid data. The `#[serde(deny_unknown_fields)]` attribute ensures
+//! that only known fields are accepted, preventing typos and invalid configurations.
+//!
+//! ## Usage
+//!
+//! Manifests can be created programmatically or parsed from a string or file.
+//!
+//! ```rust,no_run
+//! use std::str::FromStr;
+//!
+//! use atom::manifest::Manifest;
+//! use atom::{Atom, Label};
+//! use semver::Version;
+//!
+//! // Create a manifest programmatically.
+//! let manifest = Manifest::new(Label::try_from("my-atom").unwrap(), Version::new(1, 0, 0));
+//!
+//! // Parse a manifest from a string.
+//! let manifest_str = r#"
+//! [atom]
+//! label = "parsed-atom"
+//! version = "2.0.0"
+//! "#;
+//! let parsed = Manifest::from_str(manifest_str).unwrap();
+//! ```
 //! # Atom Dependency Handling
 //!
 //! This module provides the core types for working with an Atom manifest's dependencies.
@@ -106,27 +181,146 @@
 
 use std::collections::{BTreeSet, HashMap};
 use std::ffi::OsStr;
-use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use bstr::{BString, ByteSlice};
 use either::Either;
 use gix::{Repository, ThreadSafeRepository};
-use semver::{Prerelease, VersionReq};
-use serde::de::DeserializeOwned;
+use id::{Name, Tag, VerifiedName};
+use lock::{AtomDep, Dep, Lockfile, SetDetails};
+use package::AtomError;
+use package::sets::{ResolvedAtom, ResolvedSets, SetResolver};
+use semver::{Prerelease, Version, VersionReq};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use toml_edit::DocumentMut;
+use storage::UnpackedRef;
+use storage::git::Root;
+use toml_edit::{DocumentMut, de};
+use uri::{AliasedUrl, Uri};
 use url::Url;
 
-use crate::id::{Label, Name, Tag, VerifiedName};
-use crate::lock::{AtomDep, Dep, GitDigest, SetDetails};
-use crate::manifest::sets::{self, ResolvedAtom, ResolvedSets, SetResolver};
-use crate::manifest::{AtomError, SetMirror};
-use crate::store::UnpackedRef;
-use crate::store::git::Root;
-use crate::uri::{AliasedUrl, Uri};
-use crate::{ATOM_MANIFEST_NAME, AtomId, Lockfile, Manifest, Origin};
+use super::{DocError, GitDigest, TypedDocument, lock};
+use crate::{ATOM_MANIFEST_NAME, Atom, AtomId, Label, Origin, id, package, storage, uri};
+
+//================================================================================================
+// Types
+//================================================================================================
+
+/// A strongly-typed representation of a source for an atom set.
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SetMirror {
+    /// Represents the local repository, allowing atoms to be resolved by path.
+    #[serde(rename = "::")]
+    Local,
+    /// A URL pointing to a remote repository that serves as a source for an atom set.
+    #[serde(
+        serialize_with = "serialize_url",
+        deserialize_with = "deserialize_url",
+        untagged
+    )]
+    Url(gix::Url),
+}
+
+/// Represents the possible values for a named atom set in the manifest.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum AtomSet {
+    /// A single source for an atom set.
+    Singleton(SetMirror),
+    /// A set of mirrors for an atom set.
+    ///
+    /// Since sets can be determined to be equivalent by their root hash, this allows a user to
+    /// provide multiple sources for the same set. The resolver will check for equivalence at
+    /// runtime by fetching the root commit from each URL. Operations like `publish` will
+    /// error if inconsistent mirrors are detected.
+    Mirrors(BTreeSet<SetMirror>),
+}
+
+/// Represents the structure of an `atom.toml` manifest file.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Manifest {
+    /// The required `[package]` table, containing core metadata.
+    package: Atom,
+    /// The dependencies of the atom.
+    #[serde(default, skip_serializing_if = "Dependency::is_empty")]
+    deps: Dependency,
+}
+
+/// A specialized result type for manifest operations.
+pub type AtomResult<T> = Result<T, AtomError>;
+
+//================================================================================================
+// Impls
+//================================================================================================
+
+impl Manifest {
+    /// Creates a new `Manifest` with the given label, version, and description.
+    pub fn new(label: Label, version: Version) -> Self {
+        Manifest {
+            package: Atom::new(label, version),
+            deps: Dependency::new(),
+        }
+    }
+
+    /// Parses an [`Atom`] struct from the `[package]` table of a TOML document string,
+    /// ignoring other tables and fields.
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if the content is invalid TOML,
+    /// or if the `[package]` table is missing.
+    pub(crate) fn get_atom(content: &str) -> AtomResult<Atom> {
+        let doc = content.parse::<DocumentMut>()?;
+
+        if let Some(v) = doc.get("package").map(ToString::to_string) {
+            let atom = de::from_str::<Atom>(&v)?;
+            Ok(atom)
+        } else {
+            Err(AtomError::Missing)
+        }
+    }
+
+    pub(super) fn get_atom_label<P: AsRef<Path>>(path: P) -> AtomResult<Label> {
+        let content = std::fs::read_to_string(&path)?;
+        let atom = Self::get_atom(&content)?;
+        Ok(atom.take_label())
+    }
+
+    pub(super) fn deps(&self) -> &Dependency {
+        &self.deps
+    }
+
+    pub(in crate::package) fn package(&self) -> &Atom {
+        &self.package
+    }
+}
+
+impl std::fmt::Display for SetMirror {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SetMirror::Local => write!(f, "::"),
+            SetMirror::Url(url) => write!(f, "{}", url),
+        }
+    }
+}
+
+impl FromStr for Manifest {
+    type Err = de::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        de::from_str(s)
+    }
+}
+
+impl TryFrom<PathBuf> for Manifest {
+    type Error = AtomError;
+
+    fn try_from(path: PathBuf) -> Result<Self, Self::Error> {
+        let content = std::fs::read_to_string(path)?;
+        Ok(Manifest::from_str(&content)?)
+    }
+}
 
 //================================================================================================
 // Types
@@ -145,72 +339,13 @@ pub struct AtomReq {
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Default)]
 #[serde(deny_unknown_fields)]
 /// The dependencies specified in the manifest
-pub struct Dependency {
+pub(super) struct Dependency {
     /// Specify atom dependencies from a specific set outlined in `[package.sets]`.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     from: AtomFrom,
     /// Direct dependencies not in the atom format.
     #[serde(default, skip_serializing_if = "DirectDeps::is_empty")]
     direct: DirectDeps,
-}
-
-#[derive(thiserror::Error, Debug)]
-/// Errors that can occur when working with a `TypedDocument`.
-pub enum DocError {
-    /// Missing atom from manifest
-    #[error("the atom directory disappeared or is inaccessible: {0}")]
-    Missing(PathBuf),
-    /// The manifest path could not be accessed.
-    #[error("the ekala.toml could not be located")]
-    MissingEkala,
-    /// A valid atom id could not be constructed.
-    #[error("a valid atom id could not be constructed; aborting: {0}")]
-    AtomIdConstruct(String),
-    /// Duplicate atoms were found in the ekala manifest
-    #[error("there is more than one atom with the same label in the set")]
-    DuplicateAtoms,
-    /// A local atom by the requested label doesn't exist
-    #[error("a local atom by the requested label isn't specified in ekala.toml")]
-    NoLocal,
-    /// Duplicate atoms were found in the ekala manifest
-    #[error("locked atoms could not be synchronized with manifest")]
-    SyncFailed,
-    /// A TOML deserialization error occurred.
-    #[error(transparent)]
-    De(#[from] toml_edit::de::Error),
-    /// A TOML serialization error occurred.
-    #[error(transparent)]
-    Ser(#[from] toml_edit::TomlError),
-    /// A filesystem error occurred.
-    #[error(transparent)]
-    Read(#[from] std::io::Error),
-    /// A manifest serialization error occurred.
-    #[error(transparent)]
-    Manifest(#[from] toml_edit::ser::Error),
-    /// An error occurred while writing to a temporary file.
-    #[error(transparent)]
-    Write(#[from] tempfile::PersistError),
-    /// A Git resolution error occurred.
-    #[error(transparent)]
-    Git(#[from] Box<crate::store::git::Error>),
-    /// A semantic versioning error occurred.
-    #[error(transparent)]
-    Semver(#[from] semver::Error),
-    /// A UTF-8 conversion error occurred.
-    #[error(transparent)]
-    Utf8(#[from] bstr::Utf8Error),
-    /// A URL parsing error occurred.
-    #[error(transparent)]
-    Url(#[from] url::ParseError),
-    /// A generic error occurred.
-    #[error(transparent)]
-    Error(#[from] crate::lock::BoxError),
-    /// A invalid refname was passed.
-    #[error(transparent)]
-    BadLabel(#[from] crate::id::Error),
-    /// A set error has occurred.
-    #[error(transparent)]
-    SetError(#[from] super::sets::Error),
 }
 
 /// Represents the manner in which we resolve a rev for this git fetch
@@ -312,14 +447,6 @@ pub struct NixSrc {
 pub(crate) struct DirectDeps {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     nix: HashMap<Name, NixFetch>,
-}
-
-/// A newtype wrapper to tie a `DocumentMut` to a specific serializable type `T`.
-#[derive(Debug)]
-pub(super) struct TypedDocument<T> {
-    /// The underlying `toml_edit` document.
-    inner: DocumentMut,
-    _marker: PhantomData<T>,
 }
 
 struct AtomWriter {
@@ -615,7 +742,7 @@ impl ManifestWriter {
         req: VersionReq,
         id: AtomId<Root>,
         set_tag: Tag,
-    ) -> Result<Dep, crate::store::git::Error> {
+    ) -> Result<Dep, crate::storage::git::Error> {
         if let Ok(dep) = self.resolved.resolve_atom(&id, &req) {
             let dep = Dep::Atom(dep);
             self.insert_or_update_and_log(Either::Left(id), &dep);
@@ -640,7 +767,7 @@ impl ManifestWriter {
                 requested.version = %req,
                 avaliable.versions = %toml_edit::ser::to_string(&versions).unwrap_or_default()
             );
-            Err(DocError::Error(Box::new(crate::store::git::Error::NoMatchingVersion)).into())
+            Err(DocError::Error(Box::new(crate::storage::git::Error::NoMatchingVersion)).into())
         }
     }
 
@@ -649,7 +776,7 @@ impl ManifestWriter {
         req: VersionReq,
         id: AtomId<Root>,
         set_tag: Tag,
-    ) -> Result<(), crate::store::git::Error> {
+    ) -> Result<(), crate::storage::git::Error> {
         if !self
             .lock
             .deps
@@ -718,7 +845,8 @@ impl ManifestWriter {
             let key = Either::Right(name.to_owned());
             let locked = self.lock.deps.as_ref().get(&key);
             if let Some(lock) = locked {
-                use crate::lock::NixUrls;
+                use super::lock::NixUrls;
+
                 let url = dep.get_url();
                 let mut unmatched = false;
                 match (lock, url, &dep.kind) {
@@ -776,7 +904,7 @@ impl ManifestWriter {
         &self,
         uri: &Uri,
         root: &Root,
-    ) -> Result<(AtomReq, AtomDep), crate::store::git::Error> {
+    ) -> Result<(AtomReq, AtomDep), crate::storage::git::Error> {
         let id = AtomId::construct(root, uri.label().to_owned()).expect(Self::ATOM_BUG);
         let dep = self
             .resolved()
@@ -794,7 +922,9 @@ impl ManifestWriter {
         &self,
         uri: &Uri,
         repo: &Repository,
-    ) -> Result<(AtomReq, AtomDep), crate::store::git::Error> {
+    ) -> Result<(AtomReq, AtomDep), crate::storage::git::Error> {
+        use package::sets;
+
         /* we are in a local git repository */
 
         // FIXME?: do we need to add a flag to make this configurable?
@@ -843,7 +973,7 @@ impl ManifestWriter {
         &mut self,
         uri: &Uri,
         mirror: &SetMirror,
-    ) -> Result<(AtomReq, AtomDep), crate::store::git::Error> {
+    ) -> Result<(AtomReq, AtomDep), crate::storage::git::Error> {
         // FIXME: we still need to handle when users pass a filepath (i.e. file://)
         if let (Some(root), SetMirror::Url(_)) = (
             self.resolved.roots.get(&Either::Right(mirror.to_owned())),
@@ -873,7 +1003,8 @@ impl ManifestWriter {
     }
 
     fn get_set_tag(&self, lock_entry: &AtomDep, uri: &Uri, set_tag_from_user: Option<Tag>) -> Tag {
-        use crate::lock;
+        use super::lock;
+
         self.resolved
             .details()
             .get(&lock_entry.set())
@@ -914,7 +1045,7 @@ impl ManifestWriter {
         &mut self,
         uri: Uri,
         set_tag: Option<Tag>,
-    ) -> Result<(), crate::store::git::Error> {
+    ) -> Result<(), crate::storage::git::Error> {
         let mirror = if let Some(url) = uri.url() {
             SetMirror::Url(url.to_owned())
         } else {
@@ -1002,23 +1133,6 @@ impl ManifestWriter {
 
     fn path(&self) -> &Path {
         self.path.as_path()
-    }
-}
-
-impl<T: Serialize + DeserializeOwned> TypedDocument<T> {
-    /// Creates a new `TypedDocument` from a serializable instance of `T`.
-    /// This enforces that the document is created by serializing `T`.
-    pub fn new(doc: &str) -> Result<(Self, T), DocError> {
-        let validated: T = toml_edit::de::from_str(doc)?;
-
-        let inner = doc.parse::<DocumentMut>()?;
-        Ok((
-            Self {
-                inner,
-                _marker: PhantomData,
-            },
-            validated,
-        ))
     }
 }
 

@@ -1,181 +1,147 @@
-//! # Atom Manifest
+//! # Atom Core Types
 //!
-//! This module provides the core types for working with an Atom's manifest format.
-//! The manifest is a TOML file that describes an atom's metadata and dependencies.
-//!
-//! ## Manifest Structure
-//!
-//! Every atom must have a manifest file named `atom.toml` that contains at minimum
-//! a `[package]` section with the atom's label, version, and optional description.
-//! Additional sections can specify package sets and dependencies.
-//!
-//! ## Package Sets and Mirrors
-//!
-//! The `[package.sets]` table defines named sources for atom dependencies. Each set
-//! can be a single URL or an array of mirror URLs. The special value `"::"` represents
-//! the local repository and enables efficient development workflows by allowing atoms
-//! to reference each other without requiring `eka publish` after every change.
-//!
-//! This mirrors the URI format where `::<atom-name>` indicates a local atom from the
-//! current repository (as opposed to remote atoms which would be prefixed with a URL or alias).
-//!
-//! ## Key Types
-//!
-//! - [`Manifest`] - The complete manifest structure, representing the `atom.toml` file.
-//! - [`Atom`] - The core atom metadata (`label`, `version`, `description`, `sets`).
-//! - [`Dependency`] - Atom and direct Nix dependencies (see [`deps`] module).
-//! - [`AtomError`] - Errors that can occur during manifest processing.
-//!
-//! ## Example Manifest
-//!
-//! ```toml
-//! [package]
-//! label = "my-atom"
-//! version = "1.0.0"
-//! description = "A sample atom for demonstration"
-//!
-//! [package.sets]
-//! company-atoms = "git@github.com:our-company/atoms"
-//! local-atoms = "::"
-//!
-//! [deps.from.company-atoms]
-//! other-atom = "^1.0.0"
-//!
-//! [deps.direct.nix]
-//! external-lib.url = "https://example.com/lib.tar.gz"
-//! ```
-//!
-//! ## Validation
-//!
-//! Manifests are strictly validated to ensure they contain all required fields
-//! and have valid data. The `#[serde(deny_unknown_fields)]` attribute ensures
-//! that only known fields are accepted, preventing typos and invalid configurations.
-//!
-//! ## Usage
-//!
-//! Manifests can be created programmatically or parsed from a string or file.
-//!
-//! ```rust,no_run
-//! use std::str::FromStr;
-//!
-//! use atom::manifest::Manifest;
-//! use atom::{Atom, Label};
-//! use semver::Version;
-//!
-//! // Create a manifest programmatically.
-//! let manifest = Manifest::new(Label::try_from("my-atom").unwrap(), Version::new(1, 0, 0));
-//!
-//! // Parse a manifest from a string.
-//! let manifest_str = r#"
-//! [atom]
-//! label = "parsed-atom"
-//! version = "2.0.0"
-//! "#;
-//! let parsed = Manifest::from_str(manifest_str).unwrap();
-//! ```
+//! This module contains the fundamental types that represent atoms and their
+//! file system structure. These types form the foundation of the atom format
+//! and are used throughout the crate.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 
 use gix::{Repository, ThreadSafeRepository};
-use path_clean::PathClean;
+use id::{Label, Tag};
+use manifest::{AtomSet, Manifest};
 use semver::Version;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use tempfile::NamedTempFile;
-use thiserror::Error;
-use toml_edit::{DocumentMut, de};
+use toml_edit::DocumentMut;
 
-use crate::id::Tag;
-use crate::lock::BoxError;
-use crate::manifest::deps::{Dependency, DocError, TypedDocument};
-use crate::store::NormalizeStorePath;
-use crate::{ATOM_MANIFEST_NAME, Atom, Label};
+use super::{AtomError, sets};
+use crate::{ATOM_MANIFEST_NAME, id};
 
-pub mod deps;
-pub(crate) mod sets;
+pub mod lock;
+pub mod manifest;
 
 //================================================================================================
 // Types
 //================================================================================================
 
-/// An error that can occur when parsing or handling an atom manifest.
-#[derive(Error, Debug)]
-pub enum AtomError {
-    /// The manifest is missing the required `[atom]` table.
-    #[error("Manifest is missing the `[package]` key")]
-    Missing,
-    /// One of the fields in the `[package]` table is missing or invalid.
-    #[error(transparent)]
-    InvalidAtom(#[from] de::Error),
-    /// The manifest is not valid TOML.
-    #[error(transparent)]
-    InvalidToml(#[from] toml_edit::TomlError),
-    /// could not locate ekala manifest
-    #[error("failed to locate Ekala manifest")]
-    EkalaManifest,
-    /// An I/O error occurred while reading the manifest file.
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
-    /// An Label is missing or malformed
-    #[error(transparent)]
-    Id(#[from] crate::id::Error),
-    /// A document error
-    #[error(transparent)]
-    Doc(#[from] DocError),
-    /// A generic boxed error
-    #[error(transparent)]
-    Generic(#[from] BoxError),
-}
-
-/// A strongly-typed representation of a source for an atom set.
-#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum SetMirror {
-    /// Represents the local repository, allowing atoms to be resolved by path.
-    #[serde(rename = "::")]
-    Local,
-    /// A URL pointing to a remote repository that serves as a source for an atom set.
-    #[serde(
-        serialize_with = "deps::serialize_url",
-        deserialize_with = "deps::deserialize_url",
-        untagged
-    )]
-    Url(gix::Url),
-}
-
-/// Represents the possible values for a named atom set in the manifest.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
-#[serde(untagged)]
-pub enum AtomSet {
-    /// A single source for an atom set.
-    Singleton(SetMirror),
-    /// A set of mirrors for an atom set.
-    ///
-    /// Since sets can be determined to be equivalent by their root hash, this allows a user to
-    /// provide multiple sources for the same set. The resolver will check for equivalence at
-    /// runtime by fetching the root commit from each URL. Operations like `publish` will
-    /// error if inconsistent mirrors are detected.
-    Mirrors(BTreeSet<SetMirror>),
-}
-
-/// Represents the structure of an `atom.toml` manifest file.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+/// Represents the deserialized form of an Atom, directly constructed from the TOML manifest.
+///
+/// This struct contains the basic metadata of an Atom but lacks the context-specific
+/// [`crate::AtomId`], which must be constructed separately.
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Manifest {
-    /// The required `[package]` table, containing core metadata.
-    package: Atom,
-    /// The dependencies of the atom.
-    #[serde(default, skip_serializing_if = "Dependency::is_empty")]
-    deps: Dependency,
+pub struct Atom {
+    /// The verified, human-readable Unicode identifier for the Atom.
+    label: Label,
+
+    /// The version of the Atom.
+    version: Version,
+
+    /// An set of structured meta-data
+    #[serde(skip_serializing_if = "Option::is_none")]
+    meta: Option<Meta>,
+
+    /// A table of named atom sets, defining the sources for resolving atom dependencies.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    sets: HashMap<Tag, AtomSet>,
 }
 
-/// A specialized result type for manifest operations.
-pub type AtomResult<T> = Result<T, AtomError>;
-
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
-struct MetaData {
-    tags: Option<BTreeSet<Tag>>,
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Default)]
+pub struct Meta {
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    tags: BTreeSet<Tag>,
+    /// An optional description of the Atom.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
 }
+
+/// Represents the file system paths associated with an atom.
+///
+/// This struct manages the relationship between an atom's manifest file
+/// (the "spec") and its content directory. It handles the logic for determining
+/// these paths based on whether we're given a manifest file or a content directory.
+#[derive(Debug)]
+pub(crate) struct AtomPaths<P>
+where
+    P: AsRef<Path>,
+{
+    /// Path to the atom's manifest file (atom.toml)
+    spec: P,
+    /// Path to the atom's content directory
+    content: P,
+}
+
+#[derive(thiserror::Error, Debug)]
+/// Errors that can occur when working with a `TypedDocument`.
+pub enum DocError {
+    /// Missing atom from manifest
+    #[error("the atom directory disappeared or is inaccessible: {0}")]
+    Missing(PathBuf),
+    /// The manifest path could not be accessed.
+    #[error("the ekala.toml could not be located")]
+    MissingEkala,
+    /// A valid atom id could not be constructed.
+    #[error("a valid atom id could not be constructed; aborting: {0}")]
+    AtomIdConstruct(String),
+    /// Duplicate atoms were found in the ekala manifest
+    #[error("there is more than one atom with the same label in the set")]
+    DuplicateAtoms,
+    /// A local atom by the requested label doesn't exist
+    #[error("a local atom by the requested label isn't specified in ekala.toml")]
+    NoLocal,
+    /// Duplicate atoms were found in the ekala manifest
+    #[error("locked atoms could not be synchronized with manifest")]
+    SyncFailed,
+    /// A TOML deserialization error occurred.
+    #[error(transparent)]
+    De(#[from] toml_edit::de::Error),
+    /// A TOML serialization error occurred.
+    #[error(transparent)]
+    Ser(#[from] toml_edit::TomlError),
+    /// A filesystem error occurred.
+    #[error(transparent)]
+    Read(#[from] std::io::Error),
+    /// A manifest serialization error occurred.
+    #[error(transparent)]
+    Manifest(#[from] toml_edit::ser::Error),
+    /// An error occurred while writing to a temporary file.
+    #[error(transparent)]
+    Write(#[from] tempfile::PersistError),
+    /// A Git resolution error occurred.
+    #[error(transparent)]
+    Git(#[from] Box<crate::storage::git::Error>),
+    /// A semantic versioning error occurred.
+    #[error(transparent)]
+    Semver(#[from] semver::Error),
+    /// A UTF-8 conversion error occurred.
+    #[error(transparent)]
+    Utf8(#[from] bstr::Utf8Error),
+    /// A URL parsing error occurred.
+    #[error(transparent)]
+    Url(#[from] url::ParseError),
+    /// A generic error occurred.
+    #[error(transparent)]
+    Error(#[from] crate::BoxError),
+    /// A invalid refname was passed.
+    #[error(transparent)]
+    BadLabel(#[from] crate::id::Error),
+    /// A set error has occurred.
+    #[error(transparent)]
+    SetError(#[from] sets::Error),
+}
+
+/// A newtype wrapper to tie a `DocumentMut` to a specific serializable type `T`.
+#[derive(Debug)]
+pub(super) struct TypedDocument<T> {
+    /// The underlying `toml_edit` document.
+    inner: DocumentMut,
+    _marker: PhantomData<T>,
+}
+
+#[derive(Debug, PartialEq, Eq, Default)]
+struct AtomMap(BTreeMap<Label, PathBuf>);
 
 /// The entrypoint for an ekala manifest describing a set of atoms.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
@@ -183,6 +149,11 @@ struct MetaData {
 pub struct EkalaManifest {
     set: EkalaSet,
     metadata: Option<MetaData>,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+struct MetaData {
+    tags: Option<BTreeSet<Tag>>,
 }
 
 /// The section of the manifest describing the Ekala set of atoms.
@@ -193,9 +164,6 @@ pub struct EkalaSet {
     packages: AtomMap,
 }
 
-#[derive(Debug, PartialEq, Eq, Default)]
-pub(crate) struct AtomMap(BTreeMap<Label, PathBuf>);
-
 /// A writer to assist with writing into the Ekala manifest.
 #[derive(Debug)]
 pub struct EkalaManager {
@@ -205,9 +173,154 @@ pub struct EkalaManager {
     manifest: EkalaManifest,
 }
 
+/// Represents different types of Git commit hashes.
+///
+/// This enum supports both SHA-1 and SHA-256 hashes, which are serialized
+/// as untagged values in TOML for maximum compatibility.
+#[derive(Copy, Serialize, Deserialize, Debug, PartialEq, Clone, Eq, PartialOrd, Ord)]
+#[serde(untagged)]
+pub enum GitDigest {
+    /// A SHA-1 commit hash.
+    #[serde(rename = "sha1")]
+    Sha1(#[serde(with = "hex")] [u8; 20]),
+    /// A SHA-256 commit hash.
+    #[serde(rename = "sha256")]
+    Sha256(#[serde(with = "hex")] [u8; 32]),
+}
+
 //================================================================================================
 // Impls
 //================================================================================================
+
+impl AtomPaths<PathBuf> {
+    /// Creates a new `AtomPaths` instance from a given path.
+    ///
+    /// If the path points to a manifest file (named `atom.toml`), then:
+    /// - `spec` is set to that file path
+    /// - `content` is set to the parent directory
+    ///
+    /// If the path points to a directory, then:
+    /// - `spec` is set to `path/atom.toml`
+    /// - `content` is set to the provided path
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Either a path to a manifest file or content directory
+    ///
+    /// # Returns
+    ///
+    /// An `AtomPaths` instance with the appropriate spec and content paths.
+    pub(crate) fn new<P: AsRef<Path>>(path: P) -> Self {
+        let path = path.as_ref();
+        let name = path
+            .file_name()
+            .unwrap_or(path.as_os_str())
+            .to_string_lossy();
+
+        if name == crate::ATOM_MANIFEST_NAME.as_str() {
+            AtomPaths {
+                spec: path.into(),
+                content: path.parent().unwrap_or(Path::new("")).into(),
+            }
+        } else {
+            let spec = path.join(crate::ATOM_MANIFEST_NAME.as_str());
+            AtomPaths {
+                spec: spec.clone(),
+                content: path.into(),
+            }
+        }
+    }
+
+    /// Returns the path to the atom's manifest file.
+    ///
+    /// This is the `atom.toml` file that contains the atom's metadata
+    /// and dependency specifications.
+    pub fn spec(&self) -> &Path {
+        self.spec.as_ref()
+    }
+
+    /// Returns the path to the atom's content directory.
+    ///
+    /// This directory contains the actual source code or files that
+    /// make up the atom's content.
+    pub fn content(&self) -> &Path {
+        self.content.as_ref()
+    }
+}
+
+impl Atom {
+    pub(crate) fn new(label: Label, version: Version) -> Self {
+        Self {
+            label,
+            version,
+            meta: None,
+            sets: HashMap::new(),
+        }
+    }
+
+    /// return a reference to the atom's label
+    pub fn label(&self) -> &Label {
+        &self.label
+    }
+
+    /// consume the atom and take ownership of the label
+    pub fn take_label(self) -> Label {
+        self.label
+    }
+
+    /// return a reference to the atom's version
+    pub fn version(&self) -> &Version {
+        &self.version
+    }
+
+    /// consume the atom and take ownership of the version
+    pub fn take_version(self) -> Version {
+        self.version
+    }
+
+    /// return a reference to this atom's metadata, if it has any
+    pub fn meta(&self) -> Option<&Meta> {
+        if let Some(meta) = &self.meta {
+            Some(meta)
+        } else {
+            None
+        }
+    }
+
+    /// consume the atom and take ownership of the metadata, if there is any
+    pub fn take_meta(self) -> Option<Meta> {
+        self.meta
+    }
+
+    /// return a reference to this atom's defined sets
+    pub fn sets(&self) -> &HashMap<Tag, AtomSet> {
+        &self.sets
+    }
+}
+
+impl Meta {
+    pub fn tags(&self) -> &BTreeSet<Tag> {
+        &self.tags
+    }
+}
+
+impl AsMut<Option<Meta>> for Atom {
+    fn as_mut(&mut self) -> &mut Option<Meta> {
+        &mut self.meta
+    }
+}
+
+impl AsMut<BTreeSet<Tag>> for Meta {
+    fn as_mut(&mut self) -> &mut BTreeSet<Tag> {
+        &mut self.tags
+    }
+}
+
+impl AsMut<Meta> for Meta {
+    fn as_mut(&mut self) -> &mut Meta {
+        self
+    }
+}
 
 impl AsRef<BTreeMap<Label, PathBuf>> for AtomMap {
     fn as_ref(&self) -> &BTreeMap<Label, PathBuf> {
@@ -218,70 +331,6 @@ impl AsRef<BTreeMap<Label, PathBuf>> for AtomMap {
 impl AsMut<BTreeMap<Label, PathBuf>> for AtomMap {
     fn as_mut(&mut self) -> &mut BTreeMap<Label, PathBuf> {
         &mut self.0
-    }
-}
-
-impl Manifest {
-    /// Creates a new `Manifest` with the given label, version, and description.
-    pub fn new(label: Label, version: Version) -> Self {
-        Manifest {
-            package: Atom::new(label, version),
-            deps: Dependency::new(),
-        }
-    }
-
-    /// Parses an [`Atom`] struct from the `[package]` table of a TOML document string,
-    /// ignoring other tables and fields.
-    ///
-    /// # Errors
-    ///
-    /// This function will return an error if the content is invalid TOML,
-    /// or if the `[package]` table is missing.
-    pub(crate) fn get_atom(content: &str) -> AtomResult<Atom> {
-        let doc = content.parse::<DocumentMut>()?;
-
-        if let Some(v) = doc.get("package").map(ToString::to_string) {
-            let atom = de::from_str::<Atom>(&v)?;
-            Ok(atom)
-        } else {
-            Err(AtomError::Missing)
-        }
-    }
-
-    pub(crate) fn get_atom_label<P: AsRef<Path>>(path: P) -> AtomResult<Label> {
-        let content = std::fs::read_to_string(&path)?;
-        let atom = Self::get_atom(&content)?;
-        Ok(atom.take_label())
-    }
-
-    pub(crate) fn deps(&self) -> &Dependency {
-        &self.deps
-    }
-}
-
-impl std::fmt::Display for SetMirror {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            SetMirror::Local => write!(f, "::"),
-            SetMirror::Url(url) => write!(f, "{}", url),
-        }
-    }
-}
-
-impl FromStr for Manifest {
-    type Err = de::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        de::from_str(s)
-    }
-}
-
-impl TryFrom<PathBuf> for Manifest {
-    type Error = AtomError;
-
-    fn try_from(path: PathBuf) -> Result<Self, Self::Error> {
-        let content = std::fs::read_to_string(path)?;
-        Ok(Manifest::from_str(&content)?)
     }
 }
 
@@ -363,25 +412,26 @@ impl<'de> Deserialize<'de> for AtomMap {
     where
         D: serde::Deserializer<'de>,
     {
-        use crate::store::git;
+        use path_clean::PathClean;
+        use serde::de;
+
+        use crate::storage::{NormalizeStorePath, git};
         let repo = git::repo().ok().flatten().map(|r| r.to_thread_local());
         let entries: Vec<PathBuf> = Vec::deserialize(deserializer)?;
         let mut map = BTreeMap::new();
 
         let rel_to_root = repo
             .as_ref()
-            .ok_or(crate::store::git::Error::NoWorkDir)
+            .ok_or(crate::storage::git::Error::NoWorkDir)
             .and_then(|r| r.rel_from_root(r.current_dir()));
         for path in entries {
             let normalized = if let Some(repo) = &repo {
-                let rel_to_root = rel_to_root.as_ref().map_err(serde::de::Error::custom)?;
+                let rel_to_root = rel_to_root.as_ref().map_err(de::Error::custom)?;
                 let rel_path = rel_to_root.join(&path);
                 let cwd = repo
                     .normalize(repo.current_dir())
-                    .map_err(serde::de::Error::custom)?;
-                let normal = repo
-                    .normalize(&rel_path)
-                    .map_err(serde::de::Error::custom)?;
+                    .map_err(de::Error::custom)?;
+                let normal = repo.normalize(&rel_path).map_err(de::Error::custom)?;
                 pathdiff::diff_paths(&normal, cwd)
                     .unwrap_or(rel_path)
                     .clean()
@@ -390,7 +440,7 @@ impl<'de> Deserialize<'de> for AtomMap {
             };
             let label =
                 Manifest::get_atom_label(normalized.join(crate::ATOM_MANIFEST_NAME.as_str()))
-                    .map_err(serde::de::Error::custom)?;
+                    .map_err(de::Error::custom)?;
             if let Some(path) = map.insert(label.to_owned(), normalized.to_owned()) {
                 tracing::error!(
                     atoms.label = %label,
@@ -398,7 +448,7 @@ impl<'de> Deserialize<'de> for AtomMap {
                     atoms.snd.path = %path.display(),
                     "two atoms share the same `label`"
                 );
-                return Err(serde::de::Error::custom(
+                return Err(de::Error::custom(
                     "atoms must have unique labels to retain distinct identities",
                 ));
             }
@@ -511,10 +561,12 @@ impl EkalaManager {
         &mut self,
         label: Label,
         package_path: impl AsRef<Path>,
-        version: Version,
-    ) -> Result<(), crate::store::git::Error> {
+        version: semver::Version,
+    ) -> Result<(), crate::storage::git::Error> {
         use std::fs;
         use std::io::Write;
+
+        use tempfile::NamedTempFile;
 
         let mut tmp = NamedTempFile::with_prefix_in(format!(".new_atom-{}", label.as_str()), ".")?;
 
@@ -560,7 +612,7 @@ impl EkalaManager {
         &mut self,
         package_path: impl AsRef<Path>,
         label: Label,
-    ) -> Result<(), crate::store::git::Error> {
+    ) -> Result<(), crate::storage::git::Error> {
         use toml_edit::{Array, Value};
 
         if let Some(path) = self.manifest.set.packages.as_ref().get(&label) {
@@ -575,7 +627,7 @@ impl EkalaManager {
             return Err(DocError::DuplicateAtoms.into());
         }
 
-        use crate::store::NormalizeStorePath;
+        use crate::storage::NormalizeStorePath;
         let path = if let Some(repo) = &self.repo {
             repo.normalize(package_path)?
         } else {
@@ -633,4 +685,21 @@ fn find_upwards(filename: &str) -> Result<(PathBuf, PathBuf), std::io::Error> {
         std::io::ErrorKind::NotFound,
         "could not locate ekala manifest",
     ))
+}
+
+impl<T: Serialize + DeserializeOwned> TypedDocument<T> {
+    /// Creates a new `TypedDocument` from a serializable instance of `T`.
+    /// This enforces that the document is created by serializing `T`.
+    pub fn new(doc: &str) -> Result<(Self, T), DocError> {
+        let validated: T = toml_edit::de::from_str(doc)?;
+
+        let inner = doc.parse::<DocumentMut>()?;
+        Ok((
+            Self {
+                inner,
+                _marker: PhantomData,
+            },
+            validated,
+        ))
+    }
 }

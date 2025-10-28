@@ -13,7 +13,7 @@ pub mod git {
 
     use gix::object;
 
-    use crate::store::git::Root;
+    use crate::storage::git::Root;
 
     //================================================================================================
     // Types
@@ -44,7 +44,7 @@ pub mod git {
         },
         /// The Atom manifest is invalid, and this Atom will be ignored.
         #[error("Ignoring invalid Atom manifest")]
-        Invalid(#[source] crate::manifest::AtomError, Box<PathBuf>),
+        Invalid(#[source] crate::package::AtomError, Box<PathBuf>),
         /// An I/O error occurred.
         #[error(transparent)]
         Io(#[from] std::io::Error),
@@ -89,7 +89,7 @@ pub mod git {
         SomePushFailed,
         /// An error occurred within the git store.
         #[error(transparent)]
-        StoreError(#[from] Box<crate::store::git::Error>),
+        StoreError(#[from] Box<crate::storage::git::Error>),
         /// Failed to write a git object.
         #[error(transparent)]
         WriteFailed(#[from] object::write::Error),

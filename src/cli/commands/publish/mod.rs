@@ -8,8 +8,8 @@ mod git;
 use std::path::PathBuf;
 
 use anyhow::Result;
-use atom::publish::Stats;
-use atom::publish::error::PublishError;
+use atom::package::publish::Stats;
+use atom::package::publish::error::PublishError;
 use clap::Parser;
 
 use crate::cli::store::Detected;
@@ -50,7 +50,7 @@ pub(super) async fn run(store: Detected, args: PublishArgs) -> Result<Stats, Pub
     #[allow(clippy::single_match)]
     match store {
         Detected::Git(repo) => {
-            use atom::publish::{Content, error};
+            use atom::package::publish::{Content, error};
             use {Err as Skipped, Ok as Published};
             let (results, mut errors) = git::run(repo, args).await?;
 

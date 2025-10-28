@@ -19,16 +19,16 @@ use gix::{Object, ObjectId, Reference};
 use semver::Version;
 use tracing_indicatif::span_ext::IndicatifSpanExt;
 
+use super::super::error::git::Error;
+use super::super::{
+    ATOM_FORMAT_VERSION, ATOM_MANIFEST, ATOM_ORIGIN, ATOM_REFS, EMPTY_SIG, META_REFS,
+};
 use super::{
     AtomContext, AtomRef, AtomReferences, CommittedAtom, FoundAtom, GitContent, GitContext,
     GitResult, RefKind,
 };
-use crate::core::AtomPaths;
-use crate::publish::error::git::Error;
-use crate::publish::{
-    ATOM_FORMAT_VERSION, ATOM_MANIFEST, ATOM_ORIGIN, ATOM_REFS, EMPTY_SIG, META_REFS,
-};
-use crate::store::git;
+use crate::package::metadata::AtomPaths;
+use crate::storage::git;
 use crate::{Atom, AtomId, Manifest};
 
 //================================================================================================

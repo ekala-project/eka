@@ -79,8 +79,11 @@ use bstr::ByteSlice;
 use gix::ObjectId;
 use gix::protocol::handshake::Ref;
 use gix::protocol::transport::client::Transport;
+use id::{AtomDigest, Label, Name, Tag};
 use lazy_regex::{Lazy, Regex, lazy_regex};
+use manifest::{AtomReq, GitSpec, NixFetch, NixGit, NixReq, SetMirror};
 use nix_compat::nixhash::NixHash;
+use package::sets::ResolvedAtom;
 use semver::{Version, VersionReq};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use snix_castore::blobservice::BlobService;
@@ -88,16 +91,13 @@ use snix_castore::directoryservice::DirectoryService;
 use snix_glue::fetchers::Fetcher;
 use snix_store::nar::SimpleRenderer;
 use snix_store::pathinfoservice::PathInfoService;
+use storage::git::Root;
+use storage::{QueryStore, QueryVersion, UnpackedRef};
+use uri::{Uri, VERSION_PLACEHOLDER};
 use url::Url;
 
-use crate::id::{AtomDigest, Label, Name, Tag};
-use crate::manifest::SetMirror;
-use crate::manifest::deps::{self, AtomReq, GitSpec, NixFetch, NixGit, NixReq};
-use crate::manifest::sets::ResolvedAtom;
-use crate::store::git::Root;
-use crate::store::{QueryStore, QueryVersion, UnpackedRef};
-use crate::uri::{Uri, VERSION_PLACEHOLDER};
-use crate::{AtomId, Compute, Origin};
+use super::{GitDigest, manifest};
+use crate::{AtomId, BoxError, Compute, Origin, id, package, storage, uri};
 //================================================================================================
 // Statics
 //================================================================================================
@@ -132,8 +132,8 @@ pub(crate) struct AtomDep {
     /// resolve mirrors (e.g. nix).
     #[serde(
         default,
-        serialize_with = "deps::maybe_serialize_url",
-        deserialize_with = "deps::maybe_deserialize_url",
+        serialize_with = "manifest::maybe_serialize_url",
+        deserialize_with = "manifest::maybe_deserialize_url",
         skip_serializing_if = "Option::is_none"
     )]
     mirror: Option<gix::Url>,
@@ -205,21 +205,6 @@ type DepKey<R> = either::Either<AtomId<R>, Name>;
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct DepMap<R, Deps: Ord>(BTreeMap<DepKey<R>, Deps>);
 
-/// Represents different types of Git commit hashes.
-///
-/// This enum supports both SHA-1 and SHA-256 hashes, which are serialized
-/// as untagged values in TOML for maximum compatibility.
-#[derive(Copy, Serialize, Deserialize, Debug, PartialEq, Clone, Eq, PartialOrd, Ord)]
-#[serde(untagged)]
-pub enum GitDigest {
-    /// A SHA-1 commit hash.
-    #[serde(rename = "sha1")]
-    Sha1(#[serde(with = "hex")] [u8; 20]),
-    /// A SHA-256 commit hash.
-    #[serde(rename = "sha256")]
-    Sha256(#[serde(with = "hex")] [u8; 32]),
-}
-
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq, PartialOrd, Ord)]
 /// The set of locked mirrors from the manifest
 pub struct SetDetails {
@@ -277,8 +262,8 @@ pub struct NixGitDep {
     pub name: Name,
     /// The Git repository URL.
     #[serde(
-        serialize_with = "deps::serialize_url",
-        deserialize_with = "deps::deserialize_url"
+        serialize_with = "manifest::serialize_url",
+        deserialize_with = "manifest::deserialize_url"
     )]
     pub url: gix::Url,
     /// The version which was resolved (if requested).
@@ -307,9 +292,6 @@ pub struct NixTarDep {
 #[derive(Debug, PartialEq, PartialOrd, Eq, Clone, Serialize, Ord)]
 pub(crate) struct WrappedNixHash(pub NixHash);
 
-/// A type alias for a boxed error that is sendable and syncable.
-pub(crate) type BoxError = Box<dyn std::error::Error + Send + Sync>;
-
 #[derive(thiserror::Error, Debug)]
 enum LockError {
     #[error(transparent)]
@@ -319,7 +301,7 @@ enum LockError {
 }
 
 /// An enum to handle different URL types for filename extraction.
-pub(crate) enum NixUrls<'a> {
+pub(super) enum NixUrls<'a> {
     Url(&'a Url),
     Git(&'a gix::Url),
 }
@@ -362,7 +344,7 @@ impl Uri {
     pub(crate) fn resolve(
         &self,
         transport: Option<&mut Box<dyn Transport + Send>>,
-    ) -> Result<(AtomReq, AtomDep), crate::store::git::Error> {
+    ) -> Result<(AtomReq, AtomDep), crate::storage::git::Error> {
         let url = self.url();
         let label = self.label();
         if url.is_some_and(|u| u.scheme != gix::url::Scheme::File) {
@@ -375,7 +357,7 @@ impl Uri {
                     label,
                     &self.version_req(),
                 )
-                .ok_or(crate::store::git::Error::NoMatchingVersion)?;
+                .ok_or(crate::storage::git::Error::NoMatchingVersion)?;
             let atom_req = if let Some(req) = self.version() {
                 AtomReq::new(req.to_owned())
             } else {
@@ -591,7 +573,7 @@ impl NixFetch {
         clone
     }
 
-    pub(crate) fn get_url(&self) -> NixUrls<'_> {
+    pub(super) fn get_url(&self) -> NixUrls<'_> {
         match &self.kind {
             NixReq::Tar(url) => NixUrls::Url(url),
             NixReq::Url(url) => NixUrls::Url(url),
@@ -687,7 +669,7 @@ impl From<ObjectId> for GitDigest {
 
 impl NixGit {
     async fn resolve(&self, key: &Name) -> Result<NixGitDep, LockError> {
-        use crate::store::QueryStore;
+        use crate::storage::QueryStore;
 
         let (version, r) = match &self.spec {
             Some(GitSpec::Ref(r)) => (
@@ -722,7 +704,7 @@ impl NixGit {
         };
 
         use gix::ObjectId;
-        let ObjectId::Sha1(id) = crate::store::git::to_id(r);
+        let ObjectId::Sha1(id) = crate::storage::git::to_id(r);
 
         Ok(NixGitDep {
             name: key.to_owned(),

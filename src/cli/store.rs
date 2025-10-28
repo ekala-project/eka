@@ -2,7 +2,7 @@
 
 use std::fs;
 
-use atom::store::git;
+use atom::storage::git;
 use gix::ThreadSafeRepository;
 use thiserror::Error;
 

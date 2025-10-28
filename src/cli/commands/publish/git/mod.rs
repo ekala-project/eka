@@ -3,10 +3,10 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-use atom::publish::error::git::Error;
-use atom::publish::git::{GitOutcome, GitPublisher, GitResult};
-use atom::publish::{Builder, Publish};
-use atom::store::{NormalizeStorePath, QueryVersion, git};
+use atom::package::publish::error::git::Error;
+use atom::package::publish::git::{GitOutcome, GitPublisher, GitResult};
+use atom::package::publish::{Builder, Publish};
+use atom::storage::{NormalizeStorePath, QueryVersion, git};
 use clap::Parser;
 use gix::ThreadSafeRepository;
 use tracing_indicatif::span_ext::IndicatifSpanExt;

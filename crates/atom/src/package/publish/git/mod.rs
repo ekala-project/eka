@@ -24,10 +24,10 @@ use tokio::task::JoinSet;
 
 use super::error::git::Error;
 use super::{Builder, Content, Publish, PublishOutcome, Record, StateValidator, ValidAtoms};
-use crate::core::AtomPaths;
 use crate::id::Label;
-use crate::store::git::Root;
-use crate::store::{NormalizeStorePath, QueryStore};
+use crate::package::metadata::AtomPaths;
+use crate::storage::git::Root;
+use crate::storage::{NormalizeStorePath, QueryStore};
 use crate::{Atom, AtomId};
 
 mod inner;
@@ -266,7 +266,7 @@ impl<'a> GitPublisher<'a> {
         spec: &'a str,
         progress: &'a tracing::Span,
     ) -> GitResult<Self> {
-        use crate::store::Init;
+        use crate::storage::Init;
         let remote = repo.find_remote(remote_str).map_err(Box::new)?;
         let mut transport = remote.get_transport().map_err(Box::new)?;
         // TODO: we actually need to verify the label
@@ -329,7 +329,7 @@ impl<'a> Publish<Root> for GitContext<'a> {
     where
         C: IntoIterator<Item = PathBuf>,
     {
-        use crate::store::git;
+        use crate::storage::git;
         let iter = paths.into_iter();
         iter.map(|path| {
             let path = match self.repo.normalize(&path) {

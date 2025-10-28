@@ -8,8 +8,7 @@ use std::future::Future;
 use std::path::PathBuf;
 
 use anyhow::Result;
-use atom::Label;
-use atom::manifest::EkalaManager;
+use atom::{EkalaManager, Label};
 use clap::Parser;
 use semver::Version;
 

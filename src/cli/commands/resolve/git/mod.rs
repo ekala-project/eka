@@ -1,6 +1,6 @@
 //! This module defines Git-specific arguments for the `resolve` subcommand.
 
-use atom::store::git;
+use atom::storage::git;
 use clap::Parser;
 
 //================================================================================================

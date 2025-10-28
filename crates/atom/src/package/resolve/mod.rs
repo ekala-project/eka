@@ -1,88 +1,41 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap};
 
 use either::Either;
-use gix::protocol::transport::client::Transport;
-use gix::{ObjectId, ThreadSafeRepository};
-use semver::{Version, VersionReq};
-use tokio::task::JoinSet;
+use id::Tag;
+use metadata::lock::{AtomDep, SetDetails};
+use metadata::manifest::SetMirror;
+use metadata::{DocError, GitDigest};
+use semver::VersionReq;
+use sets::{MirrorResult, ResolvedAtom, ResolvedSets, SetResolver};
+use storage::git::{AtomQuery, Root};
 
-use crate::id::Tag;
-use crate::lock::{AtomDep, BoxError, GitDigest, SetDetails};
-use crate::manifest::deps::DocError;
-use crate::manifest::{AtomError, EkalaManager, SetMirror};
-use crate::store::UnpackedRef;
-use crate::store::git::{AtomQuery, Root};
-use crate::{AtomId, Manifest};
+use super::{metadata, sets};
+use crate::{AtomId, BoxError, id, storage};
 
-#[derive(thiserror::Error, Debug)]
-pub enum Error {
-    #[error("manifest is in an inconsistent state")]
-    Inconsistent,
-    #[error("You are not inside a structured local set, `::` has no meaning as a mirror")]
-    NoLocal,
+impl ResolvedSets {
+    pub(super) fn resolve_atom(
+        &self,
+        id: &AtomId<Root>,
+        req: &VersionReq,
+    ) -> Result<AtomDep, DocError> {
+        use crate::storage::git;
+        let versions = self
+            .atoms
+            .get(id)
+            .ok_or(DocError::Git(Box::new(git::Error::NoMatchingVersion)))?;
+        if let Some((_, atom)) = versions
+            .iter()
+            .filter(|(v, _)| req.matches(v))
+            .max_by_key(|(ref version, _)| version.to_owned())
+        {
+            Ok(AtomDep::from(atom.to_owned()))
+        } else {
+            Err(Box::new(git::Error::NoMatchingVersion).into())
+        }
+    }
 }
-
-pub(crate) struct ResolvedSets {
-    pub(crate) atoms: ResolvedAtoms<ObjectId, Root>,
-    pub(crate) roots: HashMap<Either<Tag, SetMirror>, Root>,
-    pub(crate) transports: HashMap<gix::Url, Box<dyn Transport + Send>>,
-    details: BTreeMap<GitDigest, SetDetails>,
-    pub(crate) ekala: EkalaManager,
-    pub(crate) repo: Option<gix::Repository>,
-}
-
-#[derive(Clone)]
-pub(crate) struct ResolvedAtom<Id, R> {
-    pub(crate) unpacked: UnpackedRef<Id, R>,
-    pub(crate) remotes: BTreeSet<gix::Url>,
-}
-
-type ResolvedAtoms<Id, R> = HashMap<AtomId<R>, HashMap<Version, ResolvedAtom<Id, R>>>;
-
-pub(crate) struct SetResolver<'a> {
-    manifest: &'a Manifest,
-    repo: Option<gix::Repository>,
-    names: HashMap<Root, Tag>,
-    roots: HashMap<Either<Tag, SetMirror>, Root>,
-    tasks: JoinSet<MirrorResult>,
-    atoms: ResolvedAtoms<ObjectId, Root>,
-    sets: BTreeMap<GitDigest, SetDetails>,
-    transports: HashMap<gix::Url, Box<dyn Transport + Send>>,
-    ekala: EkalaManager,
-}
-
-type MirrorResult = Result<
-    (
-        Option<Box<dyn Transport + Send>>,
-        <Vec<AtomQuery> as IntoIterator>::IntoIter,
-        Root,
-        Tag,
-        gix::Url,
-    ),
-    BoxError,
->;
 
 impl<'a> SetResolver<'a> {
-    /// Creates a new `SetResolver` to validate the package sets in a manifest.
-    pub(super) fn new(
-        repo: Option<&ThreadSafeRepository>,
-        manifest: &'a Manifest,
-    ) -> Result<Self, AtomError> {
-        let len = manifest.package.sets().len();
-        let ekala = EkalaManager::new(repo)?;
-        Ok(Self {
-            manifest,
-            ekala,
-            repo: repo.map(|r| r.to_thread_local()),
-            names: HashMap::with_capacity(len),
-            roots: HashMap::with_capacity(len),
-            tasks: JoinSet::new(),
-            atoms: HashMap::with_capacity(len * 10),
-            transports: HashMap::with_capacity(len * 3),
-            sets: BTreeMap::new(),
-        })
-    }
-
     /// Verifies the integrity of declared package sets and collects atom references.
     ///
     /// This function consumes the resolver and performs several critical checks to
@@ -107,10 +60,10 @@ impl<'a> SetResolver<'a> {
     /// - A repository is found in more than one mirror set.
     /// - The mirrors for a given set do not all point to the same root hash.
     /// - An atom is advertised with the same version but different revisions across mirrors.
-    pub(crate) async fn get_and_check_sets(mut self) -> Result<ResolvedSets, BoxError> {
-        use crate::manifest::AtomSet;
+    pub(super) async fn get_and_check_sets(mut self) -> Result<ResolvedSets, BoxError> {
+        use super::metadata::manifest::AtomSet;
 
-        for (set_tag, set) in self.manifest.package.sets().iter() {
+        for (set_tag, set) in self.manifest.package().sets().iter() {
             match set {
                 AtomSet::Singleton(mirror) => self.process_mirror(set_tag, mirror)?,
                 AtomSet::Mirrors(mirrors) => {
@@ -139,14 +92,9 @@ impl<'a> SetResolver<'a> {
     ///
     /// For local mirrors, it calculates the root hash directly. For remote mirrors,
     /// it spawns an asynchronous task to fetch repository data and perform checks.
-    fn process_mirror(
-        &mut self,
-        set_tag: &'a Tag,
-        mirror: &'a crate::manifest::SetMirror,
-    ) -> Result<(), BoxError> {
+    fn process_mirror(&mut self, set_tag: &'a Tag, mirror: &'a SetMirror) -> Result<(), BoxError> {
         use crate::id::Origin;
-        use crate::manifest::SetMirror;
-        use crate::store::{QueryStore, QueryVersion};
+        use crate::storage::{QueryStore, QueryVersion};
 
         match mirror {
             SetMirror::Local => {
@@ -161,7 +109,7 @@ impl<'a> SetResolver<'a> {
                     self.check_set_consistency(set_tag, root, &SetMirror::Local)?;
                     self.update_sets(set_tag, root, SetMirror::Local);
                 } else {
-                    return Err(Error::NoLocal.into());
+                    return Err(sets::Error::NoLocal.into());
                 }
                 Ok(())
             },
@@ -258,7 +206,7 @@ impl<'a> SetResolver<'a> {
                         conflicting.version = %atom.version,
                         conflicting.rev = %atom.rev,
                     );
-                    return Err(Error::Inconsistent.into());
+                    return Err(sets::Error::Inconsistent.into());
                 }
             },
             Entry::Vacant(entry) => {
@@ -292,7 +240,7 @@ impl<'a> SetResolver<'a> {
                     set.conflict.a = %set_tag,
                     set.conflict.b = %prev_tag,
                 );
-                return Err(Error::Inconsistent.into());
+                return Err(sets::Error::Inconsistent.into());
             }
         }
         let prev = self.roots.insert(Either::Left(set_tag.to_owned()), root);
@@ -305,55 +253,10 @@ impl<'a> SetResolver<'a> {
                     set.root.mirror = %*root,
                     set.root.previous = %**prev,
                 );
-                return Err(Error::Inconsistent.into());
+                return Err(sets::Error::Inconsistent.into());
             }
         }
         self.roots.insert(Either::Right(mirror.to_owned()), root);
         Ok(())
-    }
-}
-
-impl ResolvedSets {
-    pub(crate) fn roots(&self) -> &HashMap<Either<Tag, SetMirror>, Root> {
-        &self.roots
-    }
-
-    pub(crate) fn atoms(&self) -> &ResolvedAtoms<ObjectId, Root> {
-        &self.atoms
-    }
-
-    pub(crate) fn details(&self) -> &BTreeMap<GitDigest, SetDetails> {
-        &self.details
-    }
-
-    pub(crate) fn resolve_atom(
-        &self,
-        id: &AtomId<Root>,
-        req: &VersionReq,
-    ) -> Result<AtomDep, DocError> {
-        use crate::store::git;
-        let versions = self
-            .atoms
-            .get(id)
-            .ok_or(DocError::Git(Box::new(git::Error::NoMatchingVersion)))?;
-        if let Some((_, atom)) = versions
-            .iter()
-            .filter(|(v, _)| req.matches(v))
-            .max_by_key(|(ref version, _)| version.to_owned())
-        {
-            Ok(AtomDep::from(atom.to_owned()))
-        } else {
-            Err(Box::new(git::Error::NoMatchingVersion).into())
-        }
-    }
-}
-
-impl<Id, R> ResolvedAtom<Id, R> {
-    pub(crate) fn unpack(&self) -> &UnpackedRef<Id, R> {
-        &self.unpacked
-    }
-
-    pub(crate) fn remotes(&self) -> &BTreeSet<gix::Url> {
-        &self.remotes
     }
 }

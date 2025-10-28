@@ -89,7 +89,7 @@ use std::path::{Path, PathBuf};
 use bstr::BStr;
 use semver::{Version, VersionReq};
 
-use crate::publish::Publish;
+use crate::package::publish::Publish;
 use crate::{AtomId, Label};
 
 pub mod git;
@@ -102,11 +102,11 @@ pub mod git;
 #[derive(Clone, Debug, Eq)]
 pub struct UnpackedRef<Id, R> {
     /// The proper AtomId of the reference
-    pub id: AtomId<R>,
+    pub(crate) id: AtomId<R>,
     /// The version of this particular reference
-    pub version: Version,
+    pub(crate) version: Version,
     /// The cryptographic identity of the version
-    pub rev: Id,
+    pub(crate) rev: Id,
 }
 
 //================================================================================================
@@ -479,5 +479,11 @@ impl<Id: PartialOrd, R: PartialOrd> PartialOrd for UnpackedRef<Id, R> {
             ord => return ord,
         }
         self.version.partial_cmp(&other.version)
+    }
+}
+
+impl<Id, R> UnpackedRef<Id, R> {
+    pub(crate) fn new(id: AtomId<R>, version: Version, rev: Id) -> Self {
+        Self { id, version, rev }
     }
 }

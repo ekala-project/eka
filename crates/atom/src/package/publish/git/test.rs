@@ -8,8 +8,8 @@ use gix::ObjectId;
 use gix::prelude::ReferenceExt;
 use tempfile::{Builder, NamedTempFile};
 
-use crate::publish::{Content, Publish, Record};
-use crate::store::git;
+use super::super::{Content, Publish, Record};
+use crate::storage::git;
 
 //================================================================================================
 // Traits
@@ -106,9 +106,9 @@ impl MockAtom for gix::Repository {
 
 #[tokio::test]
 async fn publish_atom() -> Result<(), anyhow::Error> {
+    use super::{Builder, GitPublisher};
     use crate::id::Label;
-    use crate::publish::git::{Builder, GitPublisher};
-    use crate::store::{Init, QueryStore};
+    use crate::storage::{Init, QueryStore};
     let (repo, _remote) = git::test::init_repo_and_remote()?;
     let repo = gix::open(repo.as_ref())?;
     let remote = repo.find_remote("origin")?;

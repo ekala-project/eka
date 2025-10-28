@@ -65,20 +65,16 @@
 
 use std::sync::LazyLock;
 
-pub use self::core::Atom;
 pub use self::id::{AtomId, Compute, Label, Origin};
-pub use self::lock::Lockfile;
-pub use self::manifest::Manifest;
-pub use self::manifest::deps::ManifestWriter;
-pub use self::publish::ATOM_REFS;
+pub use self::package::metadata::lock::Lockfile;
+pub use self::package::metadata::manifest::{Manifest, ManifestWriter};
+pub use self::package::metadata::{Atom, EkalaManager};
+pub use self::package::publish::ATOM_REFS;
 
-mod core;
 pub mod id;
-pub mod lock;
 pub mod log;
-pub mod manifest;
-pub mod publish;
-pub mod store;
+pub mod package;
+pub mod storage;
 pub mod uri;
 
 const EKALA: &str = "ekala";
@@ -104,3 +100,6 @@ pub static ATOM_MANIFEST_NAME: LazyLock<String> = LazyLock::new(|| format!("{}.{
 ///
 /// This static variable is lazily initialized to ensure it is constructed only when needed.
 pub static EKALA_MANIFEST_NAME: LazyLock<String> = LazyLock::new(|| format!("{}.{}", EKALA, TOML));
+
+/// A type alias for a boxed error that is sendable and syncable.
+type BoxError = Box<dyn std::error::Error + Send + Sync>;

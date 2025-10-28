@@ -23,11 +23,10 @@ use gix::{Commit, ObjectId, Repository, ThreadSafeRepository};
 use semver::Version;
 use thiserror::Error as ThisError;
 
+use super::{Init, NormalizeStorePath, QueryStore, QueryVersion, UnpackedRef};
 use crate::id::Origin;
-use crate::lock::GitDigest;
-use crate::manifest::deps::DocError;
-use crate::manifest::{AtomError, EkalaManifest};
-use crate::store::{Init, NormalizeStorePath, QueryStore, QueryVersion, UnpackedRef};
+use crate::package::AtomError;
+use crate::package::metadata::{DocError, EkalaManifest, GitDigest};
 use crate::{AtomId, Label};
 
 #[cfg(test)]
