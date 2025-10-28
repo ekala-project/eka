@@ -184,16 +184,15 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-use bstr::{BString, ByteSlice};
 use gix::ThreadSafeRepository;
 use id::{Tag, VerifiedName};
 use lock::{AtomDep, Lockfile, SetDetails};
 use package::AtomError;
 use package::sets::{ResolvedSets, SetResolver};
 use semver::{Version, VersionReq};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 use toml_edit::{DocumentMut, de};
-use uri::Uri;
+use uri::{Uri, serde_gix_url};
 
 use super::{DocError, GitDigest, TypedDocument, lock};
 use crate::package::metadata::manifest::direct::DirectDeps;
@@ -212,11 +211,7 @@ pub enum SetMirror {
     #[serde(rename = "::")]
     Local,
     /// A URL pointing to a remote repository that serves as a source for an atom set.
-    #[serde(
-        serialize_with = "serialize_url",
-        deserialize_with = "deserialize_url",
-        untagged
-    )]
+    #[serde(with = "serde_gix_url", untagged)]
     Url(gix::Url),
 }
 
@@ -671,48 +666,7 @@ impl AtomWriter {
 // Functions
 //================================================================================================
 
-/// Deserializes a `gix::url::Url` from a string.
-pub(crate) fn deserialize_url<'de, D>(deserializer: D) -> Result<gix::url::Url, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let name = BString::deserialize(deserializer)?;
-    gix::url::parse(name.as_bstr())
-        .map_err(|e| <D::Error as serde::de::Error>::custom(e.to_string()))
-}
-pub(crate) fn maybe_deserialize_url<'de, D>(
-    deserializer: D,
-) -> Result<Option<gix::url::Url>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    deserialize_url(deserializer).map(Some)
-}
-
 /// A helper function for `serde(skip_serializing_if)` to omit `false` boolean values.
 pub(crate) fn not(b: &bool) -> bool {
     !b
-}
-
-/// Serializes a `gix::url::Url` to a string.
-pub(crate) fn serialize_url<S>(url: &gix::url::Url, serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    let str = url.to_string();
-    serializer.serialize_str(&str)
-}
-
-pub(crate) fn maybe_serialize_url<S>(
-    url: &Option<gix::url::Url>,
-    serializer: S,
-) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    if let Some(url) = url {
-        serialize_url(url, serializer)
-    } else {
-        Err(serde::ser::Error::custom("no url to serialize"))
-    }
 }

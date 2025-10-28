@@ -5,8 +5,9 @@ use bstr::ByteSlice;
 use id::{Name, Tag};
 use package::GitSpec;
 use package::metadata::{DocError, TypedDocument};
+use semver::Version;
 use serde::{Deserialize, Serialize};
-use uri::AliasedUrl;
+use uri::{AliasedUrl, VERSION_PLACEHOLDER, serde_gix_url};
 use url::Url;
 
 use super::WriteDeps;
@@ -61,10 +62,7 @@ pub enum NixReq {
 /// Represents a nix eval-time git fetch.
 pub struct NixGit {
     /// The URL of the git repository.
-    #[serde(
-        serialize_with = "super::serialize_url",
-        deserialize_with = "super::deserialize_url"
-    )]
+    #[serde(with = "serde_gix_url")]
     pub git: gix::Url,
     /// A git ref or version constraint
     #[serde(flatten, skip_serializing_if = "Option::is_none")]
@@ -198,5 +196,32 @@ impl NixFetch {
             }
         };
         Ok(dep)
+    }
+
+    pub(crate) fn new_from_version(&self, version: &Version) -> Self {
+        let replace = |s: &str| s.replace(VERSION_PLACEHOLDER, version.to_string().as_ref());
+
+        let mut clone = self.to_owned();
+
+        match &mut clone.kind {
+            NixReq::Tar(url) => {
+                let new = replace(url.path());
+                url.set_path(new.as_ref());
+            },
+            NixReq::Url(url) => {
+                let new = replace(url.path());
+                url.set_path(new.as_ref());
+            },
+            NixReq::Build(dep) => {
+                let new = replace(dep.build.path());
+                dep.build.set_path(new.as_ref());
+            },
+            NixReq::Git(dep) => {
+                let new = replace(dep.git.path.to_string().as_ref());
+                dep.git.path = new.into();
+            },
+        };
+
+        clone
     }
 }

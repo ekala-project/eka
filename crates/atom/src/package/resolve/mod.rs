@@ -2,9 +2,11 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 
 use either::Either;
-use gix::Repository;
+use gix::protocol::transport::client::Transport;
+use gix::{ObjectId, Repository};
 use id::{Name, Origin, Tag};
-use lock::{AtomDep, NixUrls, SetDetails};
+use lock::direct::NixUrls;
+use lock::{AtomDep, SetDetails};
 use metadata::manifest::{AtomReq, AtomWriter, SetMirror, WriteDeps};
 use metadata::{DocError, GitDigest, lock};
 use semver::{Prerelease, VersionReq};
@@ -14,6 +16,7 @@ use storage::git::{AtomQuery, Root};
 use uri::Uri;
 
 use super::{Manifest, metadata, sets};
+use crate::storage::QueryVersion;
 use crate::{ATOM_MANIFEST_NAME, AtomId, BoxError, ManifestWriter, id, storage, uri};
 
 mod direct;
@@ -268,6 +271,65 @@ impl<'a> SetResolver<'a> {
         }
         self.roots.insert(Either::Right(mirror.to_owned()), root);
         Ok(())
+    }
+}
+
+impl Uri {
+    /// Resolves an `Uri` to a fully specified `AtomDep` by querying the
+    /// remote Git repository to find the highest matching version and its
+    /// corresponding commit hash.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing the resolved `AtomDep` or a `git::Error` if
+    /// resolution fails.
+    pub(crate) fn resolve(
+        &self,
+        transport: Option<&mut Box<dyn Transport + Send>>,
+    ) -> Result<(AtomReq, AtomDep), crate::storage::git::Error> {
+        let url = self.url();
+        let label = self.label();
+        if url.is_some_and(|u| u.scheme != gix::url::Scheme::File) {
+            let url = url.unwrap();
+            let atoms = url.get_atoms(transport)?;
+            let ObjectId::Sha1(root) = *atoms.calculate_origin()?;
+            let (version, oid) =
+                <gix::url::Url as QueryVersion<_, _, _, _, _>>::process_highest_match(
+                    atoms.clone(),
+                    label,
+                    &self.version_req(),
+                )
+                .ok_or(crate::storage::git::Error::NoMatchingVersion)?;
+            let atom_req = if let Some(req) = self.version() {
+                AtomReq::new(req.to_owned())
+            } else {
+                let v = VersionReq::parse(version.to_string().as_str())?;
+                AtomReq::new(v)
+            };
+            let id = AtomId::construct(&atoms, label.to_owned())?;
+            Ok((
+                atom_req,
+                AtomDep::new(
+                    label.to_owned(),
+                    version,
+                    GitDigest::Sha1(root),
+                    match oid {
+                        ObjectId::Sha1(bytes) => Some(GitDigest::Sha1(bytes)),
+                    },
+                    Some(url.to_owned()),
+                    id.into(),
+                ),
+            ))
+        } else {
+            // implement path resolution for atoms
+            todo!()
+        }
+    }
+
+    fn version_req(&self) -> VersionReq {
+        self.version()
+            .map(ToOwned::to_owned)
+            .unwrap_or(VersionReq::STAR)
     }
 }
 

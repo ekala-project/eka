@@ -656,3 +656,53 @@ fn ssh_host(input: &str) -> IResult<&str, (&str, &str)> {
 fn url(input: &str) -> IResult<&str, Option<&str>> {
     opt_split(input, "::")
 }
+
+pub(crate) mod serde_gix_url {
+    use bstr::{BString, ByteSlice};
+    use serde::{Deserializer, Serializer};
+
+    /// Deserializes a `gix::url::Url` from a string.
+    pub(crate) fn deserialize<'de, D>(deserializer: D) -> Result<gix::url::Url, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        use serde::Deserialize;
+        let name = BString::deserialize(deserializer)?;
+        gix::url::parse(name.as_bstr())
+            .map_err(|e| <D::Error as serde::de::Error>::custom(e.to_string()))
+    }
+
+    /// Serializes a `gix::url::Url` to a string.
+    pub(crate) fn serialize<S>(url: &gix::url::Url, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let str = url.to_string();
+        serializer.serialize_str(&str)
+    }
+
+    pub(crate) mod maybe {
+        use serde::{Deserializer, Serializer};
+        pub(crate) fn serialize<S>(
+            url: &Option<gix::url::Url>,
+            serializer: S,
+        ) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            if let Some(url) = url {
+                super::serialize(url, serializer)
+            } else {
+                Err(serde::ser::Error::custom("no url to serialize"))
+            }
+        }
+        pub(crate) fn deserialize<'de, D>(
+            deserializer: D,
+        ) -> Result<Option<gix::url::Url>, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            super::deserialize(deserializer).map(Some)
+        }
+    }
+}

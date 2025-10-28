@@ -6,7 +6,8 @@ use either::Either;
 use gix::protocol::handshake::Ref;
 use id::Name;
 use lazy_regex::{Lazy, Regex};
-use metadata::lock::{BuildSrc, LockError, NixDep, NixGitDep, NixTarDep};
+use lock_direct::{BuildSrc, NixDep, NixGitDep, NixTarDep};
+use metadata::lock::{LockError, direct as lock_direct};
 use metadata::manifest::{WriteDeps, direct};
 use metadata::{DocError, GitDigest, lock};
 use package::{GitSpec, metadata};
@@ -69,7 +70,7 @@ impl ManifestWriter {
             let key = Either::Right(name.to_owned());
             let locked = self.lock.deps.as_ref().get(&key);
             if let Some(lock) = locked {
-                use lock::NixUrls;
+                use lock::direct::NixUrls;
 
                 let url = dep.get_url();
                 let mut unmatched = false;
@@ -159,6 +160,7 @@ impl NixFetch {
     }
 
     pub(crate) async fn resolve(&self, key: Option<&Name>) -> Result<(Name, lock::Dep), BoxError> {
+        use lock::direct::WrappedNixHash;
         use snix_glue::fetchers::Fetch;
 
         let key = if let Some(key) = key {
@@ -183,7 +185,7 @@ impl NixFetch {
                     lock::Dep::Nix(NixDep::new(
                         key.to_owned(),
                         url.to_owned(),
-                        lock::WrappedNixHash(hash),
+                        WrappedNixHash(hash),
                     )),
                 ))
             },
@@ -200,7 +202,7 @@ impl NixFetch {
                     lock::Dep::NixTar(NixTarDep::new(
                         key.to_owned(),
                         url.to_owned(),
-                        lock::WrappedNixHash(hash),
+                        WrappedNixHash(hash),
                     )),
                 ))
             },
@@ -230,7 +232,7 @@ impl NixFetch {
                     lock::Dep::NixSrc(BuildSrc::new(
                         key.to_owned(),
                         build_src.build.to_owned(),
-                        lock::WrappedNixHash(hash),
+                        WrappedNixHash(hash),
                     )),
                 ))
             },

@@ -73,22 +73,21 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Deref;
 
-use direct::{NixFetch, NixReq};
+use direct::{BuildSrc, NixDep, NixGitDep, NixTarDep};
 use gix::ObjectId;
-use gix::protocol::transport::client::Transport;
 use id::{AtomDigest, Label, Name, Tag};
-use manifest::{AtomReq, SetMirror, direct};
-use nix_compat::nixhash::NixHash;
+use manifest::SetMirror;
 use package::sets::ResolvedAtom;
-use semver::{Version, VersionReq};
+use semver::Version;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use storage::UnpackedRef;
 use storage::git::Root;
-use storage::{QueryStore, QueryVersion, UnpackedRef};
-use uri::{Uri, VERSION_PLACEHOLDER};
-use url::Url;
+use uri::serde_gix_url;
 
 use super::{GitDigest, manifest};
-use crate::{AtomId, BoxError, Compute, Origin, id, package, storage, uri};
+use crate::{AtomId, BoxError, Compute, id, package, storage, uri};
+
+pub(in crate::package) mod direct;
 
 //================================================================================================
 // Types
@@ -116,29 +115,12 @@ pub(crate) struct AtomDep {
     /// resolve mirrors (e.g. nix).
     #[serde(
         default,
-        serialize_with = "manifest::maybe_serialize_url",
-        deserialize_with = "manifest::maybe_deserialize_url",
+        with = "serde_gix_url::maybe",
         skip_serializing_if = "Option::is_none"
     )]
     mirror: Option<gix::Url>,
     /// The cryptographic identity of the atom.
     id: AtomDigest,
-}
-
-/// Represents a locked build-time source, such as a registry or configuration.
-///
-/// This struct is used for sources that are fetched during the build process,
-/// such as package registries or configuration files that need to be available
-/// at build time.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, PartialOrd, Ord)]
-#[serde(deny_unknown_fields)]
-pub struct BuildSrc {
-    /// The name of the source.
-    pub name: Name,
-    /// The URL to fetch the source.
-    pub url: Url,
-    /// The hash for verification.
-    hash: WrappedNixHash,
 }
 
 /// Enum representing the different types of locked dependencies, serialized as tagged TOML tables.
@@ -220,62 +202,6 @@ pub struct Lockfile {
     pub(crate) deps: DepMap<Root, Dep>,
 }
 
-/// Represents a direct pin to an external source, such as a URL or tarball.
-///
-/// This struct is used for dependencies that are pinned to specific URLs
-/// with integrity verification through cryptographic hashes.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, PartialOrd, Ord)]
-#[serde(deny_unknown_fields)]
-pub struct NixDep {
-    /// The name of the pinned source.
-    name: Name,
-    /// The URL of the source.
-    url: Url,
-    /// The hash for integrity verification (e.g., sha256).
-    hash: WrappedNixHash,
-}
-
-/// Represents a pinned Git repository with a specific revision.
-///
-/// This struct is used for dependencies that are pinned to specific Git
-/// repositories and commits, providing both URL and revision information.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, PartialOrd, Ord)]
-#[serde(deny_unknown_fields)]
-pub struct NixGitDep {
-    /// The name of the pinned Git source.
-    pub name: Name,
-    /// The Git repository URL.
-    #[serde(
-        serialize_with = "manifest::serialize_url",
-        deserialize_with = "manifest::deserialize_url"
-    )]
-    pub url: gix::Url,
-    /// The version which was resolved (if requested).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub version: Option<Version>,
-    /// The resolved revision (commit hash).
-    pub rev: GitDigest,
-}
-
-/// Represents a pinned tarball or archive source.
-///
-/// This struct is used for dependencies that are distributed as tarballs
-/// or archives, with integrity verification through cryptographic hashes.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, PartialOrd, Ord)]
-#[serde(deny_unknown_fields)]
-pub struct NixTarDep {
-    /// The name of the tar source.
-    pub name: Name,
-    /// The URL to the tarball.
-    pub url: Url,
-    /// The hash of the tarball.
-    hash: WrappedNixHash,
-}
-
-/// A wrapper around `NixHash` to provide custom serialization behavior for TOML.
-#[derive(Debug, PartialEq, PartialOrd, Eq, Clone, Serialize, Ord)]
-pub(crate) struct WrappedNixHash(pub NixHash);
-
 #[derive(thiserror::Error, Debug)]
 pub(in crate::package) enum LockError {
     #[error(transparent)]
@@ -284,17 +210,29 @@ pub(in crate::package) enum LockError {
     Resolve,
 }
 
-/// An enum to handle different URL types for filename extraction.
-pub(in crate::package) enum NixUrls<'a> {
-    Url(&'a Url),
-    Git(&'a gix::Url),
-}
-
 //================================================================================================
 // Impls
 //================================================================================================
 
 impl AtomDep {
+    pub(in crate::package) fn new(
+        label: Label,
+        version: Version,
+        set: GitDigest,
+        rev: Option<GitDigest>,
+        mirror: Option<gix::Url>,
+        id: AtomDigest,
+    ) -> Self {
+        Self {
+            label,
+            version,
+            set,
+            rev,
+            mirror,
+            id,
+        }
+    }
+
     pub(crate) fn version(&self) -> &Version {
         &self.version
     }
@@ -305,70 +243,6 @@ impl AtomDep {
 
     pub(crate) fn set(&self) -> GitDigest {
         self.set
-    }
-}
-
-impl Uri {
-    /// Resolves an `Uri` to a fully specified `AtomDep` by querying the
-    /// remote Git repository to find the highest matching version and its
-    /// corresponding commit hash.
-    ///
-    /// # Returns
-    ///
-    /// A `Result` containing the resolved `AtomDep` or a `git::Error` if
-    /// resolution fails.
-    pub(crate) fn resolve(
-        &self,
-        transport: Option<&mut Box<dyn Transport + Send>>,
-    ) -> Result<(AtomReq, AtomDep), crate::storage::git::Error> {
-        let url = self.url();
-        let label = self.label();
-        if url.is_some_and(|u| u.scheme != gix::url::Scheme::File) {
-            let url = url.unwrap();
-            let atoms = url.get_atoms(transport)?;
-            let ObjectId::Sha1(root) = *atoms.calculate_origin()?;
-            let (version, oid) =
-                <gix::url::Url as QueryVersion<_, _, _, _, _>>::process_highest_match(
-                    atoms.clone(),
-                    label,
-                    &self.version_req(),
-                )
-                .ok_or(crate::storage::git::Error::NoMatchingVersion)?;
-            let atom_req = if let Some(req) = self.version() {
-                AtomReq::new(req.to_owned())
-            } else {
-                let v = VersionReq::parse(version.to_string().as_str())?;
-                AtomReq::new(v)
-            };
-            let id = AtomId::construct(&atoms, label.to_owned())?;
-            Ok((atom_req, AtomDep {
-                label: label.to_owned(),
-                version,
-                mirror: Some(url.to_owned()),
-                set: GitDigest::Sha1(root),
-                rev: match oid {
-                    ObjectId::Sha1(bytes) => Some(GitDigest::Sha1(bytes)),
-                },
-                id: id.into(),
-            }))
-        } else {
-            // implement path resolution for atoms
-            todo!()
-        }
-    }
-
-    fn _atom_req(&self) -> AtomReq {
-        AtomReq::new(self.version_req())
-    }
-
-    fn version_req(&self) -> VersionReq {
-        self.version()
-            .map(ToOwned::to_owned)
-            .unwrap_or(VersionReq::STAR)
-    }
-
-    fn _get_transport(&self) -> Option<Box<dyn Transport + Send>> {
-        self.url().and_then(|u| u.get_transport().ok())
     }
 }
 
@@ -491,44 +365,6 @@ impl<R, T: Ord> DepMap<R, T> {
     }
 }
 
-impl NixFetch {
-    pub(crate) fn new_from_version(&self, version: &Version) -> Self {
-        let replace = |s: &str| s.replace(VERSION_PLACEHOLDER, version.to_string().as_ref());
-
-        let mut clone = self.to_owned();
-
-        match &mut clone.kind {
-            NixReq::Tar(url) => {
-                let new = replace(url.path());
-                url.set_path(new.as_ref());
-            },
-            NixReq::Url(url) => {
-                let new = replace(url.path());
-                url.set_path(new.as_ref());
-            },
-            NixReq::Build(dep) => {
-                let new = replace(dep.build.path());
-                dep.build.set_path(new.as_ref());
-            },
-            NixReq::Git(dep) => {
-                let new = replace(dep.git.path.to_string().as_ref());
-                dep.git.path = new.into();
-            },
-        };
-
-        clone
-    }
-
-    pub(in crate::package) fn get_url(&self) -> NixUrls<'_> {
-        match &self.kind {
-            NixReq::Tar(url) => NixUrls::Url(url),
-            NixReq::Url(url) => NixUrls::Url(url),
-            NixReq::Build(nix_src) => NixUrls::Url(&nix_src.build),
-            NixReq::Git(nix_git) => NixUrls::Git(&nix_git.git),
-        }
-    }
-}
-
 impl From<ObjectId> for GitDigest {
     fn from(id: ObjectId) -> Self {
         match id {
@@ -544,73 +380,6 @@ impl Default for Lockfile {
             sets: Default::default(),
             deps: Default::default(),
         }
-    }
-}
-
-impl NixDep {
-    pub(crate) fn new(name: Name, url: Url, hash: WrappedNixHash) -> Self {
-        Self { name, url, hash }
-    }
-
-    pub(crate) fn name(&self) -> &Name {
-        &self.name
-    }
-
-    pub(crate) fn url(&self) -> &Url {
-        &self.url
-    }
-}
-
-impl NixGitDep {
-    pub(crate) fn name(&self) -> &Name {
-        &self.name
-    }
-
-    pub(crate) fn url(&self) -> &gix::Url {
-        &self.url
-    }
-}
-
-impl NixTarDep {
-    pub(in crate::package) fn new(name: Name, url: Url, hash: WrappedNixHash) -> Self {
-        Self { name, url, hash }
-    }
-
-    pub(crate) fn name(&self) -> &Name {
-        &self.name
-    }
-
-    pub(crate) fn url(&self) -> &Url {
-        &self.url
-    }
-}
-
-impl BuildSrc {
-    pub(in crate::package) fn new(name: Name, url: Url, hash: WrappedNixHash) -> Self {
-        Self { name, url, hash }
-    }
-
-    pub(crate) fn name(&self) -> &Name {
-        &self.name
-    }
-
-    pub(crate) fn url(&self) -> &Url {
-        &self.url
-    }
-}
-
-impl<'de> Deserialize<'de> for WrappedNixHash {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        // Deserialize into a String to handle owned data
-        let s = String::deserialize(deserializer)?;
-        // Pass the String as &str to NixHash::from_str
-        let hash = NixHash::from_str(&s, None).map_err(|_| {
-            serde::de::Error::invalid_value(serde::de::Unexpected::Str(&s), &"NixHash")
-        })?;
-        Ok(WrappedNixHash(hash))
     }
 }
 
