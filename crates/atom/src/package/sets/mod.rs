@@ -1,3 +1,29 @@
+//! # Package Set Resolution
+//!
+//! This module handles the resolution and validation of package sets defined
+//! in atom manifests. Package sets define sources (mirrors) for atom dependencies
+//! and ensure consistency across different repositories.
+//!
+//! ## Key Concepts
+//!
+//! - **Package Sets** - Named collections of mirrors providing atoms
+//! - **Mirrors** - URLs or local references pointing to atom repositories
+//! - **Root Consistency** - All mirrors in a set must have the same root hash
+//! - **Atom Resolution** - Finding and validating atoms across mirrors
+//!
+//! ## Set Types
+//!
+//! - **Local Sets** (`::`) - Reference atoms in the current repository
+//! - **Remote Sets** - URLs pointing to external atom repositories
+//! - **Mirror Sets** - Multiple URLs providing the same atoms for redundancy
+//!
+//! ## Resolution Process
+//!
+//! 1. **Set Discovery** - Parse package sets from manifest
+//! 2. **Mirror Validation** - Ensure all mirrors have consistent roots
+//! 3. **Atom Aggregation** - Collect atoms from all valid mirrors
+//! 4. **Conflict Resolution** - Handle version conflicts between mirrors
+
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use either::Either;

@@ -1,9 +1,34 @@
+//! # Git Publishing Implementation Details
+//!
 //! This module contains the inner implementation details for Git-based publishing operations.
+//!
+//! ## Overview
 //!
 //! It provides helper functions and methods on context-specific structs (`GitContext`,
 //! `AtomContext`) to handle the underlying Git object manipulation, reference updates, and remote
 //! interactions required to publish an Atom. The functions here are not intended to be part of the
 //! public API.
+//!
+//! ## Key Components
+//!
+//! - [`AtomContext`] - Context for a specific atom being published
+//! - [`GitContext`] - Git repository and transport context
+//! - [`CommittedAtom`] - Represents a committed atom with its Git objects
+//! - [`AtomReferences`] - Collection of Git references for an atom
+//!
+//! ## Publishing Flow
+//!
+//! 1. **Atom Discovery** - Find and verify atom structure in the working tree
+//! 2. **Content Creation** - Create Git objects for atom content and manifest
+//! 3. **Reference Writing** - Write Git references for the atom
+//! 4. **Remote Push** - Push references to the configured remote
+//!
+//! ## Reference Structure
+//!
+//! Atoms are stored using three types of Git references:
+//! - **Content refs** (`refs/eka/atoms/{label}/{version}`) - Point to atom content commits
+//! - **Spec refs** (`refs/eka/meta/{label}/{version}/manifest`) - Point to manifest blobs
+//! - **Origin refs** (`refs/eka/meta/{label}/{version}/origin`) - Point to source commits
 
 use std::fmt;
 use std::io::{self, Read};

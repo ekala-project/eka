@@ -22,7 +22,6 @@
 //!
 //! - [`Record`] - Contains the result of publishing a single atom
 //! - [`Stats`] - Aggregated statistics for a publishing operation
-//! - [`PublishOutcome`] - Result type for individual atom publishing attempts (internal)
 //! - [`Content`] - Backend-specific content information
 //!
 //! ## Backends
@@ -42,10 +41,10 @@
 //! ```rust,no_run
 //! use std::path::PathBuf;
 //!
-//! use atom::publish::git::GitPublisher;
-//! use atom::publish::{Builder, Publish, Stats};
-//! use atom::store::QueryVersion;
-//! use atom::store::git::Root;
+//! use atom::package::publish::git::GitPublisher;
+//! use atom::package::publish::{Builder, Publish, Stats};
+//! use atom::storage::QueryVersion;
+//! use atom::storage::git::Root;
 //!
 //! let repo = gix::open(".")?;
 //! // Create a publisher for a Git repository
@@ -115,6 +114,17 @@ static REF_ROOT: LazyLock<String> = LazyLock::new(|| format!("refs/{}", STORE_RO
 // Types
 //================================================================================================
 
+/// Basic statistics collected during a publishing request.
+#[derive(Default)]
+pub struct Stats {
+    /// The number of atoms that were successfully published.
+    pub published: u32,
+    /// The number of atoms that were skipped because they already existed in the store.
+    pub skipped: u32,
+    /// The number of atoms that failed to publish due to an error.
+    pub failed: u32,
+}
+
 /// Contains backend-specific content information for reporting results to the user.
 pub enum Content {
     /// Content specific to the Git implementation.
@@ -127,16 +137,10 @@ pub struct Record<R> {
     content: Content,
 }
 
-/// Basic statistics collected during a publishing request.
-#[derive(Default)]
-pub struct Stats {
-    /// The number of atoms that were successfully published.
-    pub published: u32,
-    /// The number of atoms that were skipped because they already existed in the store.
-    pub skipped: u32,
-    /// The number of atoms that failed to publish due to an error.
-    pub failed: u32,
-}
+/// A [`HashMap`] containing all valid atoms in the current workspace.
+///
+/// The map links an [`Label`] to the file path of its manifest.
+type ValidAtoms = HashMap<Label, PathBuf>;
 
 /// A `Result` indicating that an atom may have been skipped.
 ///
@@ -150,11 +154,6 @@ type MaybeSkipped<T> = Result<T, Label>;
 /// This is either a [`Record`] for a successful publication or an [`Label`]
 /// if the atom was safely skipped.
 type PublishOutcome<R> = MaybeSkipped<Record<R>>;
-
-/// A [`HashMap`] containing all valid atoms in the current workspace.
-///
-/// The map links an [`Label`] to the file path of its manifest.
-type ValidAtoms = HashMap<Label, PathBuf>;
 
 //================================================================================================
 // Traits

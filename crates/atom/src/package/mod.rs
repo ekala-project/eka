@@ -1,4 +1,22 @@
-//! # Atom Packages
+//! # Package Management
+//!
+//! This module provides the core functionality for managing atom packages,
+//! including manifest definitions, dependency resolution, publishing, and
+//! lockfile management.
+//!
+//! ## Submodules
+//!
+//! - [`metadata`] - Core types for atoms, manifests, and lockfiles
+//! - [`publish`] - Publishing atoms to storage backends
+//! - [`resolve`] - Dependency resolution and synchronization
+//! - [`sets`] - Package set management and validation
+//!
+//! ## Key Types
+//!
+//! - [`Atom`] - Represents an atom with its metadata and dependencies
+//! - [`Manifest`] - Atom manifest format and parsing
+//! - [`Lockfile`] - Resolved dependency lockfile
+//! - [`AtomError`] - Errors that can occur during package operations
 
 pub use metadata::EkalaManifest;
 pub use metadata::manifest::{GitSpec, Manifest, ManifestWriter};

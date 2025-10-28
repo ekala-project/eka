@@ -1,3 +1,22 @@
+//! # Direct Dependencies
+//!
+//! This module handles direct dependencies that are not atoms, including
+//! Nix fetchers for external sources like Git repositories, tarballs, and URLs.
+//!
+//! ## Supported Dependency Types
+//!
+//! - **Git dependencies** (`NixGit`) - Git repositories with optional version specs
+//! - **Tarball dependencies** (`NixTar`) - Compressed archives fetched and unpacked
+//! - **URL dependencies** (`NixUrl`) - Direct file downloads
+//! - **Build dependencies** (`NixSrc`) - Sources fetched during build time
+//!
+//! ## Key Types
+//!
+//! - [`DirectDeps`] - Container for all direct dependencies
+//! - [`NixFetch`] - Base type for all Nix fetcher dependencies
+//! - [`NixReq`] - Enum representing different fetcher types
+//! - [`NixGit`], [`NixTar`], [`NixSrc`] - Specific fetcher implementations
+
 use std::collections::HashMap;
 use std::ffi::OsStr;
 
@@ -25,21 +44,6 @@ pub(crate) struct DirectDeps {
     nix: HashMap<Name, NixFetch>,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
-/// Represents a nix fetch, either direct or tarball.
-pub struct NixFetch {
-    /// The URL of the resource.
-    #[serde(flatten)]
-    pub kind: NixReq,
-    /// An optional path to a resolved atom, tied to its concrete resolved version.
-    ///
-    /// Only relevant if the Url contains a `"__VERSION__"` place-holder in its path component.
-    ///
-    /// This field is omitted from serialization if None.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub from_version: Option<(Tag, Label)>,
-}
-
 /// Represents the underlying type of Nix dependency
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
 pub enum NixReq {
@@ -55,6 +59,21 @@ pub enum NixReq {
     /// A fetch which leverages git
     #[serde(untagged)]
     Git(NixGit),
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+/// Represents a nix fetch, either direct or tarball.
+pub struct NixFetch {
+    /// The URL of the resource.
+    #[serde(flatten)]
+    pub kind: NixReq,
+    /// An optional path to a resolved atom, tied to its concrete resolved version.
+    ///
+    /// Only relevant if the Url contains a `"__VERSION__"` place-holder in its path component.
+    ///
+    /// This field is omitted from serialization if None.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from_version: Option<(Tag, Label)>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]

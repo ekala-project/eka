@@ -1,4 +1,4 @@
-//! # Atom Lockfile Format
+//! # Lockfile Format
 //!
 //! This module provides the types and structures for working with Atom lockfiles.
 //! Lockfiles capture the exact versions and revisions of dependencies for reproducible
@@ -163,16 +163,16 @@ pub(crate) enum Dep {
     NixSrc(BuildSrc),
 }
 
-type DepKey<R> = either::Either<AtomId<R>, Name>;
-
 /// A wrapper for `BTreeMap` that ensures consistent ordering for serialization
 /// and minimal diffs in the lockfile. It maps dependency names to their locked
 /// representations.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct DepMap<R, Deps: Ord>(BTreeMap<DepKey<R>, Deps>);
 
-#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq, PartialOrd, Ord)]
+type DepKey<R> = either::Either<AtomId<R>, Name>;
+
 /// The set of locked mirrors from the manifest
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SetDetails {
     pub(crate) tag: Tag,
     pub(crate) mirrors: BTreeSet<SetMirror>,

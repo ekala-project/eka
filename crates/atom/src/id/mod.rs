@@ -26,6 +26,8 @@
 //!   ensure they contain only safe, descriptive characters.
 //! - **Atom Ids**: A struct coupling a label to its origin, represented by a BLAKE3-derived hash.
 //!   This provides a secure, collision-resistant, and stable identifier for the atom.
+//! - **Identifiers**: Strict Unicode identifiers following UAX #31 without exceptions.
+//! - **Tags**: Metadata tags allowing additional separators (`:` and `.`) for categorization.
 //!
 //! ## Label Validation Rules
 //!
@@ -47,7 +49,7 @@
 //! ## Usage Example
 //!
 //! ```rust,no_run
-//! use atom::store::git::Root;
+//! use atom::storage::git::Root;
 //! use atom::{AtomId, Compute, Label, Origin};
 //!
 //! // Create a validated atom label.
@@ -83,6 +85,13 @@ const ID_MAX: usize = 128;
 // Types
 //================================================================================================
 
+/// Represents the BLAKE3 hash of an `AtomId`.
+///
+/// This struct holds a 32-byte BLAKE3 hash, serving as a cryptographically
+/// secure and globally unique identifier for an atom.
+#[derive(Copy, Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct AtomDigest([u8; 32]);
+
 /// A struct that couples an atom's label to its origin.
 ///
 /// `AtomId` represents an unambiguous identifier, combining a human-readable
@@ -93,27 +102,6 @@ pub struct AtomId<R> {
     origin: R,
     label: Label,
 }
-
-/// A validated string suitable for use as an atom's `label`.
-///
-/// `Label` ensures that the identifier conforms to specific validation rules,
-/// providing a safe and descriptive label for an atom within its origin.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(try_from = "String")]
-pub struct Label(String);
-
-/// A type alias for label in contexts where the term Label is confusing.
-pub type Name = Label;
-
-/// A type like `Label` implementing UAX #31 precisely (no exception for `-`)
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(try_from = "String")]
-pub struct Identifier(String);
-
-/// A type like `Label` but with exceptions for `:` and `.` characters for metadata tags
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(try_from = "String")]
-pub struct Tag(String);
 
 /// An enumeration of errors that can occur during atom label validation.
 ///
@@ -144,12 +132,26 @@ pub enum Error {
     Blake3Bytes,
 }
 
-/// Represents the BLAKE3 hash of an `AtomId`.
+/// A validated string suitable for use as an atom's `label`.
 ///
-/// This struct holds a 32-byte BLAKE3 hash, serving as a cryptographically
-/// secure and globally unique identifier for an atom.
-#[derive(Copy, Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct AtomDigest([u8; 32]);
+/// `Label` ensures that the identifier conforms to specific validation rules,
+/// providing a safe and descriptive label for an atom within its origin.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "String")]
+pub struct Identifier(String);
+
+/// A type like `Label` implementing UAX #31 precisely (no exception for `-`)
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "String")]
+pub struct Label(String);
+
+/// A type alias for label in contexts where the term Label is confusing.
+pub type Name = Label;
+
+/// A type like `Label` but with exceptions for `:` and `.` characters for metadata tags
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "String")]
+pub struct Tag(String);
 
 //================================================================================================
 // Traits

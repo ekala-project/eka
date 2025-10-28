@@ -1,6 +1,20 @@
 //! # Publishing Errors
 //!
-//! This module contains the error types for errors that might occur during publishing.
+//! This module contains the error types for errors that might occur during publishing
+//! atoms to storage backends.
+//!
+//! ## Error Types
+//!
+//! - [`PublishError`] - Top-level publishing error enum
+//! - [`git::Error`] - Git-specific publishing errors
+//!
+//! ## Common Error Scenarios
+//!
+//! - **Root Inconsistency**: Atom root doesn't match remote store root
+//! - **Invalid Manifests**: Malformed or invalid atom manifests
+//! - **Duplicate Atoms**: Multiple atoms with same ID in revision
+//! - **Network Issues**: Connection or authentication failures
+//! - **Repository State**: Uninitialized remotes or invalid refs
 
 use thiserror::Error;
 

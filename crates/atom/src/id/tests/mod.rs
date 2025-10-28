@@ -1,7 +1,26 @@
-//! Tests for the `Label` identifier, ensuring validation logic is correct.
+//! # Identifier Tests
 //!
-//! These tests cover valid and invalid formats, including various Unicode characters,
-//! edge cases, and specific error conditions to ensure the label parsing is robust.
+//! This module contains comprehensive tests for the identifier validation logic,
+//! ensuring that `Label`, `Identifier`, and `Tag` types correctly validate input
+//! according to their respective rules.
+//!
+//! ## Test Coverage
+//!
+//! - **Valid formats**: Unicode characters, mixed scripts, underscores, hyphens
+//! - **Invalid formats**: Invalid characters, wrong start characters, length limits
+//! - **Edge cases**: Empty strings, zero-width spaces, control characters
+//! - **Unicode compliance**: UAX #31 identifier rules with atom-specific extensions
+//! - **Type-specific rules**: Different validation rules for Label vs Tag types
+//!
+//! ## Test Categories
+//!
+//! - [`edge_cases`] - Boundary conditions and special Unicode scenarios
+//! - [`empty`] - Empty string validation
+//! - [`invalid_chars`] - Character set validation
+//! - [`invalid_start`] - Starting character requirements
+//! - [`invalid_unicode_labels`] - Comprehensive Unicode validation
+//! - [`specific_unicode_errors`] - Targeted Unicode error cases
+//! - [`valid_unicode_labels`] - Valid Unicode identifier examples
 
 use super::*;
 

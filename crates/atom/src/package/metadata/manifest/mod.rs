@@ -23,7 +23,7 @@
 //!
 //! - [`Manifest`] - The complete manifest structure, representing the `atom.toml` file.
 //! - [`Atom`] - The core atom metadata (`label`, `version`, `description`, `sets`).
-//! - [`Dependency`] - Atom and direct Nix dependencies (see [`deps`] module).
+//! - [`Dependency`] - Atom and direct Nix dependencies.
 //! - [`AtomError`] - Errors that can occur during manifest processing.
 //!
 //! ## Example Manifest
@@ -58,8 +58,7 @@
 //! ```rust,no_run
 //! use std::str::FromStr;
 //!
-//! use atom::manifest::Manifest;
-//! use atom::{Atom, Label};
+//! use atom::{Atom, Label, Manifest};
 //! use semver::Version;
 //!
 //! // Create a manifest programmatically.
@@ -67,117 +66,15 @@
 //!
 //! // Parse a manifest from a string.
 //! let manifest_str = r#"
-//! [atom]
+//! [package]
 //! label = "parsed-atom"
 //! version = "2.0.0"
 //! "#;
 //! let parsed = Manifest::from_str(manifest_str).unwrap();
 //! ```
-//! # Atom Dependency Handling
 //!
-//! This module provides the core types for working with an Atom manifest's dependencies.
-//! It defines the structure for specifying different types of dependencies in an atom's
-//! manifest file, including atom references, direct Nix fetchers, and build-time sources.
-//!
-//! ## Dependency Types
-//!
-//! The manifest supports two main categories of dependencies:
-//!
-//! - **Atom dependencies** (`[deps.from.<set-name>]`) - References to other atoms by label and
-//!   version constraint.
-//! - **Direct Nix dependencies** (`[deps.direct.nix]`) - Direct references to external sources
-//!   using Nix fetchers (URLs, Git repos, tarballs, build-time sources).
-//!
-//! ## Key Types
-//!
-//! - [`Dependency`] - The main dependency structure containing all dependency types.
-//! - [`AtomReq`] - Requirements for atom dependencies (version constraints).
-//! - [`NixFetch`] - Direct Nix fetcher dependencies with optional version interpolation.
-//!
-//! ## Manifest Format
-//!
-//! ### Package Configuration
-//!
-//! ```toml
-//! [package]
-//! label = "my-atom"
-//! version = "0.1.0"
-//!
-//! [package.sets]
-//! # Remote atom sets
-//! company-atoms = "git@github.com:our-company/atoms"
-//! # Local atom set (current repository)
-//! local-atoms = "::"
-//! # Sets with mirrors
-//! public-atoms = ["https://registry-a.com/atoms", "https://registry-b.com/atoms"]
-//! ```
-//!
-//! ### Atom Dependencies
-//!
-//! ```toml
-//! [deps.from.company-atoms]
-//! auth-service = "^1.5"
-//! database = "^2.0"
-//!
-//! [deps.from.local-atoms]
-//! shared-utils = "^0.1"
-//! ```
-//!
-//! ### Direct Nix Dependencies
-//!
-//! ```toml
-//! [deps.direct.nix]
-//! # URL fetch (direct download)
-//! nix-installer.url = "https://nixos.org/nix/install"
-//!
-//! # Git fetch with static ref (inline table syntax)
-//! nixpkgs = { git = "https://github.com/NixOS/nixpkgs", ref = "nixos-unstable" }
-//!
-//! # Git fetch with version constraint
-//! other-repo = { git = "https://github.com/other/repo", version = "^1.2" }
-//!
-//! # Alternative dotted syntax for simple cases
-//! # nixpkgs.git = "https://github.com/NixOS/nixpkgs"
-//! # nixpkgs.ref = "nixos-unstable"
-//!
-//! # Tarball fetch with version interpolation
-//! docs = { tar = "https://docs.company.com/api/__VERSION__/docs.tar.gz", version = "from.company-atoms.auth-service" }
-//!
-//! # Build-time source (FOD)
-//! source-archive = { build = "https://dist.company.com/my-atom/__VERSION__/source.tar.gz", version = "from.local-atoms.my-atom" }
-//! ```
-//!
-//! ## Lockfile Format
-//!
-//! The lockfile captures resolved dependencies with cryptographic hashes:
-//!
-//! ```toml
-//! version = 1
-//!
-//! [sets.<root-hash>]
-//! tag = "company-atoms"
-//! mirrors = ["git@github.com:our-company/atoms"]
-//!
-//! [[deps]]
-//! type = "atom"
-//! label = "auth-service"
-//! version = "1.5.2"
-//! set = "<root-hash>"
-//! rev = "<commit-hash>"
-//! id = "<blake3-hash>"
-//!
-//! [[deps]]
-//! type = "nix+git"
-//! name = "nixpkgs"
-//! url = "https://github.com/NixOS/nixpkgs"
-//! rev = "<commit-hash>"
-//! ```
-//!
-//! ## Validation
-//!
-//! All dependency types use `#[serde(deny_unknown_fields)]` to ensure strict
-//! validation and prevent typos in manifest files. Optional fields are properly
-//! handled with `skip_serializing_if` to keep the TOML output clean.
+//! Note: `Manifest` and `Atom` types are not publicly exposed in the current API.
+//! Use the public exports from the crate root instead.
 
 use std::collections::{BTreeSet, HashMap};
 use std::ffi::OsStr;
@@ -243,6 +140,8 @@ pub struct Manifest {
 
 /// A specialized result type for manifest operations.
 pub type AtomResult<T> = Result<T, AtomError>;
+
+type AtomFrom = HashMap<Tag, HashMap<Label, VersionReq>>;
 
 //================================================================================================
 // Impls
@@ -320,11 +219,9 @@ impl TryFrom<PathBuf> for Manifest {
 // Types
 //================================================================================================
 
-type AtomFrom = HashMap<Tag, HashMap<Label, VersionReq>>;
-
+/// Represents a locked atom dependency, referencing a verifiable repository slice.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
 #[serde(deny_unknown_fields)]
-/// Represents a locked atom dependency, referencing a verifiable repository slice.
 pub struct AtomReq {
     /// The semantic version requirement for the atom (e.g., "^1.0.0").
     version: VersionReq,
@@ -360,8 +257,8 @@ pub enum GitSpec {
 /// ```rust,no_run
 /// use std::path::Path;
 ///
+/// use atom::ManifestWriter;
 /// use atom::id::Tag;
-/// use atom::manifest::deps::ManifestWriter;
 /// use atom::uri::Uri;
 ///
 /// async {
@@ -370,8 +267,9 @@ pub enum GitSpec {
 ///         .unwrap();
 ///     let uri = "my-atom@^1.0.0".parse::<Uri>().unwrap();
 ///     let key = "my-atom".parse::<Tag>().unwrap();
-///     writer.add_uri(uri, Some(key)).unwrap();
-///     writer.write_atomic().unwrap();
+///     // Note: add_uri and write_atomic methods are not publicly exposed
+///     // writer.add_uri(uri, Some(key)).unwrap();
+///     // writer.write_atomic().unwrap();
 /// };
 /// ```
 pub struct ManifestWriter {

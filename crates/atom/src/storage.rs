@@ -1,4 +1,4 @@
-//! # Atom Store Interface
+//! # Atom Storage Interface
 //!
 //! This module defines the core traits and interfaces for implementing storage
 //! backends for atoms. The store abstraction allows atoms to be stored and
@@ -42,8 +42,8 @@
 //!
 //! ```rust,no_run
 //! use atom::Label;
-//! use atom::store::git::Root;
-//! use atom::store::{Init, NormalizeStorePath, QueryStore, QueryVersion};
+//! use atom::storage::git::Root;
+//! use atom::storage::{Init, NormalizeStorePath, QueryStore, QueryVersion};
 //! use gix::{Remote, Url};
 //! use semver::VersionReq;
 //!
@@ -64,12 +64,7 @@
 //! // Query atom versions from a remote store
 //! let atoms = url.get_atoms(None)?;
 //! for atom in atoms {
-//!     println!(
-//!         "Atom: {} v{} -> {}",
-//!         atom.id.label(),
-//!         atom.version,
-//!         atom.rev
-//!     );
+//!     println!("Atom: {:#?}", atom,);
 //! }
 //!
 //! // Find highest version matching requirements
@@ -82,6 +77,9 @@
 //! let normalized = repo.normalize("path/to/atom")?;
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
+//!
+//! Note: Some methods like `get_atoms` and `get_highest_match` are trait methods
+//! that need to be imported explicitly. The `UnpackedRef` fields are not publicly accessible.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -183,7 +181,7 @@ pub trait NormalizeStorePath<P: AsRef<Path>> {
 /// ## Examples
 ///
 /// ```rust,no_run
-/// use atom::store::QueryStore;
+/// use atom::storage::QueryStore;
 /// use gix::Url;
 ///
 /// // Lightweight reference query
@@ -272,7 +270,7 @@ pub trait QueryStore<Ref, T: Send> {
 ///
 /// ```rust,no_run
 /// use atom::Label;
-/// use atom::store::{QueryStore, QueryVersion};
+/// use atom::storage::{QueryStore, QueryVersion};
 /// use gix::Url;
 /// use semver::VersionReq;
 ///
@@ -282,12 +280,7 @@ pub trait QueryStore<Ref, T: Send> {
 /// // Get all available atoms
 /// let atoms = url.get_atoms(None)?;
 /// for atom in atoms {
-///     println!(
-///         "Atom: {} v{} -> {}",
-///         atom.id.label(),
-///         atom.version,
-///         atom.rev
-///     );
+///     println!("Atom: {:#?}", atom);
 /// }
 ///
 /// // Find the highest version matching a requirement
@@ -372,7 +365,7 @@ where
     /// # Examples
     /// ```rust,no_run
     /// use atom::Label;
-    /// use atom::store::QueryVersion;
+    /// use atom::storage::QueryVersion;
     /// use semver::VersionReq;
     ///
     /// let url = gix::url::parse("https://example.com/my-repo.git".into())?;

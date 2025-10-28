@@ -1,8 +1,36 @@
-//! Provides utility functions for creating and styling progress indicators and spinners
-//! in the console, ensuring a consistent look and feel for logging across the application.
+//! # Logging Utilities
 //!
-//! This module leverages `tracing` and `tracing_indicatif` to associate progress bars
-//! and spinners with logging spans.
+//! This module provides utility functions for creating and styling progress indicators
+//! and spinners in the console, ensuring a consistent look and feel for logging across
+//! the application.
+//!
+//! ## Overview
+//!
+//! The logging system integrates with `tracing` and `tracing_indicatif` to associate
+//! progress bars and spinners with logging spans. This provides visual feedback during
+//! long-running operations like package resolution, publishing, and dependency fetching.
+//!
+//! ## Key Functions
+//!
+//! - [`best_size`] - Calculates optimal size hints for progress bars
+//! - [`set_bar`] - Configures progress bars with consistent styling
+//! - [`set_sub_task`] - Sets up sub-task spinners for nested operations
+//!
+//! ## Usage
+//!
+//! ```rust,no_run
+//! use atom::log::{set_bar, set_sub_task};
+//! use tracing::{Instrument, info_span};
+//!
+//! let span = info_span!("operation");
+//! let _enter = span.enter();
+//!
+//! // Set up a progress bar
+//! set_bar(&span, "Processing items", 100);
+//!
+//! // Or set up a sub-task spinner
+//! set_sub_task(&span, "Fetching dependencies");
+//! ```
 
 use tracing::Span;
 use tracing_indicatif::span_ext::IndicatifSpanExt;

@@ -1,8 +1,21 @@
-//! # Atom Core Types
+//! # Package Metadata
 //!
 //! This module contains the fundamental types that represent atoms and their
 //! file system structure. These types form the foundation of the atom format
 //! and are used throughout the crate.
+//!
+//! ## Submodules
+//!
+//! - [`manifest`] - Atom manifest format and dependency specification
+//! - [`lock`] - Lockfile format for capturing resolved dependencies
+//!
+//! ## Key Types
+//!
+//! - [`Atom`] - Represents an atom with its metadata and dependencies
+//! - [`Manifest`] - Atom manifest format and parsing
+//! - [`Lockfile`] - Resolved dependency lockfile
+//! - [`AtomPaths`] - File system paths associated with an atom
+//! - [`EkalaManager`] - Manager for Ekala-specific operations
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::marker::PhantomData;
@@ -48,15 +61,6 @@ pub struct Atom {
     sets: HashMap<Tag, AtomSet>,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Default)]
-pub struct Meta {
-    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
-    tags: BTreeSet<Tag>,
-    /// An optional description of the Atom.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    description: Option<String>,
-}
-
 /// Represents the file system paths associated with an atom.
 ///
 /// This struct manages the relationship between an atom's manifest file
@@ -72,6 +76,26 @@ where
     /// Path to the atom's content directory
     content: P,
 }
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Default)]
+pub struct Meta {
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    tags: BTreeSet<Tag>,
+    /// An optional description of the Atom.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
+}
+
+/// A newtype wrapper to tie a `DocumentMut` to a specific serializable type `T`.
+#[derive(Debug)]
+pub(super) struct TypedDocument<T> {
+    /// The underlying `toml_edit` document.
+    inner: DocumentMut,
+    _marker: PhantomData<T>,
+}
+
+#[derive(Debug, PartialEq, Eq, Default)]
+pub(in crate::package) struct AtomMap(BTreeMap<Label, PathBuf>);
 
 #[derive(thiserror::Error, Debug)]
 /// Errors that can occur when working with a `TypedDocument`.
@@ -132,16 +156,13 @@ pub enum DocError {
     SetError(#[from] sets::Error),
 }
 
-/// A newtype wrapper to tie a `DocumentMut` to a specific serializable type `T`.
-#[derive(Debug)]
-pub(super) struct TypedDocument<T> {
-    /// The underlying `toml_edit` document.
-    inner: DocumentMut,
-    _marker: PhantomData<T>,
+/// The section of the manifest describing the Ekala set of atoms.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct EkalaSet {
+    #[serde(default)]
+    pub(in crate::package) packages: AtomMap,
 }
-
-#[derive(Debug, PartialEq, Eq, Default)]
-pub(in crate::package) struct AtomMap(BTreeMap<Label, PathBuf>);
 
 /// The entrypoint for an ekala manifest describing a set of atoms.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
@@ -154,14 +175,6 @@ pub struct EkalaManifest {
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 struct MetaData {
     tags: Option<BTreeSet<Tag>>,
-}
-
-/// The section of the manifest describing the Ekala set of atoms.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct EkalaSet {
-    #[serde(default)]
-    pub(in crate::package) packages: AtomMap,
 }
 
 /// A writer to assist with writing into the Ekala manifest.

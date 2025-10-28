@@ -1,15 +1,45 @@
-//! # Atom Publishing for a Git Store
+//! # Git-Based Atom Publishing
 //!
-//! This module provides the types and logic necessary to efficiently publish Atoms
+//! This module provides the types and logic necessary to efficiently publish atoms
 //! to a Git repository. Atoms are stored as orphaned Git histories so they can be
-//! efficiently fetched. For trivial verification, an Atom's commit hash is made
+//! efficiently fetched. For trivial verification, an atom's commit hash is made
 //! reproducible by using constants for the timestamps and metadata.
 //!
-//! Additionally, a Git reference is stored under the Atom's ref path to the original
-//! source, ensuring it is never garbage collected and an Atom can always be verified.
+//! ## Overview
 //!
-//! A hexadecimal representation of the source commit is also stored in the reproducible
-//! Atom commit header, ensuring it is tied to its source in an unforgable manner.
+//! The Git publishing backend stores atoms using a structured reference hierarchy:
+//!
+//! - **Content refs** (`refs/eka/atoms/{label}/{version}`) - Point to atom content commits
+//! - **Spec refs** (`refs/eka/meta/{label}/{version}/manifest`) - Point to manifest blobs
+//! - **Origin refs** (`refs/eka/meta/{label}/{version}/origin`) - Point to source commits
+//!
+//! ## Key Components
+//!
+//! - [`GitPublisher`] - Builder for creating Git publishers with validation
+//! - [`GitContext`] - Runtime context for publishing operations
+//! - [`GitContent`] - Result information for published atoms
+//!
+//! ## Publishing Process
+//!
+//! 1. **Validation** - Ensure no duplicate atoms exist in the workspace
+//! 2. **Atom Discovery** - Find and verify atom structure in the working tree
+//! 3. **Content Creation** - Create reproducible Git commits for atom content
+//! 4. **Reference Writing** - Write Git references for discoverability
+//! 5. **Remote Push** - Push all references to the configured remote
+//!
+//! ## Reproducible Commits
+//!
+//! Atom commits use constant timestamps and metadata to ensure the same content
+//! always produces the same commit hash, enabling efficient deduplication and
+//! verification. The source commit hash is embedded in commit headers for
+//! cryptographic provenance.
+//!
+//! ## Safety Features
+//!
+//! - **Duplicate Detection** - Prevents publishing atoms with conflicting labels
+//! - **Root Consistency** - Ensures atoms derive from the correct repository root
+//! - **Atomic Operations** - Reference updates are transactional
+//! - **Verification** - All atoms are validated before publishing
 
 use std::cell::RefCell;
 use std::collections::HashMap;

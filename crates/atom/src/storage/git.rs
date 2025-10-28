@@ -1,10 +1,38 @@
-//! # Atom Git Store
+//! # Git Storage Backend
 //!
-//! This module contains the foundational types for the Git implementation of an Ekala store.
+//! This module provides the Git-based implementation of the Atom storage interface.
+//! It handles repository initialization, reference management, and query operations
+//! for Git-backed atom stores.
 //!
-//! In particular, the implementation to initialize ([`Init`]) a Git repository as an Ekala store
-//! is contained here, as well as the type representing the [`Root`] of history used for an
-//! [`crate::AtomId`].
+//! ## Overview
+//!
+//! The Git storage backend uses Git repositories to store atoms as orphaned commits
+//! with structured reference hierarchies. This provides:
+//!
+//! - **Distributed storage** with Git's built-in replication
+//! - **Cryptographic integrity** through Git's content addressing
+//! - **Version control** for atom evolution tracking
+//! - **Efficient querying** via Git references
+//!
+//! ## Key Components
+//!
+//! - [`Root`] - Represents the repository's root commit for atom identity
+//! - [`Error`] - Git-specific error types for storage operations
+//! - Repository initialization and root calculation
+//! - Reference querying and atom discovery
+//!
+//! ## Reference Structure
+//!
+//! Atoms are stored using Git references:
+//! - `refs/ekala/init` - Repository root reference
+//! - `refs/eka/atoms/{label}/{version}` - Atom content references
+//! - `refs/eka/meta/{label}/{version}/manifest` - Manifest references
+//! - `refs/eka/meta/{label}/{version}/origin` - Source commit references
+//!
+//! ## Initialization
+//!
+//! Repository initialization creates the root reference and ensures consistency
+//! between the calculated repository root and the stored reference.
 
 use std::borrow::Cow;
 use std::io;

@@ -1,3 +1,28 @@
+//! # Direct Dependency Resolution
+//!
+//! This module handles the resolution of direct dependencies (non-atom packages)
+//! using Nix fetchers. It supports various fetch types including URLs, Git repos,
+//! tarballs, and build sources.
+//!
+//! ## Supported Fetch Types
+//!
+//! - **URL Fetch** - Direct file downloads with integrity verification
+//! - **Git Fetch** - Git repositories with optional version/tag resolution
+//! - **Tarball Fetch** - Compressed archives with unpacking
+//! - **Build Source Fetch** - Sources for build-time dependencies
+//!
+//! ## Version Resolution
+//!
+//! For Git dependencies, version resolution supports:
+//! - **Tag-based** - Semantic version tags (e.g., `v1.2.3`)
+//! - **Ref-based** - Specific Git references (branches, commits)
+//! - **HEAD** - Latest commit on default branch
+//!
+//! ## Nix Integration
+//!
+//! Uses the SNix ecosystem for content-addressed storage and reproducible
+//! fetching with cryptographic integrity verification.
+
 use std::sync::Arc;
 
 use bstr::ByteSlice;
@@ -241,6 +266,54 @@ impl NixFetch {
 }
 
 impl NixGit {
+    /// Resolves a Git-based Nix dependency to a concrete version and commit hash.
+    ///
+    /// This function handles the complex version resolution logic for Git dependencies,
+    /// supporting different specification types: version requirements, specific references,
+    /// or default HEAD resolution. It queries the remote Git repository to find the
+    /// appropriate commit that satisfies the version constraints.
+    ///
+    /// # Parameters
+    ///
+    /// - `key`: The name/identifier for this dependency in the lockfile
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(NixGitDep)` containing the resolved dependency with version and commit hash,
+    /// or a `LockError` if resolution fails.
+    ///
+    /// # Algorithm
+    ///
+    /// 1. **Specification Branching**:
+    ///    - **Version Requirement**: Query refs/tags/*, parse semver, find highest match
+    ///    - **Specific Reference**: Query specific ref path, get exact commit
+    ///    - **HEAD Default**: Query HEAD ref for latest commit
+    ///
+    /// 2. **Git Operations**:
+    ///    - Query repository references using appropriate patterns
+    ///    - Extract commit hash from reference result
+    ///    - Convert to GitDigest format
+    ///
+    /// 3. **Result Construction**: Build NixGitDep with resolved version and commit
+    ///
+    /// # Edge Cases
+    ///
+    /// - **No Matching Version**: Version requirement matches no available tags
+    /// - **Invalid Reference**: Specified ref doesn't exist in repository
+    /// - **Network/Access Issues**: Git operations fail due to connectivity or permissions
+    /// - **Malformed Tags**: Tag names don't follow semver format
+    ///
+    /// # Assumptions
+    ///
+    /// - Git repository is accessible and properly configured
+    /// - Version tags follow semver conventions when version requirements are used
+    /// - References are valid Git references (branches, tags, commits)
+    ///
+    /// # Integration
+    ///
+    /// Called during Nix dependency resolution when a Git-based dependency needs to be
+    /// locked to a specific commit. The result ensures reproducible builds by recording
+    /// exact commit hashes rather than mutable references.
     async fn resolve(&self, key: &Name) -> Result<NixGitDep, LockError> {
         use crate::storage::QueryStore;
 
@@ -287,6 +360,51 @@ impl NixGit {
         })
     }
 
+    /// Finds the highest version from Git references that satisfies a version requirement.
+    ///
+    /// This function implements semantic version matching against Git references (typically tags).
+    /// It parses version strings from reference names, filters for those matching the requirement,
+    /// and returns the highest matching version along with its reference.
+    ///
+    /// # Parameters
+    ///
+    /// - `req`: The version requirement to match against (e.g., "^1.0.0", ">=2.0.0")
+    /// - `refs`: Iterator over Git references to search through
+    ///
+    /// # Returns
+    ///
+    /// Returns `Some((Version, Ref))` containing the highest matching version and its reference,
+    /// or `None` if no references match the requirement.
+    ///
+    /// # Algorithm
+    ///
+    /// 1. **Reference Processing**: For each reference:
+    ///    - Extract the reference name/path
+    ///    - Attempt to parse it as a semantic version string
+    ///    - Skip references that don't parse as valid semver
+    ///
+    /// 2. **Requirement Filtering**: Keep only versions that satisfy the requirement
+    ///
+    /// 3. **Maximum Selection**: Find the highest version among matches using semver ordering
+    ///
+    /// # Edge Cases
+    ///
+    /// - **No Valid Semver**: References with non-semver names are ignored
+    /// - **No Matches**: Returns None if no versions satisfy the requirement
+    /// - **Multiple Matches**: Returns the highest version (semver precedence)
+    /// - **Malformed Refs**: Invalid UTF-8 reference names are skipped
+    ///
+    /// # Assumptions
+    ///
+    /// - Reference names contain version information in semver-compatible format
+    /// - Version requirement is valid and parseable
+    /// - Semver ordering correctly identifies "highest" version
+    ///
+    /// # Integration
+    ///
+    /// Used during Git dependency resolution when a version requirement needs to be
+    /// matched against available tagged versions in a repository. Ensures that
+    /// the latest compatible version is selected for reproducible builds.
     fn match_version(
         req: &VersionReq,
         refs: impl IntoIterator<Item = Ref>,
@@ -305,6 +423,49 @@ impl NixGit {
 // Functions
 //================================================================================================
 
+/// Extracts and parses a semantic version from a string input.
+///
+/// This function uses a regular expression to identify semantic version patterns
+/// within strings (typically Git reference names like tags) and constructs
+/// valid semver Version objects from the captured components.
+///
+/// # Parameters
+///
+/// - `input`: The string to parse for semantic version information
+///
+/// # Returns
+///
+/// Returns `Some(Version)` if a valid semver is found and parsed successfully,
+/// or `None` if no semver pattern is found or parsing fails.
+///
+/// # Algorithm
+///
+/// 1. **Regex Matching**: Apply SEMVER_REGEX to extract version components:
+///    - Major, minor, patch numbers
+///    - Optional prerelease identifiers
+///    - Optional build metadata
+///
+/// 2. **String Construction**: Build a properly formatted semver string from captures
+///
+/// 3. **Version Parsing**: Use semver::Version::parse to validate and create Version object
+///
+/// # Edge Cases
+///
+/// - **No Match**: Input doesn't contain semver-like pattern
+/// - **Invalid Components**: Captured groups don't form valid semver
+/// - **Partial Match**: Regex matches but parsing fails (e.g., invalid numbers)
+/// - **Complex Prerelease**: Handles complex prerelease identifiers with dots
+///
+/// # Assumptions
+///
+/// - Input strings may contain version information mixed with other text
+/// - Version components follow semver specification
+/// - Regex pattern correctly identifies semver-compatible strings
+///
+/// # Integration
+///
+/// Used as a helper during Git reference processing to convert tag names
+/// and reference paths into structured version objects for comparison and matching.
 fn extract_and_parse_semver(input: &str) -> Option<Version> {
     let re = SEMVER_REGEX.to_owned();
     println!("{}", input);

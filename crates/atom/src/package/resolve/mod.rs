@@ -1,3 +1,37 @@
+//! # Dependency Resolution
+//!
+//! This module handles the resolution of atom dependencies from manifests into
+//! concrete, locked versions that can be reliably fetched and used.
+//!
+//! ## Overview
+//!
+//! The resolution process involves:
+//! 1. **Manifest Parsing** - Reading and validating atom manifests
+//! 2. **Set Resolution** - Resolving package sets and their mirrors
+//! 3. **Version Selection** - Finding highest matching versions for requirements
+//! 4. **Lockfile Generation** - Creating reproducible lockfiles
+//!
+//! ## Key Components
+//!
+//! - [`SetResolver`] - Resolves package sets and validates mirrors
+//! - [`ResolvedSets`] - Contains resolved atoms and their metadata
+//! - [`Uri`] - Handles atom URI parsing and resolution
+//!
+//! ## Resolution Process
+//!
+//! 1. **Set Validation** - Ensure all package sets have consistent roots
+//! 2. **Atom Discovery** - Query remotes for available atoms
+//! 3. **Version Matching** - Find highest versions satisfying constraints
+//! 4. **Dependency Locking** - Record exact versions and hashes
+//!
+//! ## Error Handling
+//!
+//! Resolution can fail due to:
+//! - Inconsistent mirror configurations
+//! - Missing atoms or versions
+//! - Network connectivity issues
+//! - Invalid manifest specifications
+
 use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 
@@ -103,8 +137,54 @@ impl<'a> SetResolver<'a> {
 
     /// Processes a single mirror, either local or remote, and initiates consistency checks.
     ///
-    /// For local mirrors, it calculates the root hash directly. For remote mirrors,
-    /// it spawns an asynchronous task to fetch repository data and perform checks.
+    /// This function handles the initial processing of a package set mirror during resolution.
+    /// It determines whether the mirror is local or remote and takes appropriate action:
+    ///
+    /// - **Local mirrors**: Calculates the root hash directly from the current repository's HEAD
+    ///   commit and performs immediate consistency checks against existing resolved sets.
+    /// - **Remote mirrors**: Spawns an asynchronous task to fetch repository metadata, discover
+    ///   available atoms, and perform consistency validation in the background.
+    ///
+    /// # Parameters
+    ///
+    /// - `set_tag`: The tag/name identifying the package set this mirror belongs to
+    /// - `mirror`: The mirror configuration (either local repository or remote URL)
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(())` on success, or a `BoxError` if:
+    /// - Local repository access fails
+    /// - Remote mirror URL parsing fails
+    /// - Consistency checks fail for local mirrors
+    ///
+    /// # Algorithm
+    ///
+    /// 1. **Local Mirror Processing**:
+    ///    - Access the local git repository via `self.repo`
+    ///    - Parse HEAD commit and calculate its origin hash
+    ///    - Validate set consistency with existing resolved sets
+    ///    - Update internal set tracking structures
+    ///
+    /// 2. **Remote Mirror Processing**:
+    ///    - Extract URL from mirror configuration
+    ///    - Spawn async task that:
+    ///      - Creates transport layer for git protocol
+    ///      - Fetches atom metadata from remote repository
+    ///      - Calculates repository root hash
+    ///      - Returns transport, atoms, root hash, set tag, and URL for later processing
+    ///
+    /// # Edge Cases
+    ///
+    /// - **No Local Repository**: Returns error if local mirror is specified but no repo available
+    /// - **Remote Transport Failure**: Async task will fail and be handled by
+    ///   `process_remote_mirror_result`
+    /// - **Empty Remote Repository**: Warns if remote has no atoms but continues processing
+    ///
+    /// # Integration
+    ///
+    /// This function is called during the set validation phase of resolution (step 1 in the overall
+    /// process). Remote mirror results are collected asynchronously and processed later in
+    /// `get_and_check_sets`.
     fn process_mirror(&mut self, set_tag: &'a Tag, mirror: &'a SetMirror) -> Result<(), BoxError> {
         use crate::id::Origin;
         use crate::storage::{QueryStore, QueryVersion};
@@ -161,8 +241,56 @@ impl<'a> SetResolver<'a> {
 
     /// Handles the result of an asynchronous remote mirror check.
     ///
-    /// This function processes the data fetched from a remote mirror, performs
-    /// consistency checks, and aggregates the results into the provided hashmaps.
+    /// This function processes the outcome of a background task that fetched metadata from a remote
+    /// package set mirror. It validates consistency, updates internal tracking structures, and
+    /// aggregates discovered atoms into the resolution state.
+    ///
+    /// # Parameters
+    ///
+    /// - `result`: A tuple containing:
+    ///   - `transport`: Optional transport layer for continued git operations
+    ///   - `atoms`: Collection of atom metadata discovered from the remote repository
+    ///   - `root`: The calculated root hash of the remote repository
+    ///   - `set_name`: The tag/name of the package set this mirror belongs to
+    ///   - `url`: The URL of the remote mirror
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(())` on success, or a `BoxError` if:
+    /// - Set consistency validation fails
+    /// - Atom insertion encounters conflicts or inconsistencies
+    ///
+    /// # Algorithm
+    ///
+    /// 1. **Extract Result Components**: Unpack the transport, atoms, root hash, set name, and URL
+    /// 2. **Consistency Validation**: Call `check_set_consistency` to ensure the remote mirror
+    ///    doesn't conflict with existing sets
+    /// 3. **Set Tracking Update**: Update internal structures to track this mirror's root hash
+    /// 4. **Transport Storage**: If transport exists, store it for potential future use
+    /// 5. **Atom Processing**: For each discovered atom:
+    ///    - Reserve capacity in the atoms map if needed for efficiency
+    ///    - Call `check_and_insert_atom` to validate and store the atom
+    ///
+    /// # Edge Cases
+    ///
+    /// - **Transport None**: No transport stored if remote fetch didn't require persistent
+    ///   connection
+    /// - **Empty Atoms Collection**: Function still succeeds but no atoms are processed
+    /// - **Root Hash Conflicts**: Validation fails if same repository appears in multiple sets
+    /// - **Atom Version Conflicts**: Individual atom insertion may fail but doesn't stop processing
+    ///   others
+    ///
+    /// # Assumptions
+    ///
+    /// - Remote mirror data is trustworthy (basic validation was done during fetch)
+    /// - Transport can be reused for subsequent operations on the same remote
+    /// - Atom metadata is correctly formatted and contains valid version/commit information
+    ///
+    /// # Integration
+    ///
+    /// This function is called asynchronously during the set resolution phase. Multiple remote
+    /// mirrors are processed concurrently, and their results are collected and handled here
+    /// to build the complete resolved sets structure.
     fn process_remote_mirror_result(&mut self, result: MirrorResult) -> Result<(), BoxError> {
         let (transport, atoms, root, set_name, url) = result?;
         let mirror = SetMirror::Url(url.to_owned());
@@ -186,8 +314,51 @@ impl<'a> SetResolver<'a> {
 
     /// Verifies the consistency of a single atom against the existing set of resolved atoms.
     ///
-    /// This check ensures that if an atom is advertised by multiple mirrors, it always
-    /// has the same revision for the same version.
+    /// This function ensures data integrity when multiple mirrors advertise the same atom.
+    /// It prevents version/revision conflicts that could indicate tampering or misconfiguration
+    /// by enforcing that identical atom versions always resolve to identical commit hashes.
+    ///
+    /// # Parameters
+    ///
+    /// - `atom`: The atom metadata (id, version, revision) discovered from a mirror
+    /// - `size`: Estimated number of atoms in the collection (used for capacity optimization)
+    /// - `mirror_url`: The URL of the mirror that advertised this atom
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(())` on success, or a `BoxError` if:
+    /// - An atom version conflict is detected between mirrors
+    ///
+    /// # Algorithm
+    ///
+    /// 1. **Atom Map Access**: Get or create an entry in `self.atoms` for this atom's ID
+    /// 2. **Capacity Management**: Reserve space in the version map if needed for efficiency
+    /// 3. **Version Conflict Detection**:
+    ///    - Check if this version already exists for this atom
+    ///    - If it exists, compare revisions - they must be identical
+    ///    - If different, log detailed error and return inconsistency error
+    /// 4. **Successful Insertion**:
+    ///    - For new versions: Create ResolvedAtom with this mirror as the first remote
+    ///    - For existing versions: Add this mirror to the existing atom's remote set
+    ///
+    /// # Edge Cases
+    ///
+    /// - **First Mirror**: Atom/version doesn't exist yet - creates new entry
+    /// - **Additional Mirrors**: Same version/revision - adds mirror to existing remotes
+    /// - **Revision Mismatch**: Same version but different revision - fails with detailed error
+    /// - **Large Atom Sets**: Uses size hint for efficient HashMap capacity management
+    ///
+    /// # Assumptions
+    ///
+    /// - Atom metadata is valid and properly formatted
+    /// - Mirror URLs are unique and correctly identify the source
+    /// - Revision hashes are cryptographic and collision-resistant
+    ///
+    /// # Integration
+    ///
+    /// Called during remote mirror processing to validate each discovered atom.
+    /// Critical for security as it prevents malicious mirrors from advertising
+    /// conflicting versions of the same software.
     fn check_and_insert_atom(
         &mut self,
         atom: AtomQuery,
@@ -235,9 +406,55 @@ impl<'a> SetResolver<'a> {
 
     /// Ensures that a given package set is consistent across all its mirrors.
     ///
-    /// This check verifies two conditions:
-    /// 1. A repository root hash is not associated with more than one package set name.
-    /// 2. A package set name is not associated with more than one repository root hash.
+    /// This function enforces the integrity constraints of package sets by preventing
+    /// ambiguous mappings between set names, repository root hashes, and mirror URLs.
+    /// It maintains the invariant that each repository can only belong to one set,
+    /// and each set can only map to one repository.
+    ///
+    /// # Parameters
+    ///
+    /// - `set_tag`: The name/tag of the package set being validated
+    /// - `root`: The cryptographic root hash of the repository
+    /// - `mirror`: The mirror configuration (URL or local) being checked
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(())` on success, or a `BoxError` if consistency violations are detected.
+    ///
+    /// # Algorithm
+    ///
+    /// 1. **Root-to-Set Mapping Check**:
+    ///    - Attempt to insert root hash -> set name mapping
+    ///    - If mapping already exists with different set name, fail with conflict error
+    ///    - Log detailed error showing the conflicting sets and mirror
+    ///
+    /// 2. **Set-to-Root Mapping Check**:
+    ///    - Attempt to insert set name -> root hash mapping
+    ///    - If mapping already exists with different root hash, fail with conflict error
+    ///    - Log detailed error showing the conflicting roots and mirror
+    ///
+    /// 3. **Mirror-to-Root Mapping**:
+    ///    - Record which root hash this mirror URL points to
+    ///    - Used for future validation of the same mirror URL
+    ///
+    /// # Edge Cases
+    ///
+    /// - **First Occurrence**: Set/root/mirror combination is new - creates mappings
+    /// - **Same Set, Same Root**: Valid - no error, mappings already exist
+    /// - **Different Set, Same Root**: Invalid - repository belongs to multiple sets
+    /// - **Same Set, Different Root**: Invalid - set points to multiple repositories
+    ///
+    /// # Assumptions
+    ///
+    /// - Root hashes are cryptographic and uniquely identify repositories
+    /// - Set names are user-defined and may conflict due to misconfiguration
+    /// - Mirror URLs should consistently point to the same repository
+    ///
+    /// # Integration
+    ///
+    /// Called during both local and remote mirror processing to validate set boundaries.
+    /// Critical for preventing supply chain attacks where malicious actors attempt to
+    /// associate the same repository with multiple package sets.
     fn check_set_consistency(
         &mut self,
         set_tag: &Tag,
@@ -479,6 +696,50 @@ impl ManifestWriter {
         Ok(())
     }
 
+    /// Synchronizes a single atom's lockfile entry with the manifest requirements.
+    ///
+    /// This function ensures that the lockfile contains the correct version and metadata
+    /// for an atom specified in the manifest. It handles both new atoms (not yet in lockfile)
+    /// and existing atoms that may need version updates.
+    ///
+    /// # Parameters
+    ///
+    /// - `req`: The version requirement specified in the manifest for this atom
+    /// - `id`: The unique identifier for this atom within its package set
+    /// - `set_tag`: The name of the package set containing this atom
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(())` on success, or a `git::Error` if:
+    /// - No matching version can be found in resolved atoms
+    /// - Local resolution fails when remote resolution is unavailable
+    ///
+    /// # Algorithm
+    ///
+    /// 1. **Check Lockfile Presence**: Determine if atom already exists in lockfile
+    /// 2. **New Atom Resolution**: If not present, resolve to highest matching version
+    /// 3. **Existing Atom Validation**: If present, check if current version still matches
+    ///    requirement
+    /// 4. **Version Update**: If requirement no longer matches, resolve to new version
+    ///
+    /// # Edge Cases
+    ///
+    /// - **New Atom**: Not in lockfile - resolves and adds new entry
+    /// - **Version Mismatch**: Existing atom version doesn't satisfy new requirement - updates
+    /// - **Version Match**: Existing atom still valid - no changes needed
+    /// - **Resolution Failure**: No version satisfies requirement - returns error
+    ///
+    /// # Assumptions
+    ///
+    /// - Manifest requirements are valid and parseable
+    /// - Resolved atoms contain all available versions for this atom
+    /// - Lockfile structure is consistent with manifest
+    ///
+    /// # Integration
+    ///
+    /// Called during manifest synchronization for each atom in each package set.
+    /// Part of the broader dependency resolution and locking process that ensures
+    /// reproducible builds by recording exact versions and commit hashes.
     fn synchronize_atom(
         &mut self,
         req: VersionReq,
@@ -505,6 +766,51 @@ impl ManifestWriter {
         Ok(())
     }
 
+    /// Locks an atom to a specific version and commit hash for reproducible builds.
+    ///
+    /// This function resolves a version requirement to a concrete version and commit,
+    /// creating a lockfile entry that ensures deterministic dependency resolution.
+    /// It first attempts resolution against pre-resolved remote atoms, falling back
+    /// to local repository resolution if needed.
+    ///
+    /// # Parameters
+    ///
+    /// - `req`: The version requirement to satisfy (e.g., "^1.0.0", "2.1.*")
+    /// - `id`: The atom identifier within its package set
+    /// - `set_tag`: The name of the package set containing this atom
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(lock::Dep)` containing the locked atom dependency, or a `git::Error` if:
+    /// - No version satisfies the requirement
+    /// - Resolution fails for both remote and local sources
+    ///
+    /// # Algorithm
+    ///
+    /// 1. **Remote Resolution Attempt**: Try to resolve against pre-resolved atoms from mirrors
+    /// 2. **Local Fallback**: If remote resolution fails and local repo available:
+    ///    - Construct URI from atom ID and requirement
+    ///    - Resolve against local repository
+    /// 3. **Lockfile Update**: Insert/update the resolved dependency in the lockfile
+    ///
+    /// # Edge Cases
+    ///
+    /// - **No Remote Match**: Falls back to local resolution
+    /// - **No Local Repo**: Returns error if both remote and local resolution fail
+    /// - **Local Resolution Success**: Uses local version with "local" prerelease tag
+    /// - **Version Conflicts**: Prefers remote resolution, only uses local as fallback
+    ///
+    /// # Assumptions
+    ///
+    /// - Remote atoms have been pre-resolved and are available in `self.resolved`
+    /// - Local repository (if present) contains valid atom manifests
+    /// - Version requirements are valid semver expressions
+    ///
+    /// # Integration
+    ///
+    /// Called during synchronization when an atom needs to be locked to a specific version.
+    /// The resulting lockfile entry ensures that subsequent builds use identical dependency
+    /// versions and commit hashes, enabling reproducible builds.
     fn lock_atom(
         &mut self,
         req: VersionReq,
@@ -557,6 +863,50 @@ impl ManifestWriter {
         Ok((req, dep))
     }
 
+    /// Resolves an atom URI against the local git repository.
+    ///
+    /// This function handles resolution when the user is working within a local git repository
+    /// that contains atom packages. It attempts to resolve the URI first against pre-resolved
+    /// remote atoms, and if that fails, falls back to reading the atom manifest directly
+    /// from the local filesystem.
+    ///
+    /// # Parameters
+    ///
+    /// - `uri`: The atom URI specifying the package name and version requirement
+    /// - `repo`: The local git repository to resolve against
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok((AtomReq, AtomDep))` containing the resolved requirement and dependency,
+    /// or a `git::Error` if resolution fails.
+    ///
+    /// # Algorithm
+    ///
+    /// 1. **Calculate Local Root**: Get the origin hash of the repository's HEAD commit
+    /// 2. **Remote Resolution Attempt**: Try to resolve against pre-resolved atoms first
+    /// 3. **Local Fallback**: If remote resolution fails:
+    ///    - Construct atom ID from root and URI label
+    ///    - Find the atom's manifest file in the local package directory
+    ///    - Parse the manifest and validate it matches the requested atom
+    ///    - Create a dependency with a "local" prerelease version tag
+    ///
+    /// # Edge Cases
+    ///
+    /// - **Remote Resolution Success**: Uses remote resolution result directly
+    /// - **Missing Local Manifest**: Returns error if atom not found in local packages
+    /// - **Manifest Mismatch**: Returns error if local manifest label doesn't match URI
+    /// - **Invalid Local Version**: Returns error if local atom version is invalid
+    ///
+    /// # Assumptions
+    ///
+    /// - Local repository contains valid atom manifests in expected locations
+    /// - Local packages are stored in a directory structure accessible via `self.resolved.ekala`
+    /// - Local resolution is used for development/testing, not production dependencies
+    ///
+    /// # Integration
+    ///
+    /// Called as a fallback during URI resolution when remote resolution is unavailable
+    /// or when explicitly working with local development versions of atoms.
     fn resolve_from_local(
         &self,
         uri: &Uri,
@@ -608,6 +958,51 @@ impl ManifestWriter {
         }
     }
 
+    /// Resolves an atom URI to concrete dependency information based on mirror configuration.
+    ///
+    /// This function handles the complex logic of determining how to resolve an atom URI
+    /// based on whether it's from a remote mirror or local repository, and whether the
+    /// mirror has already been resolved. It implements a priority system where remote
+    /// mirrors are preferred over local resolution.
+    ///
+    /// # Parameters
+    ///
+    /// - `uri`: The atom URI containing package name and version requirements
+    /// - `mirror`: The mirror configuration (remote URL or local) for this atom
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok((AtomReq, AtomDep))` with the resolved requirement and dependency,
+    /// or a `git::Error` if resolution fails.
+    ///
+    /// # Algorithm
+    ///
+    /// 1. **Remote Mirror with Known Root**: If mirror is remote and root hash is known:
+    ///    - Use `resolve_from_uri` to resolve against pre-resolved atoms
+    /// 2. **Remote Mirror Unknown**: If mirror is remote but root unknown:
+    ///    - Use transport from stored connections if available
+    ///    - Call URI's `resolve` method to fetch from remote repository
+    /// 3. **Local Repository**: If mirror is local and repo available:
+    ///    - Use `resolve_from_local` for local development resolution
+    /// 4. **Fallback Error**: If no resolution path available, return error with guidance
+    ///
+    /// # Edge Cases
+    ///
+    /// - **Mixed Remote/Local**: Handles atoms that exist in both remote and local contexts
+    /// - **Transport Reuse**: Reuses existing transport connections for efficiency
+    /// - **Local Development**: Supports development workflow with local atom packages
+    /// - **Missing Resolution**: Provides helpful error messages for unsupported scenarios
+    ///
+    /// # Assumptions
+    ///
+    /// - Mirror configurations are valid and consistent
+    /// - Transport connections are properly managed and reusable
+    /// - Local repositories contain valid atom manifests when specified
+    ///
+    /// # Integration
+    ///
+    /// Called during URI addition to manifest, ensuring atoms are resolved consistently
+    /// whether they come from remote mirrors or local development repositories.
     fn resolve_uri(
         &mut self,
         uri: &Uri,
@@ -641,6 +1036,46 @@ impl ManifestWriter {
         }
     }
 
+    /// Inserts or updates a dependency in the lockfile and logs the operation.
+    ///
+    /// This function manages the lockfile's dependency map, handling both insertions of new
+    /// dependencies and updates to existing ones. It provides detailed logging to track
+    /// changes during the resolution process, helping with debugging and audit trails.
+    ///
+    /// # Parameters
+    ///
+    /// - `key`: Either an `AtomId<Root>` for atom dependencies or a `Name` for direct dependencies
+    /// - `dep`: The dependency information to store (atom, nix, git, tar, or source types)
+    ///
+    /// # Returns
+    ///
+    /// This function doesn't return a value - it modifies the lockfile in place.
+    ///
+    /// # Algorithm
+    ///
+    /// 1. **Insert/Update Operation**: Attempt to insert the dependency into the lockfile
+    /// 2. **Change Detection**: Check if this was an update (key already existed) or new insertion
+    /// 3. **Logging**: Log appropriate messages based on dependency type and operation:
+    ///    - Atom dependencies: Include set information and operation type
+    ///    - Direct dependencies: Log the dependency name and type
+    ///
+    /// # Edge Cases
+    ///
+    /// - **New Dependency**: Logs as "updated" but actually inserted (HashMap behavior)
+    /// - **Type-Specific Logging**: Different log formats for different dependency types
+    /// - **Set Resolution**: For atoms, attempts to resolve set name for better logging
+    ///
+    /// # Assumptions
+    ///
+    /// - Lockfile structure is properly initialized
+    /// - Dependency data is valid and consistent
+    /// - Logging is configured and available
+    ///
+    /// # Integration
+    ///
+    /// Called whenever dependencies are resolved or updated during manifest synchronization.
+    /// The logging helps track the dependency resolution process and identify when
+    /// dependencies change between resolution runs.
     fn insert_or_update_and_log(&mut self, key: Either<AtomId<Root>, Name>, dep: &lock::Dep) {
         if self
             .lock
