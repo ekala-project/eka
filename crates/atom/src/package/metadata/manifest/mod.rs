@@ -167,7 +167,7 @@ where
     {
         use serde::de;
 
-        let err = "too many entries";
+        let err = "needs precisely one entry";
 
         let map: BTreeMap<K, V> = BTreeMap::deserialize(deserializer)?;
         let len = map.len();
