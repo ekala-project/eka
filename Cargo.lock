@@ -671,6 +671,7 @@ dependencies = [
  "figment",
  "gix 0.73.0",
  "serde",
+ "tracing",
 ]
 
 [[package]]

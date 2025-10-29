@@ -1,0 +1,62 @@
+# Eka Configuration File Format
+#
+# This file defines the default configuration values for the Eka CLI tool.
+# Configuration is loaded from multiple sources in the following priority order:
+# 1. Built-in defaults (this file)
+# 2. User-specific config: ~/.config/eka.toml (on Linux/macOS) or equivalent
+# 3. Repository-specific config: .git/info/eka.toml (if in a git repo)
+# 4. Environment variables prefixed with EKA_ (e.g., EKA_CACHE_ROOT)
+#
+# Values from higher-priority sources override those from lower-priority sources.
+# This allows for global defaults, user preferences, and per-project overrides.
+#
+# Configuration sections:
+# - [atom.default]: Default settings for Atom package manifests
+# - [uri.aliases]: Short aliases for commonly used URIs in package references
+# - [cache]: Cache directory settings (runtime-determined defaults commented out)
+
+# Default settings for Atom package manifests.
+# These values are used when generating new manifests with `eka new`.
+[atom.default]
+# The default composer (importer) to use for new Atom packages.
+# This specifies the default import mechanism for package dependencies as an atom URI.
+composer = "atom::atomix"
+
+# URI aliases for shortening package references.
+# These aliases allow using short names instead of full URIs when specifying
+# package sources. For example, "github.com/ekala-project/atom" can be written as "ekl:atom".
+[uri.aliases]
+# Alias for the Atom package repository
+atom = "ekl:atom"
+# Alias for Bitbucket
+bb = "bitbucket.org"
+# Alias for Codeberg
+cb = "codeberg.org"
+# Alias for Ekala core packages
+cogs = "ekl:corepkgs"
+# Alias for Eka itself
+eka = "ekl:eka"
+# Alias for the Ekala GitHub organization
+ekl = "gh:ekala-project"
+# Alias for GitHub
+gh = "github.com"
+# Alias for GitLab
+gl = "gitlab.com"
+# Alias for NixOS GitHub organization
+nxs = "gh:nixos"
+# Alias for Nixpkgs (NixOS package repository)
+pkgs = "nxs:nixpkgs"
+# Alias for SourceHut
+sh = "sr.ht"
+
+# Cache directory configuration.
+# The cache root directory is where Eka stores downloaded packages and other cached data.
+# By default, this is determined at runtime based on the operating system:
+# - Linux/macOS: ~/.cache/eka
+# - Windows: %LOCALAPPDATA%\eka
+# - Fallback: system temp directory + eka
+#
+# You can override this by uncommenting and setting a custom path.
+# Environment variable: EKA_CACHE_ROOT
+# [cache]
+# root = "~/.cache/eka"

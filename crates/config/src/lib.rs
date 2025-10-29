@@ -4,6 +4,7 @@
 //! settings from files and environment variables, making them accessible
 //! globally via a lazily initialized static reference (`CONFIG`).
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::LazyLock;
@@ -13,6 +14,9 @@ use figment::providers::{Env, Format, Toml};
 use figment::{Figment, Metadata, Provider};
 use gix::ThreadSafeRepository;
 use serde::{Deserialize, Serialize};
+
+/// The default configuration values
+const DEFAULT_TOML_CONFIG: &str = include_str!("./eka.default.toml");
 
 //================================================================================================
 // Statics
@@ -29,25 +33,47 @@ pub static CONFIG: LazyLock<Config> = LazyLock::new(load_config);
 // Types
 //================================================================================================
 
+#[derive(Deserialize, Serialize, Default)]
+pub struct AtomConfig<'a> {
+    #[serde(borrow)]
+    default: AtomDefaults<'a>,
+}
+
+#[derive(Deserialize, Serialize, Default)]
+pub struct AtomDefaults<'a> {
+    #[serde(borrow)]
+    composer: Cow<'a, str>,
+}
+
 /// Defines cache-related configuration settings.
 #[derive(Deserialize, Serialize)]
 pub struct CacheConfig {
     /// The root directory for storing cached data.
-    pub root_dir: PathBuf,
+    pub root: PathBuf,
 }
 
 /// Represents the application's primary configuration structure.
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Default)]
 pub struct Config {
     /// A map of command aliases.
     #[serde(borrow)]
-    aliases: Aliases<'static>,
+    uri: Uri<'static>,
     /// Cache-related settings.
+    #[serde(default)]
     pub cache: CacheConfig,
+    #[serde(borrow)]
+    pub atom: AtomConfig<'static>,
+}
+
+#[derive(Deserialize, Serialize, Default)]
+pub struct Uri<'a> {
+    /// A map of uri aliases.
+    #[serde(borrow)]
+    aliases: Aliases<'a>,
 }
 
 /// A type alias for a hash map of borrowed string slices, used for command aliases.
-type Aliases<'a> = HashMap<&'a str, &'a str>;
+type Aliases<'a> = HashMap<Cow<'a, str>, Cow<'a, str>>;
 
 //================================================================================================
 // Impls
@@ -56,7 +82,7 @@ type Aliases<'a> = HashMap<&'a str, &'a str>;
 impl Default for CacheConfig {
     fn default() -> Self {
         Self {
-            root_dir: get_cache_dir(),
+            root: get_cache_dir(),
         }
     }
 }
@@ -64,7 +90,7 @@ impl Default for CacheConfig {
 impl Config {
     /// Returns a reference to the command aliases.
     pub fn aliases(&self) -> &Aliases<'_> {
-        &self.aliases
+        &self.uri.aliases
     }
 
     /// Constructs a `Figment` instance for configuration loading.
@@ -72,7 +98,7 @@ impl Config {
     /// This method builds a configuration provider by layering default settings,
     /// user-specific configuration files, and environment variables.
     pub fn figment() -> Figment {
-        let mut fig = Figment::from(Config::default());
+        let mut fig = Figment::from(Config::default()).merge(Toml::string(DEFAULT_TOML_CONFIG));
 
         if let Ok(c) = etcetera::choose_base_strategy() {
             let config = c.config_dir().join("eka.toml");
@@ -93,22 +119,6 @@ impl Config {
     }
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        Config {
-            aliases: HashMap::from_iter([
-                ("gh", "github.com"),
-                ("gl", "gitlab.com"),
-                ("cb", "codeberg.org"),
-                ("bb", "bitbucket.org"),
-                ("sh", "sr.ht"),
-                ("pkgs", "gh:nixos/nixpkgs"),
-            ]),
-            cache: CacheConfig::default(),
-        }
-    }
-}
-
 impl Provider for Config {
     fn metadata(&self) -> figment::Metadata {
         Metadata::named("Eka CLI Config")
@@ -117,7 +127,7 @@ impl Provider for Config {
     fn data(
         &self,
     ) -> Result<figment::value::Map<figment::Profile, figment::value::Dict>, figment::Error> {
-        figment::providers::Serialized::defaults(Config::default()).data()
+        figment::providers::Serialized::defaults(self).data()
     }
 }
 
@@ -138,5 +148,8 @@ fn get_cache_dir() -> PathBuf {
 ///
 /// This function is used to initialize the `CONFIG` static variable.
 fn load_config() -> Config {
-    Config::figment().extract().unwrap_or_default()
+    Config::figment().extract().unwrap_or_else(|e| {
+        tracing::error!(error = %e, "problem loading config from default sources, falling back to nearly empty configuration");
+        Config::default()
+    })
 }

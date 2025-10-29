@@ -163,7 +163,7 @@ impl NixFetch {
         use snix_glue::fetchers::Fetcher;
         use snix_store::nar::SimpleRenderer;
         use snix_store::pathinfoservice;
-        let cache_root = config::CONFIG.cache.root_dir.to_owned();
+        let cache_root = config::CONFIG.cache.root.to_owned();
 
         let blob_service_url = format!("objectstore+file://{}", cache_root.join("blobs").display());
         let dir_service_url = format!("redb://{}", cache_root.join("dirs.redb").display());

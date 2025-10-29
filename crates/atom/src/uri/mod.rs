@@ -153,7 +153,7 @@ pub enum UriError {
 }
 
 #[derive(Debug)]
-struct Aliases(&'static HashMap<&'static str, &'static str>);
+struct Aliases(&'static HashMap<Cow<'static, str>, Cow<'static, str>>);
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[cfg_attr(test, derive(Serialize, Deserialize))]
@@ -236,29 +236,26 @@ impl TryFrom<&str> for AliasedUrl {
 }
 
 impl Aliases {
-    fn get_alias(&self, s: &str) -> Result<&str, UriError> {
+    fn get_alias(&self, s: &str) -> Result<Cow<'_, str>, UriError> {
         self.get(s)
-            .map_or_else(|| Err(UriError::NoAlias(s.into())), |s| Ok(*s))
+            .map_or_else(|| Err(UriError::NoAlias(s.into())), |s| Ok(s.clone()))
     }
 
     fn resolve_alias(&'static self, s: &str) -> Result<Cow<'static, str>, UriError> {
-        let res = self.get_alias(s)?;
+        let mut res = self.get_alias(s)?;
 
-        // allow one level of indirection in alises, e.g. `org = gh:my-org`
-        let res = match res.split_once(':') {
-            Some((s, rest)) => {
-                let res = self.get_alias(s)?;
-                Cow::Owned(format!("{res}/{rest}"))
-            },
-            None => Cow::Borrowed(res),
-        };
+        // allow indirection in alises, e.g. `org = gh:my-org`
+        while let Some((s, rest)) = res.split_once(':') {
+            let resolved = self.get_alias(s)?;
+            res = Cow::Owned(format!("{resolved}/{rest}"))
+        }
 
         Ok(res)
     }
 }
 
 impl Deref for Aliases {
-    type Target = HashMap<&'static str, &'static str>;
+    type Target = HashMap<Cow<'static, str>, Cow<'static, str>>;
 
     fn deref(&self) -> &Self::Target {
         self.0
