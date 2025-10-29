@@ -539,6 +539,7 @@ impl Uri {
             ))
         } else {
             // implement path resolution for atoms
+            tracing::warn!("specifying atoms by path not implemented");
             todo!()
         }
     }

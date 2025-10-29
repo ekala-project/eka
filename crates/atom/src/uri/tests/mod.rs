@@ -48,7 +48,8 @@ const ALIASES: &[&str] = &[
     // not an alias, but an ssh url without a username
     "my.ssh.com:my/repo::hello",
     "foo@^0.8",
-    "::foo",
+    "foo::foo",
+    "foo.com::foo",
     "::foo",
 ];
 

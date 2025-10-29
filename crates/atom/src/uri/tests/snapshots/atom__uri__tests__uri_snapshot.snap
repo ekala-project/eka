@@ -1,6 +1,6 @@
 ---
 source: crates/atom/src/uri/tests/mod.rs
-assertion_line: 47
+assertion_line: 69
 expression: results?
 ---
 [
@@ -622,7 +622,36 @@ expression: results?
         ),
     },
     Uri {
-        url: None,
+        url: Some(
+            Url {
+                scheme: File,
+                user: None,
+                password: None,
+                host: None,
+                serialize_alternative_form: true,
+                port: None,
+                path: "foo",
+            },
+        ),
+        label: Label(
+            "foo",
+        ),
+        version: None,
+    },
+    Uri {
+        url: Some(
+            Url {
+                scheme: Https,
+                user: None,
+                password: None,
+                host: Some(
+                    "foo.com",
+                ),
+                serialize_alternative_form: false,
+                port: None,
+                path: "/",
+            },
+        ),
         label: Label(
             "foo",
         ),

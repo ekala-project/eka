@@ -467,33 +467,30 @@ impl<'a> UrlRef<'a> {
             .into();
 
         // special case for empty fragments, e.g. foo::my-atom
-        let rest = if rest.is_empty() { frag } else { rest };
+        let (rest, frag) = if rest.is_empty() {
+            (frag, rest)
+        } else {
+            (rest, frag)
+        };
 
         let rest = if !frag.contains(rest) && !frag.is_empty() {
             format!("{}/{}", rest, frag)
         } else {
             rest.into()
         };
-
         let path = if host.is_none() {
-            format!("{maybe_host}{delim}{rest}")
+            if maybe_host == rest {
+                rest
+            } else {
+                format!("{maybe_host}{delim}{rest}")
+            }
+        } else if maybe_host == rest {
+            frag.into()
         } else if !rest.starts_with('/') {
             format!("/{rest}")
         } else {
             rest.to_owned()
         };
-
-        tracing::trace!(
-            ?scheme,
-            delim,
-            host,
-            port,
-            path,
-            rest,
-            maybe_host,
-            frag,
-            ?resolved
-        );
 
         let alternate_form = scheme == Scheme::File;
         let port = if scheme == Scheme::Ssh {
@@ -517,9 +514,8 @@ impl<'a> UrlRef<'a> {
         )
         .map_err(|e| {
             tracing::debug!(?e);
-            e
+            e.into()
         })
-        .map_err(Into::into)
     }
 }
 
