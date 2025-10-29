@@ -76,7 +76,7 @@
 //! Note: `Manifest` and `Atom` types are not publicly exposed in the current API.
 //! Use the public exports from the crate root instead.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -138,14 +138,63 @@ pub struct Manifest {
     deps: Dependency,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct Singleton<K, V> {
+    key: K,
+    value: V,
+}
+
 /// A specialized result type for manifest operations.
 pub type AtomResult<T> = Result<T, AtomError>;
 
 type AtomFrom = HashMap<Tag, HashMap<Label, VersionReq>>;
 
+type Composer = Singleton<Label, VersionReq>;
+
+type ComposerSet = Singleton<Tag, Composer>;
+
 //================================================================================================
 // Impls
 //================================================================================================
+
+impl<'de, K: Deserialize<'de>, V: Deserialize<'de>> Deserialize<'de> for Singleton<K, V>
+where
+    K: Ord,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de;
+
+        let err = "too many entries";
+
+        let map: BTreeMap<K, V> = BTreeMap::deserialize(deserializer)?;
+        let len = map.len();
+        if len > 1 {
+            return Err(de::Error::invalid_length(len, &err));
+        }
+        if let Some((key, value)) = map.into_iter().next() {
+            Ok(Self { key, value })
+        } else {
+            Err(de::Error::invalid_length(len, &err))
+        }
+    }
+}
+
+impl<K: Serialize, V: Serialize> Serialize for Singleton<K, V>
+where
+    K: Ord + Clone,
+    V: Clone,
+{
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let map = BTreeMap::from([(self.key.to_owned(), self.value.to_owned())]);
+        map.serialize(serializer)
+    }
+}
 
 impl Manifest {
     /// Creates a new `Manifest` with the given label, version, and description.
