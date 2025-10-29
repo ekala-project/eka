@@ -711,7 +711,10 @@ impl super::QueryStore<Ref, Box<dyn Transport + Send>> for gix::Url {
             Vec::new(),
             &mut prodash::progress::Discard,
         )
-        .map_err(Box::new)?;
+        .map_err(|e| {
+            tracing::error!(url = %self, "couldn't establish a handshake with the remote");
+            Box::new(e)
+        })?;
 
         tracing::debug!(?targets, url = %self, "checking remote for refs");
         use gix::refspec::parse::Operation;
