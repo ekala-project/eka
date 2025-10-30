@@ -510,7 +510,8 @@ impl ManifestWriter {
         let toml_str = fs::read_to_string(&path).inspect_err(|_| {
             tracing::error!(message = "No atom exists", path = %path.display());
         })?;
-        let (doc, manifest) = TypedDocument::<ValidManifest>::new(&toml_str)?;
+        let (doc, manifest) = TypedDocument::<ValidManifest>::new(&toml_str)
+            .inspect_err(|_| tracing::error!(path = %path.display(), "could not parse manifest"))?;
         let resolved_sets = SetResolver::new(repo, manifest.as_ref())?
             .get_and_check_sets()
             .await?;
