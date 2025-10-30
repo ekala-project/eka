@@ -171,9 +171,15 @@ impl NixFetch {
         let blob_service_url = format!("objectstore+file://{}", cache_root.join("blobs").display());
         let dir_service_url = format!("redb://{}", cache_root.join("dirs.redb").display());
         let path_service_url = format!("redb://{}", cache_root.join("paths.redb").display());
-        let blob_service = blobservice::from_addr(&blob_service_url).await?;
-        let directory_service = directoryservice::from_addr(&dir_service_url).await?;
-        let path_info_service = pathinfoservice::from_addr(&path_service_url, None).await?;
+
+        let (blob, dir, path) = tokio::join!(
+            blobservice::from_addr(&blob_service_url),
+            directoryservice::from_addr(&dir_service_url),
+            pathinfoservice::from_addr(&path_service_url, None)
+        );
+        let blob_service = blob?;
+        let directory_service = dir?;
+        let path_info_service = path?;
         let nar_calculation_service =
             SimpleRenderer::new(blob_service.clone(), directory_service.clone());
 
@@ -198,15 +204,19 @@ impl NixFetch {
             &Name::try_from(super::get_url_filename(&url))?
         };
 
+        let fetcher = Self::get_fetcher();
+
         match &self.kind {
             NixReq::Url(url) => {
                 let args = Fetch::URL {
                     url: url.to_owned(),
                     exp_hash: None,
                 };
-                let fetcher = Self::get_fetcher();
 
-                let (_, _, hash, _) = fetcher.await?.ingest_and_persist(key, args).await?;
+                let (_, _, hash, _) = async {
+                    Ok::<_, BoxError>(fetcher.await?.ingest_and_persist(key, args).await?)
+                }
+                .await?;
 
                 Ok((
                     key.to_owned(),
@@ -222,9 +232,12 @@ impl NixFetch {
                     url: url.to_owned(),
                     exp_nar_sha256: None,
                 };
-                let fetcher = Self::get_fetcher();
 
-                let (_, _, hash, _) = fetcher.await?.ingest_and_persist(key, args).await?;
+                let (_, _, hash, _) = async {
+                    Ok::<_, BoxError>(fetcher.await?.ingest_and_persist(key, args).await?)
+                }
+                .await?;
+
                 Ok((
                     key.to_owned(),
                     lock::Dep::NixTar(NixTarDep::new(
@@ -252,9 +265,11 @@ impl NixFetch {
                         exp_hash: None,
                     }
                 };
-                let fetcher = Self::get_fetcher();
 
-                let (_, _, hash, _) = fetcher.await?.ingest_and_persist(key, args).await?;
+                let (_, _, hash, _) = async {
+                    Ok::<_, BoxError>(fetcher.await?.ingest_and_persist(key, args).await?)
+                }
+                .await?;
                 Ok((
                     key.to_owned(),
                     lock::Dep::NixSrc(BuildSrc::new(

@@ -38,7 +38,7 @@ pub(crate) enum Error {
 //================================================================================================
 
 /// Detects the version control system in the current directory.
-pub(super) async fn detect() -> Result<Detected, Error> {
+pub(super) fn detect() -> Result<Detected, Error> {
     if let Ok(Some(repo)) = git::repo() {
         let git_dir = fs::canonicalize(repo.path())
             .ok()

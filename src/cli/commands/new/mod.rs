@@ -4,7 +4,6 @@
 //! specified directory.
 
 use std::ffi::OsStr;
-use std::future::Future;
 use std::path::PathBuf;
 
 use anyhow::Result;
@@ -37,16 +36,13 @@ pub struct Args {
 //================================================================================================
 
 /// The main entry point for the `new` subcommand.
-pub(super) async fn run(
-    store: impl Future<Output = Result<Detected, crate::cli::store::Error>>,
-    args: Args,
-) -> Result<()> {
+pub(super) fn run(store: Result<Detected, crate::cli::store::Error>, args: Args) -> Result<()> {
     let label: Label = if let Some(label) = args.label {
         label
     } else {
         args.path.file_name().unwrap_or(OsStr::new("")).try_into()?
     };
-    let repo = if let Ok(Detected::Git(repo)) = store.await {
+    let repo = if let Ok(Detected::Git(repo)) = store {
         Some(repo)
     } else {
         None

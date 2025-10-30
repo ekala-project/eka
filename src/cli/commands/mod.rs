@@ -65,13 +65,13 @@ pub(super) enum Commands {
 pub async fn run(args: Args) -> anyhow::Result<()> {
     let store = store::detect();
     match args.command {
-        Commands::Add(args) => add::run(store.await.ok(), args).await?,
-        Commands::New(args) => new::run(store, args).await?,
+        Commands::Add(args) => add::run(store.ok(), args).await?,
+        Commands::New(args) => new::run(store, args)?,
         Commands::Publish(args) => {
-            publish::run(store.await?, args).await?;
+            publish::run(store?, args).await?;
         },
-        Commands::Init(args) => init::run(store.await.ok(), args)?,
-        Commands::Resolve(args) => resolve::run(store.await?, args)?,
+        Commands::Init(args) => init::run(store.ok(), args)?,
+        Commands::Resolve(args) => resolve::run(store?, args)?,
     }
     Ok(())
 }
