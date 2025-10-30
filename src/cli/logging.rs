@@ -47,7 +47,7 @@ macro_rules! fatal {
         let ansi = ANSI.load(std::sync::atomic::Ordering::SeqCst);
         tracing::error!(
             fatal = true,
-            "{}FATAL{} {}",
+            "{}FATAL{}: {}",
             if ansi { ansi::MAGENTA } else { "" },
             if ansi { ansi::RESET } else { "" },
             $error

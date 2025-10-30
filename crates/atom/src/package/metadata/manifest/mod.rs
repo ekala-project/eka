@@ -224,7 +224,7 @@ where
     {
         use serde::de;
 
-        let err = "needs precisely one entry";
+        let err = "precisely one entry";
 
         let map: BTreeMap<K, V> = BTreeMap::deserialize(deserializer)?;
         let len = map.len();
@@ -724,8 +724,14 @@ impl<'de> Deserialize<'de> for ValidManifest {
             tracing::error!(
                 suggestion = "define a set in [package.sets] for the missing key(s), or pull from \
                               an existing set",
-                missing =
-                    toml_edit::ser::to_string(&deps_missings_sets).map_err(de::Error::custom)?,
+                undeclared_sets = format!(
+                    "[ {} ]",
+                    &deps_missings_sets
+                        .iter()
+                        .map(|x| x.as_ref())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
                 "found undeclared sets in [deps.from]"
             );
             return Err(de::Error::custom(DocError::UndeclaredSets));
