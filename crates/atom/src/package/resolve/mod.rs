@@ -33,6 +33,7 @@
 //! - Invalid manifest specifications
 
 use std::collections::{BTreeSet, HashMap};
+use std::ops::Deref;
 use std::path::PathBuf;
 
 use either::Either;
@@ -210,8 +211,12 @@ impl<'a> SetResolver<'a> {
                 let url = url.to_owned();
                 let set_name = set_tag.to_owned();
                 self.tasks.spawn(async move {
-                    let mut transport = url.get_transport().ok();
-                    let atoms = url.get_atoms(transport.as_mut())?;
+                    let (atoms, transport, url) = tokio::task::spawn_blocking(move || {
+                        let mut transport = url.get_transport().ok();
+                        (url.get_atoms(transport.as_mut()), transport, url)
+                    })
+                    .await?;
+                    let atoms = atoms?;
                     let root = atoms.calculate_origin().inspect_err(|_| {
                         tracing::warn!(
                             set.tag = %set_name,
@@ -761,7 +766,7 @@ impl ManifestWriter {
             .as_ref()
             .get(&either::Either::Left(id.to_owned()))
         {
-            if !req.matches(dep.version()) {
+            if dep.rev().is_some() && !req.matches(dep.version()) {
                 self.lock_atom(req, id, set_tag)?;
             }
         }
@@ -1084,35 +1089,33 @@ impl ManifestWriter {
     /// The logging helps track the dependency resolution process and identify when
     /// dependencies change between resolution runs.
     fn insert_or_update_and_log(&mut self, key: Either<AtomId<Root>, Name>, dep: &lock::Dep) {
-        if self
-            .lock
-            .deps
-            .as_mut()
-            .insert(key, dep.to_owned())
-            .is_some()
-        {
-            match &dep {
-                lock::Dep::Atom(dep) => {
-                    let tag = self.resolved.details().get(&dep.set()).map(|d| &d.tag);
-                    tracing::warn!(
-                        message = Self::UPDATE_DEPENDENCY,
-                        label = %dep.label(),
-                        set = ?tag,
-                        r#type = "atom"
-                    );
-                },
-                lock::Dep::Nix(dep) => {
-                    tracing::warn!(message = "updating lock entry", direct.nix = %dep.name())
-                },
-                lock::Dep::NixGit(dep) => {
-                    tracing::warn!(message = "updating lock entry", direct.nix = %dep.name())
-                },
-                lock::Dep::NixTar(dep) => {
-                    tracing::warn!(message = "updating lock entry", direct.nix = %dep.name())
-                },
-                lock::Dep::NixSrc(dep) => {
-                    tracing::warn!(message = "updating lock entry", direct.nix = %dep.name())
-                },
+        if let Some(old) = &self.lock.deps.as_mut().insert(key, dep.to_owned()) {
+            if old != dep {
+                match dep {
+                    lock::Dep::Atom(dep) => {
+                        let tag = self.resolved.details().get(&dep.set()).map(|d| &d.tag);
+                        tracing::warn!(
+                            message = Self::UPDATE_DEPENDENCY,
+                            label = %dep.label(),
+                            set = %tag.map(|t| t.deref().as_str()).unwrap_or("<missing>"),
+                            r#type = "atom"
+                        );
+                    },
+                    lock::Dep::Nix(dep) => {
+                        tracing::warn!(message = "updating lock entry", direct.nix = %dep.name())
+                    },
+                    lock::Dep::NixGit(dep) => {
+                        tracing::warn!(message = "updating lock entry", direct.nix = %dep.name())
+                    },
+                    lock::Dep::NixTar(dep) => {
+                        tracing::warn!(message = "updating lock entry", direct.nix = %dep.name())
+                    },
+                    lock::Dep::NixSrc(dep) => {
+                        tracing::warn!(message = "updating lock entry", direct.nix = %dep.name())
+                    },
+                }
+            } else {
+                tracing::info!(%dep, "lock change requested, but version still matches")
             }
         }
     }

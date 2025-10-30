@@ -75,6 +75,7 @@ use std::ops::Deref;
 
 use direct::{BuildSrc, NixDep, NixGitDep, NixTarDep};
 use gix::ObjectId;
+use hex::ToHex;
 use id::{AtomDigest, Label, Name, Tag};
 use manifest::SetMirror;
 use package::sets::ResolvedAtom;
@@ -244,6 +245,28 @@ impl AtomDep {
     pub(crate) fn set(&self) -> GitDigest {
         self.set
     }
+
+    pub(crate) fn rev(&self) -> Option<GitDigest> {
+        self.rev
+    }
+}
+
+impl std::fmt::Display for Dep {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Dep::Atom(atom_dep) => write!(
+                f,
+                "{:.8}::{}@{}",
+                atom_dep.set(),
+                atom_dep.label(),
+                atom_dep.version()
+            ),
+            Dep::Nix(nix_dep) => write!(f, "nix:{}", nix_dep.name()),
+            Dep::NixGit(nix_git_dep) => write!(f, "nix:{}", nix_git_dep.name()),
+            Dep::NixTar(nix_tar_dep) => write!(f, "nix:{}", nix_tar_dep.name()),
+            Dep::NixSrc(build_src) => write!(f, "nix:{}", build_src.name()),
+        }
+    }
 }
 
 impl From<&AtomDep> for AtomId<Root> {
@@ -369,6 +392,22 @@ impl From<ObjectId> for GitDigest {
     fn from(id: ObjectId) -> Self {
         match id {
             ObjectId::Sha1(bytes) => GitDigest::Sha1(bytes),
+        }
+    }
+}
+
+impl std::fmt::Display for GitDigest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(max_width) = f.precision() {
+            match self {
+                GitDigest::Sha1(o) => write!(f, "{:.max_width$}", o.encode_hex::<String>()),
+                GitDigest::Sha256(o) => write!(f, "{:.max_width$}", o.encode_hex::<String>()),
+            }
+        } else {
+            match self {
+                GitDigest::Sha1(o) => write!(f, "{}", o.encode_hex::<String>()),
+                GitDigest::Sha256(o) => write!(f, "{}", o.encode_hex::<String>()),
+            }
         }
     }
 }

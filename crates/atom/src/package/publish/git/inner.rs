@@ -167,7 +167,10 @@ impl<'a> AtomReferences<'a> {
                 let span = tracing::info_span!("push", msg = %r, %remote);
                 crate::log::set_sub_task(&span, &format!("🚀 push: {}", r));
                 let _enter = span.enter();
-                let result = git::run_git_command(&["push", &remote, format!("{r}:{r}").as_str()])?;
+                let blocking = tokio::task::spawn_blocking(move || {
+                    git::run_git_command(&["push", &remote, format!("{r}:{r}").as_str()])
+                });
+                let result = blocking.await??;
 
                 progress.pb_inc(1);
 
