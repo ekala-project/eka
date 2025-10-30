@@ -23,6 +23,7 @@ use std::ffi::OsStr;
 use bstr::ByteSlice;
 use id::{Name, Tag};
 use package::GitSpec;
+use package::metadata::manifest::ValidManifest;
 use package::metadata::{DocError, TypedDocument};
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -30,7 +31,7 @@ use uri::{AliasedUrl, VERSION_PLACEHOLDER, serde_gix_url};
 use url::Url;
 
 use super::WriteDeps;
-use crate::{Label, Manifest, id, package, uri};
+use crate::{Label, id, package, uri};
 
 //================================================================================================
 // Types
@@ -102,10 +103,14 @@ pub struct NixSrc {
 // Impls
 //================================================================================================
 
-impl WriteDeps<Manifest, Label> for NixFetch {
+impl WriteDeps<ValidManifest, Label> for NixFetch {
     type Error = toml_edit::ser::Error;
 
-    fn write_dep(&self, key: Label, doc: &mut TypedDocument<Manifest>) -> Result<(), Self::Error> {
+    fn write_dep(
+        &self,
+        key: Label,
+        doc: &mut TypedDocument<ValidManifest>,
+    ) -> Result<(), Self::Error> {
         use toml_edit::{Item, Value};
         let doc = doc.as_mut();
         let nix_table = toml_edit::ser::to_document(self)?.as_table().to_owned();

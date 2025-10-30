@@ -12,7 +12,8 @@
 //! ## Key Types
 //!
 //! - [`Atom`] - Represents an atom with its metadata and dependencies
-//! - [`Manifest`] - Atom manifest format and parsing
+//! - [`ValidManifest`] - Publicly exposed manifest type with validation
+//! - [`Manifest`] - Internal manifest structure (private implementation detail)
 //! - [`Lockfile`] - Resolved dependency lockfile
 //! - [`AtomPaths`] - File system paths associated with an atom
 //! - [`EkalaManager`] - Manager for Ekala-specific operations
@@ -23,14 +24,14 @@ use std::path::{Path, PathBuf};
 
 use gix::{Repository, ThreadSafeRepository};
 use id::{Label, Tag};
-use manifest::{AtomSet, Manifest};
+use manifest::{AtomSet, ComposeError, Manifest, SetMirror};
 use semver::Version;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use toml_edit::DocumentMut;
 
 use super::{AtomError, sets};
-use crate::{ATOM_MANIFEST_NAME, id};
+use crate::{ATOM_MANIFEST_NAME, id, storage, uri};
 
 pub mod lock;
 pub mod manifest;
@@ -112,6 +113,9 @@ pub enum DocError {
     /// Duplicate atoms were found in the ekala manifest
     #[error("there is more than one atom with the same label in the set")]
     DuplicateAtoms,
+    /// Dependencies were declared from undeclared sets
+    #[error("found atom(s) specified from undeclared set(s)")]
+    UndeclaredSets,
     /// A local atom by the requested label doesn't exist
     #[error("a local atom by the requested label isn't specified in ekala.toml")]
     NoLocal,
@@ -135,7 +139,7 @@ pub enum DocError {
     Write(#[from] tempfile::PersistError),
     /// A Git resolution error occurred.
     #[error(transparent)]
-    Git(#[from] Box<crate::storage::git::Error>),
+    Git(#[from] Box<storage::git::Error>),
     /// A semantic versioning error occurred.
     #[error(transparent)]
     Semver(#[from] semver::Error),
@@ -262,13 +266,26 @@ impl AtomPaths<PathBuf> {
 }
 
 impl Atom {
-    pub(crate) fn new(label: Label, version: Version) -> Self {
-        Self {
+    pub(crate) fn new(label: Label, version: Version) -> Result<Self, ComposeError> {
+        let composer = config::CONFIG.default_composer();
+        let address: SetMirror = if composer.set.address == "::" {
+            composer.set.address.as_ref().parse()?
+        } else {
+            uri::ALIASES
+                .expand_alias(composer.set.address.clone())
+                .parse()?
+        };
+        Ok(Self {
             label,
             version,
             meta: None,
-            sets: HashMap::new(),
-        }
+            sets: HashMap::from([(
+                composer.set.tag.as_ref().try_into().inspect_err(|_| {
+                    tracing::warn!(configured.set = %composer.set.tag, "default composer set is not a valid set tag")
+                })?,
+                address.into(),
+            )]),
+        })
     }
 
     /// return a reference to the atom's label
@@ -427,15 +444,14 @@ impl<'de> Deserialize<'de> for AtomMap {
     {
         use path_clean::PathClean;
         use serde::de;
-
-        use crate::storage::{NormalizeStorePath, git};
+        use storage::{NormalizeStorePath, git};
         let repo = git::repo().ok().flatten().map(|r| r.to_thread_local());
         let entries: Vec<PathBuf> = Vec::deserialize(deserializer)?;
         let mut map = BTreeMap::new();
 
         let rel_to_root = repo
             .as_ref()
-            .ok_or(crate::storage::git::Error::NoWorkDir)
+            .ok_or(storage::git::Error::NoWorkDir)
             .and_then(|r| r.rel_from_root(r.current_dir()));
         for path in entries {
             let normalized = if let Some(repo) = &repo {
@@ -575,15 +591,23 @@ impl EkalaManager {
         label: Label,
         package_path: impl AsRef<Path>,
         version: semver::Version,
-    ) -> Result<(), crate::storage::git::Error> {
+    ) -> Result<(), storage::git::Error> {
         use std::fs;
         use std::io::Write;
 
         use tempfile::NamedTempFile;
 
-        let mut tmp = NamedTempFile::with_prefix_in(format!(".new_atom-{}", label.as_str()), ".")?;
+        let mut tmp = NamedTempFile::with_prefix_in(
+            format!(".new_atom-{}-", label.as_str()),
+            package_path
+                .as_ref()
+                .parent()
+                .and_then(|p| p.exists().then_some(p))
+                .unwrap_or(".".as_ref()),
+        )?;
 
-        let atom = Manifest::new(label.to_owned(), version);
+        let atom = Manifest::new(label.to_owned(), version)
+            .map_err(|e| storage::git::Error::Generic(Box::new(e)))?;
         let atom_str = toml_edit::ser::to_string_pretty(&atom)?;
         let atom_toml = package_path.as_ref().join(ATOM_MANIFEST_NAME.as_str());
 
@@ -625,7 +649,7 @@ impl EkalaManager {
         &mut self,
         package_path: impl AsRef<Path>,
         label: Label,
-    ) -> Result<(), crate::storage::git::Error> {
+    ) -> Result<(), storage::git::Error> {
         use toml_edit::{Array, Value};
 
         if let Some(path) = self.manifest.set.packages.as_ref().get(&label) {
@@ -640,7 +664,7 @@ impl EkalaManager {
             return Err(DocError::DuplicateAtoms.into());
         }
 
-        use crate::storage::NormalizeStorePath;
+        use storage::NormalizeStorePath;
         let path = if let Some(repo) = &self.repo {
             repo.normalize(package_path)?
         } else {

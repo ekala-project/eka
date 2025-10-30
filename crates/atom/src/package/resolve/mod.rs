@@ -49,7 +49,7 @@ use storage::UnpackedRef;
 use storage::git::{AtomQuery, Root};
 use uri::Uri;
 
-use super::{Manifest, metadata, sets};
+use super::{ValidManifest, metadata, sets};
 use crate::storage::QueryVersion;
 use crate::{ATOM_MANIFEST_NAME, AtomId, BoxError, ManifestWriter, id, storage, uri};
 
@@ -587,7 +587,7 @@ impl ManifestWriter {
 
         let doc_str = self.doc_mut().as_mut().to_string();
 
-        let _validate: Manifest = toml_edit::de::from_str(&doc_str)?;
+        let _validate: ValidManifest = toml_edit::de::from_str(&doc_str)?;
         let dir = self
             .path()
             .parent()
@@ -612,7 +612,8 @@ impl ManifestWriter {
     /// Removes any dependencies from the lockfile that are no longer present in the
     /// manifest, ensuring the lockfile only contains entries that are still relevant,
     /// then calls into synchronization logic to ensure consistency.
-    pub(super) fn sanitize(&mut self, manifest: &Manifest) {
+    pub(super) fn sanitize(&mut self, manifest: &ValidManifest) {
+        let manifest = manifest.as_ref();
         self.lock.deps.as_mut().retain(|_, dep| match dep {
             lock::Dep::Atom(atom_dep) => {
                 if let Some(SetDetails { tag: name, .. }) = self.lock.sets.get(&atom_dep.set()) {
@@ -649,14 +650,14 @@ impl ManifestWriter {
     /// Updates the lockfile to match the dependencies specified in the manifest.
     /// It resolves any new dependencies, updates existing ones if their version
     /// requirements have changed, and ensures the lockfile is fully consistent.
-    pub(super) async fn synchronize(&mut self, manifest: Manifest) -> Result<(), DocError> {
+    pub(super) async fn synchronize(&mut self, manifest: ValidManifest) -> Result<(), DocError> {
         self.synchronize_atoms(&manifest).await?;
         self.synchronize_direct(&manifest).await?;
         Ok(())
     }
 
-    async fn synchronize_atoms(&mut self, manifest: &Manifest) -> Result<(), DocError> {
-        for (set_tag, set) in manifest.deps().from() {
+    async fn synchronize_atoms(&mut self, manifest: &ValidManifest) -> Result<(), DocError> {
+        for (set_tag, set) in manifest.as_ref().deps().from() {
             let maybe_root = self
                 .resolved
                 .roots()
@@ -934,8 +935,13 @@ impl ManifestWriter {
                 .get(uri.label())
                 .ok_or(DocError::NoLocal)?;
             let content = std::fs::read_to_string(path.join(ATOM_MANIFEST_NAME.as_str()))?;
-            let atom = Manifest::get_atom(&content)?;
+            let atom = ValidManifest::get_atom(&content)?;
             if atom.label() != uri.label() {
+                tracing::error!(
+                    labels.uri = %uri.label(),
+                    labels.atom = %atom.label(),
+                    "bug; somehow the atom's name changed"
+                );
                 return Err(DocError::SetError(sets::Error::Inconsistent).into());
             }
             let req = AtomReq::new(

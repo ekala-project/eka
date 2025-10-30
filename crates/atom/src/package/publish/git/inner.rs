@@ -35,26 +35,27 @@ use std::io::{self, Read};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
+use error::git::Error;
 use gix::actor::Signature;
 use gix::diff::object::Commit as AtomCommit;
 use gix::object::tree::Entry;
 use gix::objs::WriteTo;
 use gix::protocol::transport::client::Transport;
 use gix::{Object, ObjectId, Reference};
+use package::metadata::AtomPaths;
+use package::metadata::manifest::Manifest;
 use semver::Version;
+use storage::git;
 use tracing_indicatif::span_ext::IndicatifSpanExt;
 
-use super::super::error::git::Error;
 use super::super::{
-    ATOM_FORMAT_VERSION, ATOM_MANIFEST, ATOM_ORIGIN, ATOM_REFS, EMPTY_SIG, META_REFS,
+    ATOM_FORMAT_VERSION, ATOM_MANIFEST, ATOM_ORIGIN, ATOM_REFS, EMPTY_SIG, META_REFS, error,
 };
 use super::{
     AtomContext, AtomRef, AtomReferences, CommittedAtom, FoundAtom, GitContent, GitContext,
     GitResult, RefKind,
 };
-use crate::package::metadata::AtomPaths;
-use crate::storage::git;
-use crate::{Atom, AtomId, Manifest};
+use crate::{Atom, AtomId, package, storage};
 
 //================================================================================================
 // Impls

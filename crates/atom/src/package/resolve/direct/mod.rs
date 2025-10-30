@@ -43,7 +43,7 @@ use snix_glue::fetchers::Fetcher;
 use snix_store::nar::SimpleRenderer;
 use snix_store::pathinfoservice::PathInfoService;
 
-use crate::{AtomId, BoxError, Manifest, ManifestWriter, id, package};
+use crate::{AtomId, BoxError, ManifestWriter, ValidManifest, id, package};
 
 //================================================================================================
 // Statics
@@ -89,8 +89,11 @@ impl ManifestWriter {
         Ok(())
     }
 
-    pub(super) async fn synchronize_direct(&mut self, manifest: &Manifest) -> Result<(), DocError> {
-        for (name, dep) in manifest.deps().direct().nix() {
+    pub(super) async fn synchronize_direct(
+        &mut self,
+        manifest: &ValidManifest,
+    ) -> Result<(), DocError> {
+        for (name, dep) in manifest.as_ref().deps().direct().nix() {
             tracing::debug!(direct.nix.name = %name,  "checking sync status");
             let key = Either::Right(name.to_owned());
             let locked = self.lock.deps.as_ref().get(&key);

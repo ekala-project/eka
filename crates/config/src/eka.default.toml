@@ -11,16 +11,19 @@
 # This allows for global defaults, user preferences, and per-project overrides.
 #
 # Configuration sections:
-# - [atom.default]: Default settings for Atom package manifests
+# - [manifest.default.composer]: Default composer settings for new Atom manifests
 # - [uri.aliases]: Short aliases for commonly used URIs in package references
 # - [cache]: Cache directory settings (runtime-determined defaults commented out)
 
-# Default settings for Atom package manifests.
+# Default composer settings for new Atom manifests.
 # These values are used when generating new manifests with `eka new`.
-[atom.default]
-# The default composer (importer) to use for new Atom packages.
-# This specifies the default import mechanism for package dependencies as an atom URI.
-composer = "atom::atomix"
+# The composer defines which atom provides the import functionality for the package.
+[manifest.default.composer]
+# The set containing the composer atom (aliases expand)
+set = { tag = "atom", address = "ekl:atom" }
+# The composer atom to use from the set above
+atom.label = "atom-nix"
+# atom.version = "0.1.0" <- defaults to "*" (any version) if not set
 
 # URI aliases for shortening package references.
 # These aliases allow using short names instead of full URIs when specifying

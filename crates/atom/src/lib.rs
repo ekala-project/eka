@@ -46,12 +46,22 @@
 //! ## Basic Usage
 //!
 //! ```rust,no_run
-//! use atom::{Atom, Label, Manifest};
+//! use atom::{Atom, Label, ManifestWriter};
 //! use semver::Version;
 //!
-//! // Create a new atom manifest
-//! let manifest = Manifest::new(Label::try_from("my-atom").unwrap(), Version::new(1, 0, 0));
+//! // Create a new atom manifest writer
+//! let writer = ManifestWriter::new(None, ".".as_ref());
 //! ```
+//!
+//! ## Manifest Structure
+//!
+//! Atom manifests include a required `[compose]` table that defines the atom's
+//! composer. The composer specifies which atom from a set provides the import
+//! functionality for this atom.
+//!
+//! The `ValidManifest` type is the publicly exposed variant that includes
+//! post-deserialization validation to ensure manifest consistency. The `Manifest`
+//! type is a private implementation detail used internally.
 //!
 //! ## Features
 //!
@@ -67,9 +77,9 @@ use std::sync::LazyLock;
 
 pub use self::id::{AtomId, Compute, Label, Origin};
 pub use self::package::metadata::lock::Lockfile;
-pub use self::package::metadata::manifest::{Manifest, ManifestWriter};
 pub use self::package::metadata::{Atom, EkalaManager};
 pub use self::package::publish::ATOM_REFS;
+pub use self::package::{ManifestWriter, ValidManifest};
 
 pub mod id;
 pub mod log;

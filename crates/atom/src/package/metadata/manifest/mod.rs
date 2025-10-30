@@ -7,7 +7,8 @@
 //!
 //! Every atom must have a manifest file named `atom.toml` that contains at minimum
 //! a `[package]` section with the atom's label, version, and optional description.
-//! Additional sections can specify package sets and dependencies.
+//! Additional sections can specify package sets, dependencies, and a required `[compose]`
+//! section that defines the atom's composer (import logic).
 //!
 //! ## Package Sets and Mirrors
 //!
@@ -19,9 +20,16 @@
 //! This mirrors the URI format where `::<atom-name>` indicates a local atom from the
 //! current repository (as opposed to remote atoms which would be prefixed with a URL or alias).
 //!
+//! ## Composer Configuration
+//!
+//! The `[compose]` table defines the atom's composer, which specifies which atom
+//! from a set provides the import functionality for this atom.
+//!
 //! ## Key Types
 //!
-//! - [`Manifest`] - The complete manifest structure, representing the `atom.toml` file.
+//! - [`ValidManifest`] - The publicly exposed manifest type with validation, representing the
+//!   `atom.toml` file.
+//! - [`Manifest`] - Internal manifest structure (private implementation detail).
 //! - [`Atom`] - The core atom metadata (`label`, `version`, `description`, `sets`).
 //! - [`Dependency`] - Atom and direct Nix dependencies.
 //! - [`AtomError`] - Errors that can occur during manifest processing.
@@ -38,6 +46,9 @@
 //! company-atoms = "git@github.com:our-company/atoms"
 //! local-atoms = "::"
 //!
+//! [compose.with.atom-nix]
+//! from = "company-atoms"
+//!
 //! [deps.from.company-atoms]
 //! other-atom = "^1.0.0"
 //!
@@ -51,37 +62,17 @@
 //! and have valid data. The `#[serde(deny_unknown_fields)]` attribute ensures
 //! that only known fields are accepted, preventing typos and invalid configurations.
 //!
-//! ## Usage
-//!
-//! Manifests can be created programmatically or parsed from a string or file.
-//!
-//! ```rust,no_run
-//! use std::str::FromStr;
-//!
-//! use atom::{Atom, Label, Manifest};
-//! use semver::Version;
-//!
-//! // Create a manifest programmatically.
-//! let manifest = Manifest::new(Label::try_from("my-atom").unwrap(), Version::new(1, 0, 0));
-//!
-//! // Parse a manifest from a string.
-//! let manifest_str = r#"
-//! [package]
-//! label = "parsed-atom"
-//! version = "2.0.0"
-//! "#;
-//! let parsed = Manifest::from_str(manifest_str).unwrap();
-//! ```
-//!
-//! Note: `Manifest` and `Atom` types are not publicly exposed in the current API.
-//! Use the public exports from the crate root instead.
+//! The `ValidManifest` type provides additional post-deserialization validation
+//! to ensure consistency between declared sets, dependencies, and composer configuration.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-use gix::ThreadSafeRepository;
+use config::ComposerSettings;
+use direct::DirectDeps;
+use gix::{ThreadSafeRepository, Url};
 use id::{Tag, VerifiedName};
 use lock::{AtomDep, Lockfile, SetDetails};
 use package::AtomError;
@@ -92,7 +83,6 @@ use toml_edit::{DocumentMut, de};
 use uri::{Uri, serde_gix_url};
 
 use super::{DocError, GitDigest, TypedDocument, lock};
-use crate::package::metadata::manifest::direct::DirectDeps;
 use crate::{Atom, Label, id, package, uri};
 
 pub(in crate::package) mod direct;
@@ -100,6 +90,21 @@ pub(in crate::package) mod direct;
 //================================================================================================
 // Types
 //================================================================================================
+
+#[derive(thiserror::Error, Debug)]
+pub enum ComposeError {
+    #[error(transparent)]
+    Id(#[from] id::Error),
+    #[error(transparent)]
+    Uri(#[from] uri::UriError),
+    #[error(transparent)]
+    Url(#[from] gix::url::parse::Error),
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+struct Compose {
+    with: Composer,
+}
 
 /// A strongly-typed representation of a source for an atom set.
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -127,18 +132,33 @@ pub enum AtomSet {
     Mirrors(BTreeSet<SetMirror>),
 }
 
+#[derive(Serialize, Debug, PartialEq, Eq)]
+#[serde(transparent)]
+/// A Manifest wrapper, with extra post-deserialization validation logic to ensure consistency.
+///
+/// This is the publicly exposed manifest type that includes validation to ensure
+/// that all declared dependencies reference existing sets and that the composer
+/// configuration is valid. The internal `Manifest` type is now a private
+/// implementation detail.
+pub struct ValidManifest(Manifest);
+
 /// Represents the structure of an `atom.toml` manifest file.
+///
+/// This is now a private implementation detail. Use [`ValidManifest`] for
+/// the publicly exposed, validated manifest type.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct Manifest {
+pub(in crate::package) struct Manifest {
     /// The required `[package]` table, containing core metadata.
     package: Atom,
+    /// The required `[compose]` table, defining the atom's composer (import logic).
+    compose: Compose,
     /// The dependencies of the atom.
     #[serde(default, skip_serializing_if = "Dependency::is_empty")]
     deps: Dependency,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 struct Singleton<K, V> {
     key: K,
     value: V,
@@ -149,13 +169,50 @@ pub type AtomResult<T> = Result<T, AtomError>;
 
 type AtomFrom = HashMap<Tag, HashMap<Label, VersionReq>>;
 
-type Composer = Singleton<Label, VersionReq>;
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct ComposerSpec {
+    from: Tag,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version: Option<VersionReq>,
+}
 
-type ComposerSet = Singleton<Tag, Composer>;
+type Composer = Singleton<Label, ComposerSpec>;
 
 //================================================================================================
 // Impls
 //================================================================================================
+
+impl From<SetMirror> for AtomSet {
+    fn from(set: SetMirror) -> Self {
+        Self::Singleton(set)
+    }
+}
+
+impl Compose {
+    fn user_default() -> Result<Self, ComposeError> {
+        config::CONFIG.default_composer().to_owned().try_into()
+    }
+}
+
+impl TryFrom<config::ComposerSettings<'static>> for Compose {
+    type Error = ComposeError;
+
+    fn try_from(settings: ComposerSettings<'static>) -> Result<Self, Self::Error> {
+        let set = Tag::try_from(settings.set.tag.as_ref())?;
+        let atom = Label::try_from(settings.atom.label.as_ref())?;
+        let version = settings
+            .atom
+            .version
+            .map(|v| VersionReq::parse(v.as_ref()).unwrap_or_default());
+        let spec = ComposerSpec { from: set, version };
+        let composer = Composer {
+            key: atom,
+            value: spec,
+        };
+        Ok(Self { with: composer })
+    }
+}
 
 impl<'de, K: Deserialize<'de>, V: Deserialize<'de>> Deserialize<'de> for Singleton<K, V>
 where
@@ -184,25 +241,25 @@ where
 
 impl<K: Serialize, V: Serialize> Serialize for Singleton<K, V>
 where
-    K: Ord + Clone,
-    V: Clone,
+    K: Ord,
 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
-        let map = BTreeMap::from([(self.key.to_owned(), self.value.to_owned())]);
+        let map = BTreeMap::from([(&self.key, &self.value)]);
         map.serialize(serializer)
     }
 }
 
 impl Manifest {
     /// Creates a new `Manifest` with the given label, version, and description.
-    pub fn new(label: Label, version: Version) -> Self {
-        Manifest {
-            package: Atom::new(label, version),
+    pub(super) fn new(label: Label, version: Version) -> Result<Self, ComposeError> {
+        Ok(Manifest {
+            package: Atom::new(label, version)?,
             deps: Dependency::new(),
-        }
+            compose: Compose::user_default()?,
+        })
     }
 
     pub(in crate::package) fn deps(&self) -> &Dependency {
@@ -235,6 +292,18 @@ impl Manifest {
 
     pub(in crate::package) fn package(&self) -> &Atom {
         &self.package
+    }
+}
+
+impl FromStr for SetMirror {
+    type Err = gix::url::parse::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s == "::" {
+            Ok(Self::Local)
+        } else {
+            Ok(Self::Url(Url::from_bytes(s.into())?))
+        }
     }
 }
 
@@ -301,6 +370,9 @@ pub enum GitSpec {
 
 /// A writer for `atom.toml` manifests that ensures the `atom.lock` file is kept in sync.
 ///
+/// The `ManifestWriter` now works with [`ValidManifest`] internally, providing
+/// validation and consistency checks for manifest operations.
+///
 /// # Example
 ///
 /// ```rust,no_run
@@ -323,7 +395,7 @@ pub enum GitSpec {
 /// ```
 pub struct ManifestWriter {
     path: PathBuf,
-    doc: TypedDocument<Manifest>,
+    doc: TypedDocument<ValidManifest>,
     pub(in crate::package) lock: Lockfile,
     pub(in crate::package) resolved: ResolvedSets,
 }
@@ -339,6 +411,9 @@ pub(in crate::package) struct AtomWriter {
 //================================================================================================
 
 /// A trait for writing dependencies to a mutable TOML document representing an Atom manifest.
+///
+/// This trait now works with [`ValidManifest`] to ensure that all dependency
+/// modifications maintain manifest consistency and validation.
 pub(in crate::package) trait WriteDeps<T: Serialize, K: VerifiedName> {
     /// The error type returned by the methods.
     type Error;
@@ -435,8 +510,8 @@ impl ManifestWriter {
         let toml_str = fs::read_to_string(&path).inspect_err(|_| {
             tracing::error!(message = "No atom exists", path = %path.display());
         })?;
-        let (doc, manifest) = TypedDocument::new(&toml_str)?;
-        let resolved_sets = SetResolver::new(repo, &manifest)?
+        let (doc, manifest) = TypedDocument::<ValidManifest>::new(&toml_str)?;
+        let resolved_sets = SetResolver::new(repo, manifest.as_ref())?
             .get_and_check_sets()
             .await?;
 
@@ -458,7 +533,7 @@ impl ManifestWriter {
     /// Runs the sanitization process, and then the synchronization process to ensure a fully
     /// consistent manifest and lock. This function is called in the `ManifestWriter` constructor
     /// to ensure that we are never operating on a stale manifest.
-    async fn reconcile(&mut self, manifest: Manifest) -> Result<(), DocError> {
+    async fn reconcile(&mut self, manifest: ValidManifest) -> Result<(), DocError> {
         self.set_sets();
         self.sanitize(&manifest);
         self.synchronize(manifest).await?;
@@ -521,7 +596,7 @@ impl ManifestWriter {
         &self.resolved
     }
 
-    pub(in crate::package) fn doc_mut(&mut self) -> &mut TypedDocument<Manifest> {
+    pub(in crate::package) fn doc_mut(&mut self) -> &mut TypedDocument<ValidManifest> {
         &mut self.doc
     }
 
@@ -536,10 +611,14 @@ impl ManifestWriter {
     }
 }
 
-impl WriteDeps<Manifest, Label> for AtomWriter {
+impl WriteDeps<ValidManifest, Label> for AtomWriter {
     type Error = toml_edit::ser::Error;
 
-    fn write_dep(&self, key: Label, doc: &mut TypedDocument<Manifest>) -> Result<(), Self::Error> {
+    fn write_dep(
+        &self,
+        key: Label,
+        doc: &mut TypedDocument<ValidManifest>,
+    ) -> Result<(), Self::Error> {
         use toml_edit::{Array, Value};
         let doc = doc.as_mut();
         let mirror = self.mirror.to_string();
@@ -606,6 +685,64 @@ impl AtomWriter {
             atom_req,
             mirror,
         }
+    }
+}
+
+impl AsRef<Manifest> for ValidManifest {
+    fn as_ref(&self) -> &Manifest {
+        &self.0
+    }
+}
+
+impl ValidManifest {
+    pub(crate) fn get_atom(content: &str) -> AtomResult<Atom> {
+        Manifest::get_atom(content)
+    }
+}
+
+impl From<ValidManifest> for Manifest {
+    fn from(v: ValidManifest) -> Self {
+        v.0
+    }
+}
+
+impl<'de> Deserialize<'de> for ValidManifest {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de;
+        let manifest = Manifest::deserialize(deserializer)?;
+        let deps_missings_sets: Vec<_> = manifest
+            .deps()
+            .from()
+            .keys()
+            .filter(|k| !manifest.package().sets().contains_key(k))
+            .collect();
+        if !deps_missings_sets.is_empty() {
+            tracing::error!(
+                suggestion = "define a set in [package.sets] for the missing key(s), or pull from \
+                              an existing set",
+                missing =
+                    toml_edit::ser::to_string(&deps_missings_sets).map_err(de::Error::custom)?,
+                "found undeclared sets in [deps.from]"
+            );
+            return Err(de::Error::custom(DocError::UndeclaredSets));
+        }
+        if !manifest
+            .package()
+            .sets()
+            .contains_key(&manifest.compose.with.value.from)
+        {
+            tracing::error!(
+                suggestion = "declare a set in [package.sets] for the missing key",
+                missing = %manifest.compose.with.key,
+                "the set `compose.with.{}.{}` is undeclared",
+                manifest.compose.with.key, manifest.compose.with.value.from
+            );
+            return Err(de::Error::custom(DocError::UndeclaredSets));
+        }
+        Ok(ValidManifest(manifest))
     }
 }
 

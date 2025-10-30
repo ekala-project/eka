@@ -97,7 +97,8 @@ mod tests;
 
 pub(crate) const VERSION_PLACEHOLDER: &str = "__VERSION__";
 
-static ALIASES: LazyLock<Aliases> = LazyLock::new(|| Aliases(config::CONFIG.aliases()));
+pub(crate) static ALIASES: LazyLock<Aliases> = LazyLock::new(Aliases::get_aliases);
+
 static ATOM_VERSION_REGEX: Lazy<Regex> =
     lazy_regex::lazy_regex!(r#"\{(?P<set>[^.}]+)\.(?P<atom>[^.}]+)\}"#);
 
@@ -153,7 +154,7 @@ pub enum UriError {
 }
 
 #[derive(Debug)]
-struct Aliases(&'static HashMap<Cow<'static, str>, Cow<'static, str>>);
+pub(crate) struct Aliases(&'static HashMap<Cow<'static, str>, Cow<'static, str>>);
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[cfg_attr(test, derive(Serialize, Deserialize))]
@@ -236,21 +237,31 @@ impl TryFrom<&str> for AliasedUrl {
 }
 
 impl Aliases {
-    fn get_alias(&self, s: &str) -> Result<Cow<'_, str>, UriError> {
+    fn get_aliases() -> Self {
+        Self(config::CONFIG.uri_aliases())
+    }
+
+    pub(crate) fn get_alias(&self, s: &str) -> Result<Cow<'_, str>, UriError> {
         self.get(s)
             .map_or_else(|| Err(UriError::NoAlias(s.into())), |s| Ok(s.clone()))
     }
 
-    fn resolve_alias(&'static self, s: &str) -> Result<Cow<'static, str>, UriError> {
-        let mut res = self.get_alias(s)?;
-
-        // allow indirection in alises, e.g. `org = gh:my-org`
+    pub(crate) fn expand_alias<'a>(&self, mut res: Cow<'a, str>) -> Cow<'a, str> {
         while let Some((s, rest)) = res.split_once(':') {
-            let resolved = self.get_alias(s)?;
+            let resolved = if let Ok(s) = self.get_alias(s) {
+                s
+            } else {
+                return res;
+            };
             res = Cow::Owned(format!("{resolved}/{rest}"))
         }
+        res
+    }
 
-        Ok(res)
+    fn resolve_alias(&'static self, s: &str) -> Result<Cow<'static, str>, UriError> {
+        let res = self.get_alias(s)?;
+
+        Ok(self.expand_alias(res))
     }
 }
 
@@ -362,6 +373,12 @@ impl Uri {
     #[must_use]
     pub fn version(&self) -> Option<&VersionReq> {
         self.version.as_ref()
+    }
+
+    /// Consumes the url and returns the raw values
+    #[must_use]
+    pub fn unpack(self) -> (Label, Option<Url>, Option<VersionReq>) {
+        (self.label, self.url, self.version)
     }
 }
 

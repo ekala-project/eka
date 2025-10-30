@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::io::Write;
 use std::os::unix::fs::MetadataExt;
 use std::str::FromStr;
 
@@ -9,7 +8,7 @@ use gix::prelude::ReferenceExt;
 use tempfile::{Builder, NamedTempFile};
 
 use super::super::{Content, Publish, Record};
-use crate::storage::git;
+use crate::storage::{Init, git};
 
 //================================================================================================
 // Traits
@@ -28,27 +27,26 @@ impl MockAtom for gix::Repository {
         use gix::objs::Tree;
         use gix::objs::tree::Entry;
         use semver::Version;
-        use toml_edit::ser;
 
-        use crate::Manifest;
+        use crate::EkalaManager;
 
         let work_dir = self.workdir().context("No workdir")?;
         let atom_dir = Builder::new().tempdir_in(work_dir)?;
-        let mut atom_file = Builder::new()
-            .prefix("atom")
-            .rand_bytes(0)
-            .suffix(".toml")
-            .tempfile_in(&atom_dir)?;
+        let atom_file = atom_dir.as_ref().join(crate::ATOM_MANIFEST_NAME.as_str());
 
-        let manifest = Manifest::new(label.try_into()?, Version::from_str(version)?);
+        self.ekala_init(None)?;
+        let safe_repo = self.clone().into_sync();
+        let mut ekala = EkalaManager::new(Some(&safe_repo))?;
+        ekala.new_atom_at_path(label.try_into()?, &atom_dir, Version::from_str(version)?)?;
 
-        let buf = ser::to_string_pretty(&manifest)?;
-        atom_file.write_all(buf.as_bytes())?;
+        let buf = std::fs::read_to_string(&atom_file)?;
 
-        let path = atom_file.as_ref().to_path_buf();
-
-        let mode = atom_file.as_file().metadata()?.mode();
-        let filename = path.strip_prefix(&atom_dir)?.display().to_string().into();
+        let mode = atom_file.metadata()?.mode();
+        let filename = atom_file
+            .strip_prefix(&atom_dir)?
+            .display()
+            .to_string()
+            .into();
         let oid = self.write_blob(buf.as_bytes())?.detach();
         let entry = Entry {
             mode: TryFrom::try_from(mode)
@@ -96,7 +94,11 @@ impl MockAtom for gix::Repository {
             )?
             .detach();
 
-        Ok((atom_file, atom_oid))
+        let tmp = NamedTempFile::from_parts(
+            std::fs::File::open(&atom_file)?,
+            tempfile::TempPath::from_path(atom_file),
+        );
+        Ok((tmp, atom_oid))
     }
 }
 

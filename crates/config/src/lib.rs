@@ -39,10 +39,18 @@ pub struct AtomConfig<'a> {
     default: AtomDefaults<'a>,
 }
 
+#[derive(Deserialize, Serialize, Default, Clone)]
+pub struct AtomComposer<'a> {
+    #[serde(borrow)]
+    pub label: Cow<'a, str>,
+    #[serde(borrow)]
+    pub version: Option<Cow<'a, str>>,
+}
+
 #[derive(Deserialize, Serialize, Default)]
 pub struct AtomDefaults<'a> {
     #[serde(borrow)]
-    composer: Cow<'a, str>,
+    composer: ComposerSettings<'a>,
 }
 
 /// Defines cache-related configuration settings.
@@ -62,7 +70,23 @@ pub struct Config {
     #[serde(default)]
     pub cache: CacheConfig,
     #[serde(borrow)]
-    pub atom: AtomConfig<'static>,
+    pub manifest: AtomConfig<'static>,
+}
+
+#[derive(Deserialize, Serialize, Default, Clone)]
+pub struct ComposerSet<'a> {
+    #[serde(borrow)]
+    pub tag: Cow<'a, str>,
+    #[serde(borrow)]
+    pub address: Cow<'a, str>,
+}
+
+#[derive(Deserialize, Serialize, Default, Clone)]
+pub struct ComposerSettings<'a> {
+    #[serde(borrow)]
+    pub set: ComposerSet<'a>,
+    #[serde(borrow)]
+    pub atom: AtomComposer<'a>,
 }
 
 #[derive(Deserialize, Serialize, Default)]
@@ -88,9 +112,14 @@ impl Default for CacheConfig {
 }
 
 impl Config {
-    /// Returns a reference to the command aliases.
-    pub fn aliases(&self) -> &Aliases<'_> {
+    /// Returns a reference to the configured uri aliases.
+    pub fn uri_aliases(&self) -> &Aliases<'static> {
         &self.uri.aliases
+    }
+
+    /// Returns a reference to the default composer.
+    pub fn default_composer(&self) -> &ComposerSettings<'static> {
+        &self.manifest.default.composer
     }
 
     /// Constructs a `Figment` instance for configuration loading.

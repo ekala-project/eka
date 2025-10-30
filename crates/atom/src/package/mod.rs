@@ -14,18 +14,19 @@
 //! ## Key Types
 //!
 //! - [`Atom`] - Represents an atom with its metadata and dependencies
-//! - [`Manifest`] - Atom manifest format and parsing
+//! - [`ValidManifest`] - Publicly exposed manifest type with validation
+//! - [`ManifestWriter`] - Writer for atom manifests that ensures lockfile consistency
 //! - [`Lockfile`] - Resolved dependency lockfile
 //! - [`AtomError`] - Errors that can occur during package operations
 
 pub use metadata::EkalaManifest;
-pub use metadata::manifest::{GitSpec, Manifest, ManifestWriter};
+pub use metadata::manifest::{GitSpec, ManifestWriter, ValidManifest};
 
 pub mod publish;
 
 pub(crate) mod metadata;
-pub(crate) mod resolve;
-pub(super) mod sets;
+mod resolve;
+mod sets;
 
 /// An error that can occur when parsing or handling an atom manifest.
 #[derive(thiserror::Error, Debug)]
