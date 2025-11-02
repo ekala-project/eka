@@ -701,10 +701,10 @@ impl<'a, S: LocalStorage> EkalaManager<'a, S> {
 
         packages.fmt();
         for v in packages.iter_mut() {
-            *v = v.to_owned().decorated("\n\t", "");
+            *v = v.to_owned().decorated("\n  ", "");
         }
         let path: Value = path.display().to_string().into();
-        packages.push_formatted(path.decorated("\n\t", ",\n"));
+        packages.push_formatted(path.decorated("\n  ", ",\n"));
         doc.fmt();
 
         Ok(())

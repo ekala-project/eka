@@ -232,6 +232,7 @@ pub struct Lockfile {
     pub version: u8,
 
     pub(super) compose: Compose,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) sets: BTreeMap<GitDigest, SetDetails>,
     /// The list of locked dependencies (absent or empty if none).
     ///

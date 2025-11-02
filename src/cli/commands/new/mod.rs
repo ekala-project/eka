@@ -41,17 +41,10 @@ pub(super) fn run(storage: impl LocalStorage, args: Args) -> Result<()> {
     } else {
         args.path.file_name().unwrap_or(OsStr::new("")).try_into()?
     };
-    if let Ok(mut manager) = EkalaManager::new(&storage).map_err(|error| {
-        tracing::error!(%error);
-        error
-    }) {
-        manager.new_atom_at_path(label, args.path, args.version)?;
-    } else {
-        tracing::warn!(
-            message = "package set not yet initialized",
-            suggestion = "run eka init"
-        );
-    };
+
+    let mut manager = EkalaManager::new(&storage)?;
+
+    manager.new_atom_at_path(label, args.path, args.version)?;
 
     Ok(())
 }

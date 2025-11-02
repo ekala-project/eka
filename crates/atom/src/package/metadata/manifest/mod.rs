@@ -510,7 +510,9 @@ impl<'a, S: LocalStorage> ManifestWriter<'a, S> {
             .await?;
 
         let lock = if let Ok(lock_str) = fs::read_to_string(&lock_path) {
-            toml_edit::de::from_str(&lock_str)?
+            toml_edit::de::from_str(&lock_str).inspect_err(
+                |_| tracing::error!(lock = %lock_path.display(), suggestion = "delete and regenerate", "lockfile is invalid"),
+            )?
         } else {
             Lockfile::default()
         };
@@ -663,7 +665,7 @@ impl WriteDeps<ValidManifest, Label> for AtomWriter {
         let doc = doc.as_mut();
         let mirror = self.mirror.to_string();
 
-        let mut set = doc
+        let set = doc
             .entry("package")
             .or_insert(toml_edit::table())
             .as_table_mut()
@@ -677,11 +679,14 @@ impl WriteDeps<ValidManifest, Label> for AtomWriter {
                     .or_insert(toml_edit::value(Value::Array(Array::new())))
                     .as_value_mut()
                     .and_then(|v| {
-                        v.as_array_mut().map(|v| v.to_owned()).or_else(|| {
+                        if v.is_array() {
+                            v.as_array_mut()
+                        } else {
                             let mut a = Array::new();
                             a.push(v.to_string());
-                            Some(a)
-                        })
+                            *v = Value::Array(a);
+                            v.as_array_mut()
+                        }
                     })
             })
             .ok_or(toml_edit::ser::Error::Custom(format!(
@@ -694,7 +699,7 @@ impl WriteDeps<ValidManifest, Label> for AtomWriter {
             set.fmt();
         }
 
-        let set = doc
+        let from = doc
             .entry("deps")
             .or_insert(toml_edit::table())
             .as_table_mut()
@@ -713,9 +718,9 @@ impl WriteDeps<ValidManifest, Label> for AtomWriter {
                 &self.set_tag, &key
             )))?;
 
-        set.set_implicit(true);
+        from.set_implicit(true);
 
-        set[key.as_str()] = toml_edit::Item::Value(self.atom_req.version().to_string().into());
+        from[key.as_str()] = toml_edit::Item::Value(self.atom_req.version().to_string().into());
 
         doc.fmt();
 
