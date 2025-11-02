@@ -8,7 +8,7 @@ workspace.members = [
 [package]
 edition = "2021"
 name    = "eka"
-version = "0.1.0"
+version = "0.3.0"
 
 [profile.release]
 codegen-units = 1
@@ -46,6 +46,7 @@ tracing-indicatif     = "^0.3"
 unicode-ident         = "1.0.19"
 unicode-normalization = "0.1.24"
 
+bimap = { version = "0.6.3", features = ["serde"] }
 clap = { version = "^4", features = [
   "derive",
   "wrap_help",

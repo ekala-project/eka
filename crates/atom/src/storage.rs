@@ -148,14 +148,14 @@ pub struct LocalStoragePath(PathBuf);
 
 /// A trait representing a type which implements the full resonsibilities of a local ekala storage
 /// layer
-pub trait LocalStorage: Init + NormalizeStorePath {}
+pub trait LocalStorage: Init + NormalizeStorePath + Sync + Send {}
 
 /// A trait representing the methods required to initialize an Ekala store.
 pub trait Init {
     /// The error type returned by the methods of this trait.
     type Error: std::fmt::Display;
     /// The type indicating the report transport (not relevant for local only storage)
-    type Transport: Send;
+    type Transport: Send + 'static;
     /// Initialize the Ekala store.
     fn ekala_init(&self, transport: Option<&mut Self::Transport>) -> Result<(), Self::Error>;
     /// Returns the root as reported by the local or remote store, or an error if it is
@@ -184,7 +184,10 @@ pub trait EkalaStorage {
         let path = self
             .ekala_root_dir()?
             .join(crate::EKALA_MANIFEST_NAME.as_str());
-        let ekala: EkalaManifest = toml_edit::de::from_str(&std::fs::read_to_string(path)?)?;
+        let ekala: EkalaManifest =
+            toml_edit::de::from_str(&std::fs::read_to_string(&path).inspect_err(
+                |_| tracing::warn!(path = %path.display(), "could not locate ekala.toml"),
+            )?)?;
         Ok(ekala)
     }
     /// returns the corrent working directory inside the store, failing if outside
@@ -550,7 +553,7 @@ pub trait UnpackRef {
 // Impls
 //================================================================================================
 
-impl<T: Init + NormalizeStorePath> LocalStorage for T {}
+impl<T: Init + NormalizeStorePath + Send + Sync> LocalStorage for T {}
 
 impl LocalStoragePath {
     /// verifies a path is actually contained in an ekala storage layer before allowing construction

@@ -277,6 +277,26 @@ impl<'repo> EkalaRemote for gix::Remote<'repo> {
     }
 }
 
+impl Init for ThreadSafeRepository {
+    type Error = Error;
+    type Transport = ();
+
+    fn ekala_init(&self, transport: Option<&mut Self::Transport>) -> Result<(), Self::Error> {
+        let local = self.to_thread_local();
+        local.ekala_init(transport)
+    }
+
+    fn ekala_root(&self, transport: Option<&mut Self::Transport>) -> Result<Root, Self::Error> {
+        let local = self.to_thread_local();
+        local.ekala_root(transport)
+    }
+
+    fn commit_init(&self, content: &str) -> Result<(), Self::Error> {
+        let local = self.to_thread_local();
+        local.commit_init(content)
+    }
+}
+
 impl Init for gix::Repository {
     type Error = Error;
     type Transport = ();
@@ -575,6 +595,22 @@ impl EkalaStorage for Repository {
 }
 
 impl NormalizeStorePath for Repository {}
+
+impl EkalaStorage for gix::ThreadSafeRepository {
+    type Error = Error;
+
+    fn ekala_root_dir(&self) -> Result<PathBuf, Self::Error> {
+        let rel_repo_root = self.work_dir().ok_or(Error::NoWorkDir)?;
+        Ok(fs::canonicalize(rel_repo_root)?)
+    }
+
+    fn cwd(&self) -> Result<impl AsRef<Path>, Self::Error> {
+        let local = self.to_thread_local();
+        local.cwd().map(|p| p.as_ref().to_owned())
+    }
+}
+
+impl NormalizeStorePath for gix::ThreadSafeRepository {}
 
 impl Origin<Root> for Vec<AtomQuery> {
     type Error = Error;

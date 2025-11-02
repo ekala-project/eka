@@ -66,23 +66,22 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
     let store = store::detect()?;
     match (args.command, store) {
         (Commands::Add(args), store::Detected::Git(repo)) => {
-            let repo = repo.to_thread_local();
             add::run(repo, args).await?;
         },
-        (Commands::Add(args), store::Detected::FileStorage(fs)) => add::run(fs, args).await?,
+        (Commands::Add(args), store::Detected::FileStorage(fs)) => add::run(&fs, args).await?,
         (Commands::New(args), store::Detected::Git(repo)) => {
-            let repo = repo.to_thread_local();
             new::run(repo, args)?;
         },
-        (Commands::New(args), store::Detected::FileStorage(fs)) => new::run(fs, args)?,
+        (Commands::New(args), store::Detected::FileStorage(fs)) => new::run(&fs, args)?,
         (Commands::Publish(args), store::Detected::Git(repo)) => {
             publish::run(repo, args).await?;
         },
         (Commands::Resolve(args), store::Detected::Git(repo)) => {
-            let repo = repo.to_thread_local();
-            resolve::run(repo, args)?;
+            resolve::run(repo.to_owned(), args).await?;
         },
-        (Commands::Resolve(args), store::Detected::FileStorage(fs)) => resolve::run(fs, args)?,
+        (Commands::Resolve(args), store::Detected::FileStorage(fs)) => {
+            resolve::run(fs, args).await?
+        },
         (Commands::Init(args), storage) => {
             init::run(storage, args)?;
         },

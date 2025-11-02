@@ -22,6 +22,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 
+use bimap::{BiBTreeMap, Overwritten};
 use id::{Label, Tag};
 use manifest::{AtomSet, ComposeError, Manifest, SetMirror};
 use semver::Version;
@@ -97,7 +98,7 @@ pub(super) struct TypedDocument<T> {
 }
 
 #[derive(Debug, PartialEq, Eq, Default)]
-pub(in crate::package) struct AtomMap(BTreeMap<Label, PathBuf>);
+pub struct AtomMap(BiBTreeMap<Label, PathBuf>);
 
 #[derive(thiserror::Error, Debug)]
 /// Errors that can occur when working with a `TypedDocument`.
@@ -366,14 +367,14 @@ impl AsMut<Meta> for Meta {
     }
 }
 
-impl AsRef<BTreeMap<Label, PathBuf>> for AtomMap {
-    fn as_ref(&self) -> &BTreeMap<Label, PathBuf> {
+impl AsRef<BiBTreeMap<Label, PathBuf>> for AtomMap {
+    fn as_ref(&self) -> &BiBTreeMap<Label, PathBuf> {
         &self.0
     }
 }
 
-impl AsMut<BTreeMap<Label, PathBuf>> for AtomMap {
-    fn as_mut(&mut self) -> &mut BTreeMap<Label, PathBuf> {
+impl AsMut<BiBTreeMap<Label, PathBuf>> for AtomMap {
+    fn as_mut(&mut self) -> &mut BiBTreeMap<Label, PathBuf> {
         &mut self.0
     }
 }
@@ -461,7 +462,7 @@ impl<'de> Deserialize<'de> for AtomMap {
         use storage::{NormalizeStorePath, git};
         let repo = git::repo().ok().flatten().map(|r| r.to_thread_local());
         let entries: Vec<PathBuf> = Vec::deserialize(deserializer)?;
-        let mut map = BTreeMap::new();
+        let mut map = BiBTreeMap::new();
 
         let rel_to_root = repo
             .as_ref()
@@ -484,7 +485,11 @@ impl<'de> Deserialize<'de> for AtomMap {
             let label =
                 Manifest::get_atom_label(normalized.join(crate::ATOM_MANIFEST_NAME.as_str()))
                     .map_err(de::Error::custom)?;
-            if let Some(path) = map.insert(label.to_owned(), normalized.to_owned()) {
+            if let Overwritten::Both(.., (_, path))
+            | Overwritten::Left(.., path)
+            | Overwritten::Right(.., path)
+            | Overwritten::Pair(.., path) = map.insert(label.to_owned(), normalized.to_owned())
+            {
                 tracing::error!(
                     atoms.label = %label,
                     atoms.fst.path = %normalized.display(),
@@ -508,7 +513,7 @@ impl Serialize for AtomMap {
     {
         let values: Vec<_> = self
             .as_ref()
-            .values()
+            .right_values()
             .filter(|p| {
                 p.join(ATOM_MANIFEST_NAME.as_str()).exists() || {
                     tracing::warn!(path = %p.display(), "atom does not exist, skipping serialization");
@@ -548,14 +553,14 @@ impl EkalaSet {
         }
     }
 
-    fn _packages(&self) -> &AtomMap {
+    pub fn packages(&self) -> &AtomMap {
         &self.packages
     }
 }
 
 impl AtomMap {
     fn new() -> Self {
-        AtomMap(BTreeMap::new())
+        AtomMap(BiBTreeMap::new())
     }
 }
 
@@ -665,7 +670,7 @@ impl<'a, S: LocalStorage> EkalaManager<'a, S> {
     ) -> Result<(), storage::StorageError> {
         use toml_edit::{Array, Value};
 
-        if let Some(path) = self.manifest.set.packages.as_ref().get(&label) {
+        if let Some(path) = self.manifest.set.packages.as_ref().get_by_left(&label) {
             tracing::error!(
                 suggestion = "rename one of them to maintain distinct identities",
                 %label,

@@ -35,14 +35,14 @@ pub struct Args {
 //================================================================================================
 
 /// The main entry point for the `new` subcommand.
-pub(super) fn run(storage: impl LocalStorage, args: Args) -> Result<()> {
+pub(super) fn run(storage: &impl LocalStorage, args: Args) -> Result<()> {
     let label: Label = if let Some(label) = args.label {
         label
     } else {
         args.path.file_name().unwrap_or(OsStr::new("")).try_into()?
     };
 
-    let mut manager = EkalaManager::new(&storage)?;
+    let mut manager = EkalaManager::new(storage)?;
 
     manager.new_atom_at_path(label, args.path, args.version)?;
 

@@ -53,7 +53,7 @@ pub enum Error {
 pub(super) struct ResolvedSets<'a, S: LocalStorage> {
     pub(super) atoms: ResolvedAtoms<ObjectId, Root>,
     pub(super) roots: HashMap<Either<Tag, SetMirror>, Root>,
-    pub(super) transports: HashMap<gix::Url, Box<dyn Transport + Send>>,
+    pub(super) transports: HashMap<gix::Url, Box<dyn Transport + Send + 'static>>,
     pub(super) details: BTreeMap<GitDigest, SetDetails>,
     pub(super) ekala: EkalaManager<'a, S>,
 }
@@ -73,7 +73,7 @@ pub(super) struct SetResolver<'a, 'b, S: LocalStorage> {
     pub(super) tasks: JoinSet<MirrorResult>,
     pub(super) atoms: ResolvedAtoms<ObjectId, Root>,
     pub(super) sets: BTreeMap<GitDigest, SetDetails>,
-    pub(super) transports: HashMap<gix::Url, Box<dyn Transport + Send>>,
+    pub(super) transports: HashMap<gix::Url, Box<dyn Transport + Send + 'static>>,
     pub(super) ekala: EkalaManager<'a, S>,
 }
 

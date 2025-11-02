@@ -11,6 +11,7 @@ bstr       = "^1"
 nom        = "^7"
 path-clean = "^1"
 
+bimap.workspace                 = true
 either.workspace                = true
 lazy-regex.workspace            = true
 pathdiff.workspace              = true

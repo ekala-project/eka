@@ -623,7 +623,7 @@ impl<'a, S: LocalStorage> ManifestWriter<'a, S> {
                                     .set
                                     .packages
                                     .as_ref()
-                                    .contains_key(atom_dep.label()));
+                                    .contains_left(atom_dep.label()));
                     } else {
                         false
                     };
@@ -926,7 +926,7 @@ impl<'a, S: LocalStorage> ManifestWriter<'a, S> {
                 .set
                 .packages
                 .as_ref()
-                .get(uri.label())
+                .get_by_left(uri.label())
                 .ok_or(DocError::NoLocal)?;
             let content = std::fs::read_to_string(path.join(ATOM_MANIFEST_NAME.as_str()))?;
             let atom = ValidManifest::get_atom(&content)?;

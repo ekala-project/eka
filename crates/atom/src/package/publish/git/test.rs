@@ -3,8 +3,8 @@ use std::os::unix::fs::MetadataExt;
 use std::str::FromStr;
 
 use anyhow::Context;
-use gix::ObjectId;
 use gix::prelude::ReferenceExt;
+use gix::{ObjectId, ThreadSafeRepository};
 use tempfile::{Builder, NamedTempFile};
 
 use super::super::{Content, Publish, Record};
@@ -22,7 +22,7 @@ trait MockAtom {
 // Impls
 //================================================================================================
 
-impl MockAtom for gix::Repository {
+impl MockAtom for gix::ThreadSafeRepository {
     fn mock(&self, label: &str, version: &str) -> Result<(NamedTempFile, ObjectId), anyhow::Error> {
         use gix::objs::Tree;
         use gix::objs::tree::Entry;
@@ -30,7 +30,8 @@ impl MockAtom for gix::Repository {
 
         use crate::EkalaManager;
 
-        let work_dir = self.workdir().context("No workdir")?;
+        let repo = self.to_thread_local();
+        let work_dir = repo.workdir().context("No workdir")?;
         let atom_dir = Builder::new().tempdir_in(work_dir)?;
         let atom_file = atom_dir.as_ref().join(crate::ATOM_MANIFEST_NAME.as_str());
 
@@ -46,7 +47,7 @@ impl MockAtom for gix::Repository {
             .display()
             .to_string()
             .into();
-        let oid = self.write_blob(buf.as_bytes())?.detach();
+        let oid = repo.write_blob(buf.as_bytes())?.detach();
         let entry = Entry {
             mode: TryFrom::try_from(mode)
                 .map_err(|m| anyhow::anyhow!("invalid entry mode: {}", m))?,
@@ -58,7 +59,7 @@ impl MockAtom for gix::Repository {
             entries: vec![entry],
         };
 
-        let oid = self.write_object(tree)?.detach();
+        let oid = repo.write_object(tree)?.detach();
 
         let filename = atom_dir
             .as_ref()
@@ -79,12 +80,12 @@ impl MockAtom for gix::Repository {
             entries: vec![entry],
         };
 
-        let oid = self.write_object(tree)?.detach();
+        let oid = repo.write_object(tree)?.detach();
 
-        let head = self.head_id()?;
-        let head_ref = self.head_ref()?.context("detached HEAD")?;
+        let head = repo.head_id()?;
+        let head_ref = repo.head_ref()?.context("detached HEAD")?;
 
-        let atom_oid = self
+        let atom_oid = repo
             .commit(
                 head_ref.name().as_bstr(),
                 format!("init: {}", label),
@@ -111,14 +112,15 @@ async fn publish_atom() -> Result<(), anyhow::Error> {
     use crate::id::Label;
     use crate::storage::{Init, QueryStore};
     let (repo, _remote) = git::test::init_repo_and_remote()?;
-    let repo = gix::open(repo.as_ref())?;
+    let safe = ThreadSafeRepository::open(repo.as_ref())?;
+    let repo = safe.to_thread_local();
     let remote = repo.find_remote("origin")?;
     let progress = &tracing::info_span!("test");
     remote.ekala_init(None)?;
     remote.get_refs(Some("refs/heads/*:refs/heads/*"), None)?;
 
     let label = "foo";
-    let (file_path, src) = repo.mock(label, "0.1.0")?;
+    let (file_path, src) = safe.mock(label, "0.1.0")?;
 
     let (paths, publisher) = GitPublisher::new(&repo, "origin", "HEAD", progress)?.build()?;
     let path = paths
