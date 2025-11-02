@@ -1,4 +1,9 @@
-workspace.members = ["crates/atom", "crates/config", "crates/nixec"]
+workspace.members = [
+  "crates/eka-root-macro",
+  "crates/atom",
+  "crates/config",
+  "crates/nixec",
+]
 
 [package]
 edition = "2021"

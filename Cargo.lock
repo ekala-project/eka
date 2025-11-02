@@ -211,6 +211,7 @@ dependencies = [
  "bstr",
  "config",
  "either",
+ "eka-root-macro",
  "gix 0.73.0",
  "hex",
  "insta",
@@ -1135,6 +1136,15 @@ dependencies = [
  "tracing-appender",
  "tracing-indicatif",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "eka-root-macro"
+version = "0.1.0"
+dependencies = [
+ "gix 0.73.0",
+ "quote",
+ "syn 2.0.104",
 ]
 
 [[package]]

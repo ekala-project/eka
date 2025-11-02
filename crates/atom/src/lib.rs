@@ -87,6 +87,9 @@ pub mod package;
 pub mod storage;
 pub mod uri;
 
+// Sets EKA_ROOT_COMMIT_HASH
+eka_root_macro::eka_root_hash!();
+
 const ATOM: &str = "atom";
 /// The base32 alphabet used for encoding Atom hashes.
 ///

@@ -32,7 +32,7 @@ use toml_edit::DocumentMut;
 use super::{AtomError, sets};
 use crate::storage::LocalStorage;
 use crate::uri::AliasedUrl;
-use crate::{ATOM_MANIFEST_NAME, id, storage, uri};
+use crate::{ATOM_MANIFEST_NAME, id, storage};
 
 pub mod lock;
 pub mod manifest;
