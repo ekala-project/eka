@@ -35,10 +35,10 @@
 //! between the calculated repository root and the stored reference.
 
 use std::borrow::Cow;
-use std::io;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+use std::{fs, io};
 
 use bstr::BStr;
 use gix::discover::upwards::Options;
@@ -51,7 +51,7 @@ use gix::{Commit, ObjectId, Repository, ThreadSafeRepository};
 use semver::Version;
 use thiserror::Error as ThisError;
 
-use super::{Init, NormalizeStorePath, QueryStore, QueryVersion, UnpackedRef};
+use super::{EkalaStorage, Init, NormalizeStorePath, QueryStore, QueryVersion, UnpackedRef};
 use crate::id::Origin;
 use crate::package::AtomError;
 use crate::package::metadata::{DocError, EkalaManifest, GitDigest};
@@ -174,6 +174,9 @@ pub enum Error {
     /// A transparent wrapper for a [`toml_edit::ser::Error`]
     #[error(transparent)]
     Serial(#[from] toml_edit::ser::Error),
+    /// A transparent wrapper for a [`toml_edit::de::Error`]
+    #[error(transparent)]
+    Deserialize(#[from] toml_edit::de::Error),
     /// A transparent wrapper for a [`AtomError`]
     #[error(transparent)]
     Atom(#[from] AtomError),
@@ -193,9 +196,11 @@ pub enum Error {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Root(ObjectId);
 
+/// FIXME: Needed until AtomId's are totally generic over Root for local stores
+pub(super) static NULLROOT: Root = Root(ObjectId::Sha1([0u8; 20]));
+
 pub(crate) type AtomQuery = UnpackedRef<ObjectId, Root>;
 type ProgressRange = std::ops::RangeInclusive<prodash::progress::key::Level>;
-type Refs = Vec<super::UnpackedRef<ObjectId, Root>>;
 
 //================================================================================================
 // Traits
@@ -272,26 +277,23 @@ impl<'repo> EkalaRemote for gix::Remote<'repo> {
     }
 }
 
-impl Init<Root, Ref, ()> for gix::Repository {
+impl Init for gix::Repository {
     type Error = Error;
+    type Transport = ();
 
-    fn sync(&self, _: Option<&mut ()>) -> Result<Ref, Self::Error> {
-        todo!()
-    }
-
-    fn ekala_init(&self, _: Option<&mut ()>) -> Result<String, Self::Error> {
+    fn ekala_init(&self, _: Option<&mut ()>) -> Result<(), Self::Error> {
         let workdir = self.workdir().ok_or(Error::DetachedHead)?;
         let manifest_filename = crate::EKALA_MANIFEST_NAME.as_str();
         let manifest_path = workdir.join(manifest_filename);
 
-        let content = if let Ok(content) = std::fs::read_to_string(&manifest_path) {
+        let content = if let Ok(content) = fs::read_to_string(&manifest_path) {
             let _manifest: EkalaManifest =
                 toml_edit::de::from_str(&content).map_err(|e| Error::Generic(Box::new(e)))?;
             content
         } else {
             let manifest = EkalaManifest::new();
             let content = toml_edit::ser::to_string_pretty(&manifest)?;
-            std::fs::write(&manifest_path, &content)?;
+            fs::write(&manifest_path, &content)?;
             content
         };
 
@@ -303,7 +305,7 @@ impl Init<Root, Ref, ()> for gix::Repository {
         {
             self.commit_init(&content)?;
         };
-        Ok(content)
+        Ok(())
     }
 
     fn commit_init(&self, content: &str) -> Result<(), Self::Error> {
@@ -357,8 +359,9 @@ impl Init<Root, Ref, ()> for gix::Repository {
     }
 }
 
-impl<'repo> Init<Root, Ref, Box<dyn Transport + Send>> for gix::Remote<'repo> {
+impl<'repo> Init for gix::Remote<'repo> {
     type Error = Error;
+    type Transport = Box<dyn Transport + Send>;
 
     /// Verifies the consistency of a remote Ekala store and returns its root.
     ///
@@ -494,10 +497,7 @@ impl<'repo> Init<Root, Ref, Box<dyn Transport + Send>> for gix::Remote<'repo> {
     /// project origin, maintaining the integrity of the distributed store.
     ///
     /// On success, it returns the name of the root reference (`refs/ekala/init`).
-    fn ekala_init(
-        &self,
-        transport: Option<&mut Box<dyn Transport + Send>>,
-    ) -> Result<String, Error> {
+    fn ekala_init(&self, transport: Option<&mut Box<dyn Transport + Send>>) -> Result<(), Error> {
         use gix::refs::transaction::PreviousValue;
 
         use crate::Origin;
@@ -508,7 +508,9 @@ impl<'repo> Init<Root, Ref, Box<dyn Transport + Send>> for gix::Remote<'repo> {
             &mut self.get_transport()?
         };
         let remote = self.try_symbol()?;
-        let head = to_id(self.sync(Some(transport))?);
+        let sync = self.get_ref("HEAD", Some(transport))?;
+
+        let head = to_id(sync);
         let repo = self.repo();
         let root = *repo
             .find_commit(head)
@@ -530,7 +532,7 @@ impl<'repo> Init<Root, Ref, Box<dyn Transport + Send>> for gix::Remote<'repo> {
                     ekala.remote = %remote,
                     "remote is already initialized"
                 );
-                return Ok(V1_ROOT.into());
+                return Ok(());
             }
         }
 
@@ -555,68 +557,36 @@ impl<'repo> Init<Root, Ref, Box<dyn Transport + Send>> for gix::Remote<'repo> {
             format!("{root_ref}:{root_ref}").as_str(),
         ])?;
         tracing::info!(ekala.remote = %remote, ekala.root = %*root, "Successfully initialized");
-        Ok(root_ref)
-    }
-
-    /// Sync with the given remote and get the most up to date HEAD according to it.
-    fn sync(&self, transport: Option<&mut Box<dyn Transport + Send>>) -> Result<Ref, Error> {
-        self.get_ref("HEAD", transport)
+        Ok(())
     }
 }
 
-impl<P: AsRef<Path>> NormalizeStorePath<P> for Repository {
+impl EkalaStorage for Repository {
     type Error = Error;
 
-    fn normalize(&self, path: P) -> Result<PathBuf, Error> {
-        use std::fs;
-
-        use path_clean::PathClean;
-        let path = path.as_ref();
-
+    fn ekala_root_dir(&self) -> Result<PathBuf, Error> {
         let rel_repo_root = self.workdir().ok_or(Error::NoWorkDir)?;
-        let repo_root = fs::canonicalize(rel_repo_root)?;
-        let current = self.current_dir();
-        let rel = current.join(path).clean();
+        Ok(fs::canonicalize(rel_repo_root)?)
+    }
 
-        rel.strip_prefix(&repo_root)
-            .map_or_else(
-                |e| {
-                    // handle absolute paths as if they were relative to the repo root
-                    if !path.is_absolute() {
-                        return Err(e);
-                    }
-                    let cleaned = path.clean();
-                    // Preserve the platform-specific root
-                    let p = cleaned.strip_prefix(Path::new("/"))?;
-                    repo_root
-                        .join(p)
-                        .clean()
-                        .strip_prefix(&repo_root)
-                        .map(Path::to_path_buf)
-                },
-                |p| Ok(p.to_path_buf()),
-            )
-            .map_err(|e| {
-                tracing::warn!(
-                    path = %path.display(),
-                    "Ignoring path outside repo root",
-                );
-                Error::NormalizationFailed(e)
-            })
+    fn cwd(&self) -> Result<impl AsRef<Path>, Self::Error> {
+        Ok(self.current_dir())
     }
 }
 
-impl Origin<Root> for std::vec::IntoIter<AtomQuery> {
+impl NormalizeStorePath for Repository {}
+
+impl Origin<Root> for Vec<AtomQuery> {
     type Error = Error;
 
     fn calculate_origin(&self) -> Result<Root, Self::Error> {
-        let mut iter = self.clone();
-        iter.try_fold(None, |first, item| match first {
-            Some(r) if &r == item.id.root() => Ok(first),
-            None => Ok(Some(item.id.root().to_owned())),
-            _ => Err(Error::RootInconsistent),
-        })
-        .and_then(|x| x.ok_or(Error::NoAtoms))
+        self.iter()
+            .try_fold(None, |first, item| match first {
+                Some(r) if &r == item.id.root() => Ok(first),
+                None => Ok(Some(item.id.root().to_owned())),
+                _ => Err(Error::RootInconsistent),
+            })
+            .and_then(|x| x.ok_or(Error::NoAtoms))
     }
 }
 
@@ -639,8 +609,10 @@ impl Origin<Root> for Root {
     }
 }
 
-impl super::QueryStore<Ref, Box<dyn Transport + Send>> for gix::Url {
+impl super::QueryStore for gix::Url {
     type Error = Error;
+    type Ref = Ref;
+    type Transport = Box<dyn Transport + Send>;
 
     /// Efficiently queries git references from a remote repository URL.
     ///
@@ -667,11 +639,8 @@ impl super::QueryStore<Ref, Box<dyn Transport + Send>> for gix::Url {
     fn get_refs<Spec>(
         &self,
         targets: impl IntoIterator<Item = Spec> + std::fmt::Debug,
-        transport: Option<&mut Box<dyn Transport + Send>>,
-    ) -> std::result::Result<
-        Vec<Ref>,
-        <Self as super::QueryStore<Ref, Box<dyn Transport + Send>>>::Error,
-    >
+        transport: Option<&mut Self::Transport>,
+    ) -> std::result::Result<Vec<Ref>, Self::Error>
     where
         Spec: AsRef<BStr> + std::fmt::Debug,
     {
@@ -749,7 +718,7 @@ impl super::QueryStore<Ref, Box<dyn Transport + Send>> for gix::Url {
     fn get_ref<Spec>(
         &self,
         target: Spec,
-        transport: Option<&mut Box<dyn Transport + Send>>,
+        transport: Option<&mut Self::Transport>,
     ) -> Result<Ref, Self::Error>
     where
         Spec: AsRef<BStr> + std::fmt::Debug,
@@ -769,8 +738,10 @@ impl super::QueryStore<Ref, Box<dyn Transport + Send>> for gix::Url {
     }
 }
 
-impl<'repo> super::QueryStore<Ref, Box<dyn Transport + Send>> for gix::Remote<'repo> {
+impl<'repo> super::QueryStore for gix::Remote<'repo> {
     type Error = Error;
+    type Ref = Ref;
+    type Transport = Box<dyn Transport + Send>;
 
     /// Performs a full git fetch operation to retrieve references and repository data.
     ///
@@ -800,11 +771,8 @@ impl<'repo> super::QueryStore<Ref, Box<dyn Transport + Send>> for gix::Remote<'r
     fn get_refs<Spec>(
         &self,
         references: impl IntoIterator<Item = Spec>,
-        transport: Option<&mut Box<dyn Transport + Send>>,
-    ) -> std::result::Result<
-        Vec<Ref>,
-        <Self as super::QueryStore<Ref, Box<dyn Transport + Send>>>::Error,
-    >
+        transport: Option<&mut Self::Transport>,
+    ) -> std::result::Result<Vec<Ref>, Self::Error>
     where
         Spec: AsRef<BStr>,
     {
@@ -854,7 +822,7 @@ impl<'repo> super::QueryStore<Ref, Box<dyn Transport + Send>> for gix::Remote<'r
     fn get_ref<Spec>(
         &self,
         target: Spec,
-        transport: Option<&mut Box<dyn Transport + Send>>,
+        transport: Option<&mut Self::Transport>,
     ) -> Result<Ref, Self::Error>
     where
         Spec: AsRef<BStr> + std::fmt::Debug,
@@ -867,7 +835,7 @@ impl<'repo> super::QueryStore<Ref, Box<dyn Transport + Send>> for gix::Remote<'r
         })
     }
 
-    fn get_transport(&self) -> Result<Box<dyn Transport + Send>, Self::Error> {
+    fn get_transport(&self) -> Result<Self::Transport, Self::Error> {
         use gix::remote::Direction;
         let url = self
             .url(Direction::Fetch)
@@ -876,7 +844,10 @@ impl<'repo> super::QueryStore<Ref, Box<dyn Transport + Send>> for gix::Remote<'r
     }
 }
 
-impl super::UnpackRef<ObjectId, Root> for Ref {
+impl super::UnpackRef for Ref {
+    type Object = ObjectId;
+    type Root = Root;
+
     fn find_root_ref(&self) -> Option<Root> {
         if let Ref::Direct {
             full_ref_name: name,
@@ -909,11 +880,7 @@ impl super::UnpackRef<ObjectId, Root> for Ref {
     }
 }
 
-impl<'repo> QueryVersion<Ref, ObjectId, Refs, Box<dyn Transport + Send>, Root>
-    for gix::Remote<'repo>
-{
-}
-impl QueryVersion<Ref, ObjectId, Refs, Box<dyn Transport + Send>, Root> for gix::Url {}
+impl<T: QueryStore> QueryVersion for T {}
 
 //================================================================================================
 // Functions

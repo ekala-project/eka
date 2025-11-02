@@ -55,4 +55,7 @@ pub enum AtomError {
     /// A generic boxed error
     #[error(transparent)]
     Generic(#[from] crate::BoxError),
+    #[error(transparent)]
+    /// A path strip prefix error
+    Prefix(#[from] std::path::StripPrefixError),
 }

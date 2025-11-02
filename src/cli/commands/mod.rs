@@ -63,15 +63,30 @@ pub(super) enum Commands {
 
 /// The main entry point for the Eka CLI.
 pub async fn run(args: Args) -> anyhow::Result<()> {
-    let store = store::detect();
-    match args.command {
-        Commands::Add(args) => add::run(store.ok(), args).await?,
-        Commands::New(args) => new::run(store, args)?,
-        Commands::Publish(args) => {
-            publish::run(store?, args).await?;
+    let store = store::detect()?;
+    match (args.command, store) {
+        (Commands::Add(args), store::Detected::Git(repo)) => {
+            let repo = repo.to_thread_local();
+            add::run(repo, args).await?;
         },
-        Commands::Init(args) => init::run(store.ok(), args)?,
-        Commands::Resolve(args) => resolve::run(store?, args)?,
+        (Commands::Add(args), store::Detected::FileStorage(fs)) => add::run(fs, args).await?,
+        (Commands::New(args), store::Detected::Git(repo)) => {
+            let repo = repo.to_thread_local();
+            new::run(repo, args)?;
+        },
+        (Commands::New(args), store::Detected::FileStorage(fs)) => new::run(fs, args)?,
+        (Commands::Publish(args), store::Detected::Git(repo)) => {
+            publish::run(repo, args).await?;
+        },
+        (Commands::Resolve(args), store::Detected::Git(repo)) => {
+            let repo = repo.to_thread_local();
+            resolve::run(repo, args)?;
+        },
+        (Commands::Resolve(args), store::Detected::FileStorage(fs)) => resolve::run(fs, args)?,
+        (Commands::Init(args), storage) => {
+            init::run(storage, args)?;
+        },
+        _ => (),
     }
     Ok(())
 }

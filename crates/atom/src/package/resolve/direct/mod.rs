@@ -43,6 +43,7 @@ use snix_glue::fetchers::Fetcher;
 use snix_store::nar::SimpleRenderer;
 use snix_store::pathinfoservice::PathInfoService;
 
+use crate::storage::LocalStorage;
 use crate::{AtomId, BoxError, ManifestWriter, ValidManifest, id, package};
 
 //================================================================================================
@@ -69,7 +70,7 @@ type NixFetcher = Fetcher<
 // Impls
 //================================================================================================
 
-impl ManifestWriter {
+impl<'a, S: LocalStorage> ManifestWriter<'a, S> {
     /// Adds a user-requested direct URL to the manifest and lock files, ensuring they remain in
     /// sync.
     pub async fn add_url(

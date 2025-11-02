@@ -7,11 +7,10 @@ use std::ffi::OsStr;
 use std::path::PathBuf;
 
 use anyhow::Result;
+use atom::storage::LocalStorage;
 use atom::{EkalaManager, Label};
 use clap::Parser;
 use semver::Version;
-
-use crate::cli::store::Detected;
 
 //================================================================================================
 // Types
@@ -36,18 +35,13 @@ pub struct Args {
 //================================================================================================
 
 /// The main entry point for the `new` subcommand.
-pub(super) fn run(store: Result<Detected, crate::cli::store::Error>, args: Args) -> Result<()> {
+pub(super) fn run(storage: impl LocalStorage, args: Args) -> Result<()> {
     let label: Label = if let Some(label) = args.label {
         label
     } else {
         args.path.file_name().unwrap_or(OsStr::new("")).try_into()?
     };
-    let repo = if let Ok(Detected::Git(repo)) = store {
-        Some(repo)
-    } else {
-        None
-    };
-    if let Ok(mut manager) = EkalaManager::new(repo).map_err(|error| {
+    if let Ok(mut manager) = EkalaManager::new(&storage).map_err(|error| {
         tracing::error!(%error);
         error
     }) {

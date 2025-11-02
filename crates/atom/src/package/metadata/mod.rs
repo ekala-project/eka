@@ -22,7 +22,6 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 
-use gix::{Repository, ThreadSafeRepository};
 use id::{Label, Tag};
 use manifest::{AtomSet, ComposeError, Manifest, SetMirror};
 use semver::Version;
@@ -31,6 +30,8 @@ use serde::{Deserialize, Serialize};
 use toml_edit::DocumentMut;
 
 use super::{AtomError, sets};
+use crate::storage::LocalStorage;
+use crate::uri::AliasedUrl;
 use crate::{ATOM_MANIFEST_NAME, id, storage, uri};
 
 pub mod lock;
@@ -108,20 +109,28 @@ pub enum DocError {
     #[error("the ekala.toml could not be located")]
     MissingEkala,
     /// A valid atom id could not be constructed.
-    #[error("a valid atom id could not be constructed; aborting: {0}")]
-    AtomIdConstruct(String),
+    #[error("a bug occurred, constructing atomid from precalculated root should be infallible")]
+    AtomIdConstruct,
     /// Duplicate atoms were found in the ekala manifest
     #[error("there is more than one atom with the same label in the set")]
     DuplicateAtoms,
     /// Dependencies were declared from undeclared sets
     #[error("found atom(s) specified from undeclared set(s)")]
     UndeclaredSets,
+    /// Resolving local atoms failed
+    #[error("Resolving local atom failed")]
+    LocalResolve,
+    /// Dependencies are not appropriate for this type of atom
+    #[error("A static atom, which is not evaluated, cannot provide dependencies")]
+    StaticDependencies,
     /// A local atom by the requested label doesn't exist
     #[error("a local atom by the requested label isn't specified in ekala.toml")]
     NoLocal,
     /// Duplicate atoms were found in the ekala manifest
     #[error("locked atoms could not be synchronized with manifest")]
     SyncFailed,
+    #[error("Composer set not declared")]
+    ComposerSet,
     /// A TOML deserialization error occurred.
     #[error(transparent)]
     De(#[from] toml_edit::de::Error),
@@ -183,10 +192,10 @@ struct MetaData {
 
 /// A writer to assist with writing into the Ekala manifest.
 #[derive(Debug)]
-pub struct EkalaManager {
+pub struct EkalaManager<'a, S: LocalStorage> {
     path: PathBuf,
     doc: TypedDocument<EkalaManifest>,
-    repo: Option<Repository>,
+    pub(super) storage: &'a S,
     pub(super) manifest: EkalaManifest,
 }
 
@@ -203,6 +212,12 @@ pub enum GitDigest {
     /// A SHA-256 commit hash.
     #[serde(rename = "sha256")]
     Sha256(#[serde(with = "hex")] [u8; 32]),
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+struct Singleton<K, V> {
+    key: K,
+    value: V,
 }
 
 //================================================================================================
@@ -271,9 +286,8 @@ impl Atom {
         let address: SetMirror = if composer.set.address == "::" {
             composer.set.address.as_ref().parse()?
         } else {
-            uri::ALIASES
-                .expand_alias(composer.set.address.clone())
-                .parse()?
+            let url = AliasedUrl::try_from(composer.set.address.as_ref())?.url;
+            SetMirror::Url(url)
         };
         Ok(Self {
             label,
@@ -553,18 +567,17 @@ impl MetaData {
     }
 }
 
-impl EkalaManager {
+impl<'a, S: LocalStorage> EkalaManager<'a, S> {
     /// Create a new manifest writer, traversing upward to locate the nearest ekala.toml if
     /// necessary.
-    pub fn new(repo: Option<&ThreadSafeRepository>) -> Result<Self, AtomError> {
-        let path = if let Some(repo) = repo {
-            repo.work_dir()
-                .map(|p| p.join(crate::EKALA_MANIFEST_NAME.as_str()))
-                .ok_or(AtomError::EkalaManifest)?
-        } else {
-            let (_, manifest) = find_upwards(crate::EKALA_MANIFEST_NAME.as_str())?;
-            manifest
-        };
+    pub fn new(storage: &'a S) -> Result<Self, AtomError> {
+        let path = storage
+            .ekala_root_dir()
+            .map_err(|e| {
+                tracing::error!(message = %e);
+                AtomError::EkalaManifest
+            })?
+            .join(crate::EKALA_MANIFEST_NAME.as_str());
 
         let (doc, manifest) = {
             let content = std::fs::read_to_string(&path).inspect_err(|_| {
@@ -581,7 +594,7 @@ impl EkalaManager {
             doc,
             path,
             manifest,
-            repo: repo.map(|r| r.to_thread_local()),
+            storage,
         })
     }
 
@@ -591,7 +604,7 @@ impl EkalaManager {
         label: Label,
         package_path: impl AsRef<Path>,
         version: semver::Version,
-    ) -> Result<(), storage::git::Error> {
+    ) -> Result<(), storage::StorageError> {
         use std::fs;
         use std::io::Write;
 
@@ -607,7 +620,7 @@ impl EkalaManager {
         )?;
 
         let atom = Manifest::new(label.to_owned(), version)
-            .map_err(|e| storage::git::Error::Generic(Box::new(e)))?;
+            .map_err(|e| Box::new(storage::git::Error::Generic(Box::new(e))))?;
         let atom_str = toml_edit::ser::to_string_pretty(&atom)?;
         let atom_toml = package_path.as_ref().join(ATOM_MANIFEST_NAME.as_str());
 
@@ -649,7 +662,7 @@ impl EkalaManager {
         &mut self,
         package_path: impl AsRef<Path>,
         label: Label,
-    ) -> Result<(), storage::git::Error> {
+    ) -> Result<(), storage::StorageError> {
         use toml_edit::{Array, Value};
 
         if let Some(path) = self.manifest.set.packages.as_ref().get(&label) {
@@ -664,12 +677,10 @@ impl EkalaManager {
             return Err(DocError::DuplicateAtoms.into());
         }
 
-        use storage::NormalizeStorePath;
-        let path = if let Some(repo) = &self.repo {
-            repo.normalize(package_path)?
-        } else {
-            package_path.as_ref().into()
-        };
+        let path = self.storage.normalize(package_path).map_err(|e| {
+            tracing::error!(message = %e);
+            storage::StorageError::NotStorage
+        })?;
 
         let doc = self.doc.as_mut();
         let set = doc
@@ -707,21 +718,42 @@ impl EkalaManager {
     }
 }
 
-/// Returns the directory of the searched file and a path to the file itself as a tuple.
-fn find_upwards(filename: &str) -> Result<(PathBuf, PathBuf), std::io::Error> {
-    let start_dir = std::env::current_dir()?;
+impl<'de, K: Deserialize<'de>, V: Deserialize<'de>> Deserialize<'de> for Singleton<K, V>
+where
+    K: Ord,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de;
 
-    for ancestor in start_dir.ancestors() {
-        let file_path = ancestor.join(filename);
-        if file_path.exists() {
-            return Ok((ancestor.to_owned(), file_path));
+        let err = "precisely one entry";
+
+        let map: BTreeMap<K, V> = BTreeMap::deserialize(deserializer)?;
+        let len = map.len();
+        if len > 1 {
+            return Err(de::Error::invalid_length(len, &err));
+        }
+        if let Some((key, value)) = map.into_iter().next() {
+            Ok(Self { key, value })
+        } else {
+            Err(de::Error::invalid_length(len, &err))
         }
     }
+}
 
-    Err(std::io::Error::new(
-        std::io::ErrorKind::NotFound,
-        "could not locate ekala manifest",
-    ))
+impl<K: Serialize, V: Serialize> Serialize for Singleton<K, V>
+where
+    K: Ord,
+{
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let map = BTreeMap::from([(&self.key, &self.value)]);
+        map.serialize(serializer)
+    }
 }
 
 impl<T: Serialize + DeserializeOwned> TypedDocument<T> {

@@ -72,6 +72,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Deref;
+use std::path::PathBuf;
 
 use direct::{BuildSrc, NixDep, NixGitDep, NixTarDep};
 use gix::ObjectId;
@@ -160,7 +161,7 @@ pub(crate) enum Dep {
     ///
     /// Represents a source that needs to be fetched and available during the
     /// build process, such as source code or configuration file.
-    #[serde(rename = "nix+build")]
+    #[serde(rename = "nix+src")]
     NixSrc(BuildSrc),
 }
 
@@ -174,9 +175,45 @@ type DepKey<R> = either::Either<AtomId<R>, Name>;
 
 /// The set of locked mirrors from the manifest
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(deny_unknown_fields)]
 pub struct SetDetails {
     pub(crate) tag: Tag,
     pub(crate) mirrors: BTreeSet<SetMirror>,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
+#[allow(clippy::large_enum_variant)]
+pub(super) enum DepTime {
+    #[serde(rename = "buildtime")]
+    #[default]
+    Build,
+    #[serde(rename = "evaltime")]
+    Eval(EvalAtom),
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(tag = "with")]
+#[allow(clippy::large_enum_variant)]
+pub(super) enum EvalAtom {
+    /// an atom containing a nix expression that is just evaluated by calling `import`
+    #[serde(rename = "nix")]
+    NixTrivial { entry: PathBuf },
+    /// an atom containing a nix expression that is evaluated with the contained `NixComposer` atom
+    #[serde(rename = "atom")]
+    Atom {
+        #[serde(flatten)]
+        atom: AtomDep,
+        entrypoint: PathBuf,
+    },
+    /// an atom that contains only static configuration for use at evaluation time to other atoms
+    #[serde(rename = "static")]
+    Config,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
+#[serde(deny_unknown_fields)]
+pub(super) struct Compose {
+    pub(super) at: DepTime,
 }
 
 /// The root structure for the lockfile, containing resolved dependencies and sources.
@@ -194,6 +231,7 @@ pub struct Lockfile {
     /// maintaining backward compatibility.
     pub version: u8,
 
+    pub(super) compose: Compose,
     pub(crate) sets: BTreeMap<GitDigest, SetDetails>,
     /// The list of locked dependencies (absent or empty if none).
     ///
@@ -417,6 +455,7 @@ impl Default for Lockfile {
         Self {
             version: 1,
             sets: Default::default(),
+            compose: Compose::default(),
             deps: Default::default(),
         }
     }

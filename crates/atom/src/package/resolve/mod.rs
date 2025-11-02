@@ -37,8 +37,8 @@ use std::ops::Deref;
 use std::path::PathBuf;
 
 use either::Either;
+use gix::ObjectId;
 use gix::protocol::transport::client::Transport;
-use gix::{ObjectId, Repository};
 use id::{Name, Origin, Tag};
 use lock::direct::NixUrls;
 use lock::{AtomDep, SetDetails};
@@ -51,7 +51,7 @@ use storage::git::{AtomQuery, Root};
 use uri::Uri;
 
 use super::{ValidManifest, metadata, sets};
-use crate::storage::QueryVersion;
+use crate::storage::{LocalStorage, QueryVersion};
 use crate::{ATOM_MANIFEST_NAME, AtomId, BoxError, ManifestWriter, id, storage, uri};
 
 mod direct;
@@ -60,7 +60,7 @@ mod direct;
 // Impls
 //================================================================================================
 
-impl ResolvedSets {
+impl<'a, S: LocalStorage> ResolvedSets<'a, S> {
     pub(super) fn resolve_atom(
         &self,
         id: &AtomId<Root>,
@@ -83,7 +83,7 @@ impl ResolvedSets {
     }
 }
 
-impl<'a> SetResolver<'a> {
+impl<'a, 'b, S: LocalStorage> SetResolver<'a, 'b, S> {
     /// Verifies the integrity of declared package sets and collects atom references.
     ///
     /// This function consumes the resolver and performs several critical checks to
@@ -108,7 +108,7 @@ impl<'a> SetResolver<'a> {
     /// - A repository is found in more than one mirror set.
     /// - The mirrors for a given set do not all point to the same root hash.
     /// - An atom is advertised with the same version but different revisions across mirrors.
-    pub(super) async fn get_and_check_sets(mut self) -> Result<ResolvedSets, BoxError> {
+    pub(super) async fn get_and_check_sets(mut self) -> Result<ResolvedSets<'a, S>, BoxError> {
         use super::metadata::manifest::AtomSet;
 
         for (set_tag, set) in self.manifest.package().sets().iter() {
@@ -132,7 +132,6 @@ impl<'a> SetResolver<'a> {
             transports: self.transports,
             roots: self.roots,
             details: self.sets,
-            repo: self.repo,
         })
     }
 
@@ -186,20 +185,13 @@ impl<'a> SetResolver<'a> {
     /// This function is called during the set validation phase of resolution (step 1 in the overall
     /// process). Remote mirror results are collected asynchronously and processed later in
     /// `get_and_check_sets`.
-    fn process_mirror(&mut self, set_tag: &'a Tag, mirror: &'a SetMirror) -> Result<(), BoxError> {
+    fn process_mirror(&mut self, set_tag: &'b Tag, mirror: &'b SetMirror) -> Result<(), BoxError> {
         use crate::id::Origin;
         use crate::storage::{QueryStore, QueryVersion};
 
         match mirror {
             SetMirror::Local => {
-                if let Some(repo) = self.repo.as_ref() {
-                    let root = {
-                        let commit = repo
-                            .rev_parse_single("HEAD")
-                            .map(|s| repo.find_commit(s))
-                            .map_err(Box::new)??;
-                        commit.calculate_origin()?
-                    };
+                if let Ok(root) = self.ekala.storage.ekala_root(None) {
                     self.check_set_consistency(set_tag, root, &SetMirror::Local)?;
                     self.update_sets(set_tag, root, SetMirror::Local);
                 } else {
@@ -515,13 +507,12 @@ impl Uri {
             let url = url.unwrap();
             let atoms = url.get_atoms(transport)?;
             let ObjectId::Sha1(root) = *atoms.calculate_origin()?;
-            let (version, oid) =
-                <gix::url::Url as QueryVersion<_, _, _, _, _>>::process_highest_match(
-                    atoms.clone(),
-                    label,
-                    &self.version_req(),
-                )
-                .ok_or(crate::storage::git::Error::NoMatchingVersion)?;
+            let (version, oid) = <gix::url::Url as QueryVersion>::process_highest_match(
+                atoms.clone(),
+                label,
+                &self.version_req(),
+            )
+            .ok_or(crate::storage::git::Error::NoMatchingVersion)?;
             let atom_req = if let Some(req) = self.version() {
                 AtomReq::new(req.to_owned())
             } else {
@@ -556,7 +547,7 @@ impl Uri {
     }
 }
 
-impl ManifestWriter {
+impl<'a, S: LocalStorage> ManifestWriter<'a, S> {
     /// Adds a user-requested atom URI to the manifest and lock files, ensuring they remain in sync.
     pub fn add_uri(&mut self, uri: Uri, set_tag: Option<Tag>) -> Result<(), storage::git::Error> {
         let mirror = if let Some(url) = uri.url() {
@@ -655,13 +646,13 @@ impl ManifestWriter {
     /// Updates the lockfile to match the dependencies specified in the manifest.
     /// It resolves any new dependencies, updates existing ones if their version
     /// requirements have changed, and ensures the lockfile is fully consistent.
-    pub(super) async fn synchronize(&mut self, manifest: ValidManifest) -> Result<(), DocError> {
-        self.synchronize_atoms(&manifest).await?;
-        self.synchronize_direct(&manifest).await?;
+    pub(super) async fn synchronize(&mut self, manifest: &ValidManifest) -> Result<(), DocError> {
+        self.synchronize_atoms(manifest)?;
+        self.synchronize_direct(manifest).await?;
         Ok(())
     }
 
-    async fn synchronize_atoms(&mut self, manifest: &ValidManifest) -> Result<(), DocError> {
+    fn synchronize_atoms(&mut self, manifest: &ValidManifest) -> Result<(), DocError> {
         for (set_tag, set) in manifest.as_ref().deps().from() {
             let maybe_root = self
                 .resolved
@@ -676,12 +667,8 @@ impl ManifestWriter {
                         set = %set_tag,
                         "checking sync status"
                     );
-                    let id = AtomId::construct(&root, label.to_owned()).map_err(|e| {
-                        DocError::AtomIdConstruct(format!(
-                            "set: {}, atom: {}, err: {}",
-                            &set_tag, &label, e
-                        ))
-                    })?;
+                    let id = AtomId::construct(&root, label.to_owned())
+                        .map_err(|_| DocError::AtomIdConstruct)?;
                     self.synchronize_atom(req.to_owned(), id.to_owned(), set_tag.to_owned())
                         .map_err(|error| {
                             tracing::error!(
@@ -818,22 +805,25 @@ impl ManifestWriter {
     /// Called during synchronization when an atom needs to be locked to a specific version.
     /// The resulting lockfile entry ensures that subsequent builds use identical dependency
     /// versions and commit hashes, enabling reproducible builds.
-    fn lock_atom(
+    pub(super) fn lock_atom(
         &mut self,
         req: VersionReq,
         id: AtomId<Root>,
         set_tag: Tag,
-    ) -> Result<lock::Dep, crate::storage::git::Error> {
-        if let Ok(dep) = self.resolved.resolve_atom(&id, &req) {
-            let dep = lock::Dep::Atom(dep);
+    ) -> Result<AtomDep, DocError> {
+        if let Ok(atom) = self.resolved.resolve_atom(&id, &req) {
+            let dep = lock::Dep::Atom(atom.to_owned());
             self.insert_or_update_and_log(Either::Left(id), &dep);
-            Ok(dep)
-        } else if let Some(repo) = &self.resolved.repo {
+            Ok(atom)
+        } else if let Ok(root) = self.resolved.ekala.storage.ekala_root(None) {
             let uri = Uri::from((id.label().to_owned(), Some(req)));
-            let (_, dep) = self.resolve_from_local(&uri, repo)?;
-            let dep = lock::Dep::Atom(dep);
+            let (_, atom) = self.resolve_from_local(&uri, root).map_err(|e| {
+                tracing::error!(message = %e);
+                DocError::LocalResolve
+            })?;
+            let dep = lock::Dep::Atom(atom.to_owned());
             self.insert_or_update_and_log(Either::Left(id), &dep);
-            Ok(dep)
+            Ok(atom)
         } else {
             let versions: Vec<_> = self
                 .resolved()
@@ -848,7 +838,9 @@ impl ManifestWriter {
                 requested.version = %req,
                 avaliable.versions = %toml_edit::ser::to_string(&versions).unwrap_or_default()
             );
-            Err(DocError::Error(Box::new(crate::storage::git::Error::NoMatchingVersion)).into())
+            Err(DocError::Error(Box::new(
+                crate::storage::git::Error::NoMatchingVersion,
+            )))
         }
     }
 
@@ -917,14 +909,11 @@ impl ManifestWriter {
     fn resolve_from_local(
         &self,
         uri: &Uri,
-        repo: &Repository,
+        root: Root,
     ) -> Result<(AtomReq, AtomDep), crate::storage::git::Error> {
         use sets;
 
         /* we are in a local git repository */
-
-        // FIXME?: do we need to add a flag to make this configurable?
-        let root = repo.head_commit()?.calculate_origin()?;
 
         if let Ok(res) = self.resolve_from_uri(uri, &root) {
             /* local store has a mirror which resolved this atom successfully */
@@ -1032,19 +1021,14 @@ impl ManifestWriter {
             /* set doesn't exist, we need to resolve from the passed url */
             let transport = self.resolved.transports.get_mut(url);
             uri.resolve(transport)
-        } else if let Some(repo) = &self.resolved.repo {
-            /* we are in a local git repository */
-
-            self.resolve_from_local(uri, repo)
         } else {
-            // TODO: we need a notion of "root" for an ekala set outside of a repository
-            // maybe just a constant would do for a basic remoteless store?
-            tracing::error!(
-                suggestion =
-                    "if you add them by hand to the manifest, they will resolve at eval-time",
-                "haven't yet implemented adding local dependencies outside of git"
-            );
-            todo!()
+            /* we are in a local git repository */
+            let root = self.resolved.ekala.storage.ekala_root(None).map_err(|e| {
+                tracing::error!(message = %e);
+                crate::storage::git::Error::RootNotFound
+            })?;
+
+            self.resolve_from_local(uri, root)
         }
     }
 

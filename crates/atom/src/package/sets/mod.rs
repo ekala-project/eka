@@ -27,8 +27,8 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use either::Either;
+use gix::ObjectId;
 use gix::protocol::transport::client::Transport;
-use gix::{ObjectId, ThreadSafeRepository};
 use id::Tag;
 use manifest::{Manifest, SetMirror};
 use metadata::lock::SetDetails;
@@ -39,6 +39,7 @@ use storage::git::{AtomQuery, Root};
 use tokio::task::JoinSet;
 
 use super::{AtomError, metadata};
+use crate::storage::LocalStorage;
 use crate::{AtomId, BoxError, id, storage};
 
 #[derive(thiserror::Error, Debug)]
@@ -49,13 +50,12 @@ pub enum Error {
     NoLocal,
 }
 
-pub(super) struct ResolvedSets {
+pub(super) struct ResolvedSets<'a, S: LocalStorage> {
     pub(super) atoms: ResolvedAtoms<ObjectId, Root>,
     pub(super) roots: HashMap<Either<Tag, SetMirror>, Root>,
     pub(super) transports: HashMap<gix::Url, Box<dyn Transport + Send>>,
     pub(super) details: BTreeMap<GitDigest, SetDetails>,
-    pub(super) ekala: EkalaManager,
-    pub(super) repo: Option<gix::Repository>,
+    pub(super) ekala: EkalaManager<'a, S>,
 }
 
 #[derive(Clone)]
@@ -66,22 +66,21 @@ pub(super) struct ResolvedAtom<Id, R> {
 
 type ResolvedAtoms<Id, R> = HashMap<AtomId<R>, HashMap<Version, ResolvedAtom<Id, R>>>;
 
-pub(super) struct SetResolver<'a> {
-    pub(super) manifest: &'a Manifest,
-    pub(super) repo: Option<gix::Repository>,
+pub(super) struct SetResolver<'a, 'b, S: LocalStorage> {
+    pub(super) manifest: &'b Manifest,
     pub(super) names: HashMap<Root, Tag>,
     pub(super) roots: HashMap<Either<Tag, SetMirror>, Root>,
     pub(super) tasks: JoinSet<MirrorResult>,
     pub(super) atoms: ResolvedAtoms<ObjectId, Root>,
     pub(super) sets: BTreeMap<GitDigest, SetDetails>,
     pub(super) transports: HashMap<gix::Url, Box<dyn Transport + Send>>,
-    pub(super) ekala: EkalaManager,
+    pub(super) ekala: EkalaManager<'a, S>,
 }
 
 pub(super) type MirrorResult = Result<
     (
         Option<Box<dyn Transport + Send>>,
-        <Vec<AtomQuery> as IntoIterator>::IntoIter,
+        Vec<AtomQuery>,
         Root,
         Tag,
         gix::Url,
@@ -89,18 +88,14 @@ pub(super) type MirrorResult = Result<
     BoxError,
 >;
 
-impl<'a> SetResolver<'a> {
+impl<'a, 'b, S: LocalStorage> SetResolver<'a, 'b, S> {
     /// Creates a new `SetResolver` to validate the package sets in a manifest.
-    pub(super) fn new(
-        repo: Option<&ThreadSafeRepository>,
-        manifest: &'a Manifest,
-    ) -> Result<Self, AtomError> {
+    pub(super) fn new(storage: &'a S, manifest: &'b Manifest) -> Result<Self, AtomError> {
         let len = manifest.package().sets().len();
-        let ekala = EkalaManager::new(repo)?;
+        let ekala = EkalaManager::new(storage)?;
         Ok(Self {
             manifest,
             ekala,
-            repo: repo.map(|r| r.to_thread_local()),
             names: HashMap::with_capacity(len),
             roots: HashMap::with_capacity(len),
             tasks: JoinSet::new(),
@@ -111,7 +106,7 @@ impl<'a> SetResolver<'a> {
     }
 }
 
-impl ResolvedSets {
+impl<'a, S: LocalStorage> ResolvedSets<'a, S> {
     pub(super) fn roots(&self) -> &HashMap<Either<Tag, SetMirror>, Root> {
         &self.roots
     }

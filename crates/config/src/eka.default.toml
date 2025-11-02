@@ -22,6 +22,7 @@
 # The set containing the composer atom (aliases expand)
 set = { tag = "atom", address = "ekl:atom" }
 # The composer atom to use from the set above
+# atom.entry = "./some-entrypoint" <- default to "." (atom root) if not set
 atom.label = "atom-nix"
 # atom.version = "0.1.0" <- defaults to "*" (any version) if not set
 

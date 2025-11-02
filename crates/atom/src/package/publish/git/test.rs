@@ -35,8 +35,7 @@ impl MockAtom for gix::Repository {
         let atom_file = atom_dir.as_ref().join(crate::ATOM_MANIFEST_NAME.as_str());
 
         self.ekala_init(None)?;
-        let safe_repo = self.clone().into_sync();
-        let mut ekala = EkalaManager::new(Some(&safe_repo))?;
+        let mut ekala = EkalaManager::new(self)?;
         ekala.new_atom_at_path(label.try_into()?, &atom_dir, Version::from_str(version)?)?;
 
         let buf = std::fs::read_to_string(&atom_file)?;

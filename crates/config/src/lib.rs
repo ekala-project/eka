@@ -45,6 +45,8 @@ pub struct AtomComposer<'a> {
     pub label: Cow<'a, str>,
     #[serde(borrow)]
     pub version: Option<Cow<'a, str>>,
+    #[serde(borrow)]
+    pub entry: Option<Cow<'a, str>>,
 }
 
 #[derive(Deserialize, Serialize, Default)]

@@ -678,7 +678,17 @@ pub(crate) mod serde_gix_url {
     {
         use serde::Deserialize;
         let name = BString::deserialize(deserializer)?;
+        let has_schema = name.to_str().map(|s| s.contains("://")).is_ok_and(|b| b);
         gix::url::parse(name.as_bstr())
+            .inspect(|url| {
+                if gix::url::Scheme::File == url.scheme && !has_schema {
+                    let url = url.to_owned().serialize_alternate_form(false);
+                    tracing::warn!(
+                        %url,
+                        "no schema detected; interpreting as file-path"
+                    )
+                }
+            })
             .map_err(|e| <D::Error as serde::de::Error>::custom(e.to_string()))
     }
 

@@ -65,14 +65,14 @@
 //! The `ValidManifest` type provides additional post-deserialization validation
 //! to ensure consistency between declared sets, dependencies, and composer configuration.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use config::ComposerSettings;
 use direct::DirectDeps;
-use gix::{ThreadSafeRepository, Url};
+use gix::Url;
 use id::{Tag, VerifiedName};
 use lock::{AtomDep, Lockfile, SetDetails};
 use package::AtomError;
@@ -83,7 +83,8 @@ use toml_edit::{DocumentMut, de};
 use uri::{Uri, serde_gix_url};
 
 use super::{DocError, GitDigest, TypedDocument, lock};
-use crate::{Atom, Label, id, package, uri};
+use crate::storage::LocalStorage;
+use crate::{Atom, AtomId, Label, id, package, uri};
 
 pub(in crate::package) mod direct;
 
@@ -101,9 +102,34 @@ pub enum ComposeError {
     Url(#[from] gix::url::parse::Error),
 }
 
+/// trivial composers are specified with the `ComposeKind::As` variant
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
-struct Compose {
-    with: Composer,
+pub(super) enum TrivialAtom {
+    /// just calls import on the contained nix expression at the provided path inside the atom,
+    /// relative its root
+    #[serde(rename = "nix")]
+    Nix(PathBuf),
+    /// static atom variant which cannot declare dependencies (as it has no evaluation phase)
+    #[serde(rename = "static")]
+    Static(StaticAtom),
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+pub(super) enum StaticAtom {
+    /// Atom is provided at evaluation tme to consumers as shared configuration
+    #[serde(rename = "config")]
+    Config,
+    /// Atom is provided at build tme to consumers as, presumably, a build source
+    #[serde(rename = "src")]
+    BuildSrc,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+pub(super) enum Compose {
+    #[serde(rename = "with")]
+    With(AtomComposer),
+    #[serde(rename = "as")]
+    As(TrivialAtom),
 }
 
 /// A strongly-typed representation of a source for an atom set.
@@ -158,12 +184,6 @@ pub(in crate::package) struct Manifest {
     deps: Dependency,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
-struct Singleton<K, V> {
-    key: K,
-    value: V,
-}
-
 /// A specialized result type for manifest operations.
 pub type AtomResult<T> = Result<T, AtomError>;
 
@@ -171,13 +191,15 @@ type AtomFrom = HashMap<Tag, HashMap<Label, VersionReq>>;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-struct ComposerSpec {
+pub(super) struct ComposerSpec {
     from: Tag,
     #[serde(skip_serializing_if = "Option::is_none")]
     version: Option<VersionReq>,
+    #[serde(default = "atom_root", skip_serializing_if = "is_atom_root")]
+    entry: PathBuf,
 }
 
-type Composer = Singleton<Label, ComposerSpec>;
+type AtomComposer = super::Singleton<Label, ComposerSpec>;
 
 //================================================================================================
 // Impls
@@ -205,50 +227,20 @@ impl TryFrom<config::ComposerSettings<'static>> for Compose {
             .atom
             .version
             .map(|v| VersionReq::parse(v.as_ref()).unwrap_or_default());
-        let spec = ComposerSpec { from: set, version };
-        let composer = Composer {
+        let spec = ComposerSpec {
+            from: set,
+            version,
+            entry: settings
+                .atom
+                .entry
+                .map(|s| PathBuf::from(s.as_ref()))
+                .unwrap_or_else(atom_root),
+        };
+        let composer = AtomComposer {
             key: atom,
             value: spec,
         };
-        Ok(Self { with: composer })
-    }
-}
-
-impl<'de, K: Deserialize<'de>, V: Deserialize<'de>> Deserialize<'de> for Singleton<K, V>
-where
-    K: Ord,
-{
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        use serde::de;
-
-        let err = "precisely one entry";
-
-        let map: BTreeMap<K, V> = BTreeMap::deserialize(deserializer)?;
-        let len = map.len();
-        if len > 1 {
-            return Err(de::Error::invalid_length(len, &err));
-        }
-        if let Some((key, value)) = map.into_iter().next() {
-            Ok(Self { key, value })
-        } else {
-            Err(de::Error::invalid_length(len, &err))
-        }
-    }
-}
-
-impl<K: Serialize, V: Serialize> Serialize for Singleton<K, V>
-where
-    K: Ord,
-{
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        let map = BTreeMap::from([(&self.key, &self.value)]);
-        map.serialize(serializer)
+        Ok(Compose::With(composer))
     }
 }
 
@@ -393,11 +385,11 @@ pub enum GitSpec {
 ///     // writer.write_atomic().unwrap();
 /// };
 /// ```
-pub struct ManifestWriter {
+pub struct ManifestWriter<'a, S: LocalStorage> {
     path: PathBuf,
     doc: TypedDocument<ValidManifest>,
     pub(in crate::package) lock: Lockfile,
-    pub(in crate::package) resolved: ResolvedSets,
+    pub(in crate::package) resolved: ResolvedSets<'a, S>,
 }
 
 pub(in crate::package) struct AtomWriter {
@@ -489,17 +481,18 @@ impl Dependency {
     }
 }
 
-impl ManifestWriter {
-    pub(crate) const ATOM_BUG: &str = "bug, `AtomId` construction is infallible when derived \
-                                       directly from a root and doesn't need to be calculated";
-    pub(crate) const RESOLUTION_ERR_MSG: &str =
+impl<'a, S: LocalStorage> ManifestWriter<'a, S> {
+    pub(crate) const ATOM_BUG: &'static str = "bug, `AtomId` construction is infallible when \
+                                               derived directly from a root and doesn't need to \
+                                               be calculated";
+    pub(crate) const RESOLUTION_ERR_MSG: &'static str =
         "unlocked dependency could not be resolved remotely";
-    pub(crate) const UPDATE_DEPENDENCY: &str =
+    pub(crate) const UPDATE_DEPENDENCY: &'static str =
         "updating out of date dependency in accordance with spec";
 
     /// Constructs a new `ManifestWriter`, ensuring that the manifest and lock file constraints
     /// are respected.
-    pub async fn new(repo: Option<&ThreadSafeRepository>, path: &Path) -> Result<Self, AtomError> {
+    pub async fn new(storage: &'a S, path: &Path) -> Result<Self, AtomError> {
         use std::fs;
         let path = if path.file_name() == Some(OsStr::new(crate::ATOM_MANIFEST_NAME.as_str())) {
             path.into()
@@ -512,7 +505,7 @@ impl ManifestWriter {
         })?;
         let (doc, manifest) = TypedDocument::<ValidManifest>::new(&toml_str)
             .inspect_err(|_| tracing::error!(path = %path.display(), "could not parse manifest"))?;
-        let resolved_sets = SetResolver::new(repo, manifest.as_ref())?
+        let resolved_sets = SetResolver::new(storage, manifest.as_ref())?
             .get_and_check_sets()
             .await?;
 
@@ -527,21 +520,66 @@ impl ManifestWriter {
             path,
             resolved: resolved_sets,
         };
-        writer.reconcile(manifest).await?;
+        writer.reconcile(&manifest).await?;
         Ok(writer)
+    }
+
+    pub(super) fn set_lock_compose(&mut self, manifest: &ValidManifest) -> Result<(), DocError> {
+        use lock::{DepTime, EvalAtom};
+        let compose = match &manifest.as_ref().compose {
+            Compose::With(composer) => {
+                let root = self
+                    .resolved()
+                    .roots()
+                    .get(&either::Either::Left(composer.value.from.to_owned()))
+                    .ok_or(DocError::ComposerSet)?;
+                let id = AtomId::construct(root, composer.key.to_owned())
+                    .map_err(|_| DocError::AtomIdConstruct)?;
+                let dep = self.lock_atom(
+                    composer
+                        .value
+                        .version
+                        .as_ref()
+                        .unwrap_or(&VersionReq::STAR)
+                        .to_owned(),
+                    id,
+                    composer.value.from.to_owned(),
+                )?;
+                lock::Compose {
+                    at: DepTime::Eval(EvalAtom::Atom {
+                        atom: dep,
+                        entrypoint: composer.value.entry.to_owned(),
+                    }),
+                }
+            },
+            Compose::As(TrivialAtom::Nix(path)) => lock::Compose {
+                at: DepTime::Eval(EvalAtom::NixTrivial {
+                    entry: path.to_owned(),
+                }),
+            },
+            Compose::As(TrivialAtom::Static(StaticAtom::Config)) => lock::Compose {
+                at: DepTime::Eval(EvalAtom::Config),
+            },
+            Compose::As(TrivialAtom::Static(StaticAtom::BuildSrc)) => {
+                lock::Compose { at: DepTime::Build }
+            },
+        };
+        self.lock.compose = compose;
+        Ok(())
     }
 
     /// Runs the sanitization process, and then the synchronization process to ensure a fully
     /// consistent manifest and lock. This function is called in the `ManifestWriter` constructor
     /// to ensure that we are never operating on a stale manifest.
-    async fn reconcile(&mut self, manifest: ValidManifest) -> Result<(), DocError> {
-        self.set_sets();
-        self.sanitize(&manifest);
+    async fn reconcile(&mut self, manifest: &ValidManifest) -> Result<(), DocError> {
+        self.set_lock_sets();
+        self.set_lock_compose(manifest)?;
+        self.sanitize(manifest);
         self.synchronize(manifest).await?;
         Ok(())
     }
 
-    fn set_sets(&mut self) {
+    fn set_lock_sets(&mut self) {
         self.lock.sets = self.resolved().details().to_owned();
     }
 
@@ -561,9 +599,10 @@ impl ManifestWriter {
             .or_else(|| {
                 if let Some(url) = uri.url() {
                     resolve::url_filename_as_tag(url).ok()
-                } else if let Some(repo) = &self.resolved.repo {
-                    repo.workdir()
-                        .and_then(|p| p.canonicalize().ok())
+                } else if let Ok(root_dir) = &self.resolved.ekala.storage.ekala_root_dir() {
+                    root_dir
+                        .canonicalize()
+                        .ok()
                         .and_then(|p| p.file_stem().map(ToOwned::to_owned))
                         .and_then(|f| Tag::try_from(f.as_os_str()).ok())
                 } else {
@@ -593,7 +632,7 @@ impl ManifestWriter {
         };
     }
 
-    pub(in crate::package) fn resolved(&self) -> &ResolvedSets {
+    pub(in crate::package) fn resolved(&self) -> &ResolvedSets<'a, S> {
         &self.resolved
     }
 
@@ -736,18 +775,25 @@ impl<'de> Deserialize<'de> for ValidManifest {
             );
             return Err(de::Error::custom(DocError::UndeclaredSets));
         }
-        if !manifest
-            .package()
-            .sets()
-            .contains_key(&manifest.compose.with.value.from)
-        {
-            tracing::error!(
-                suggestion = "declare a set in [package.sets] for the missing key",
-                missing = %manifest.compose.with.key,
-                "the set `compose.with.{}.{}` is undeclared",
-                manifest.compose.with.key, manifest.compose.with.value.from
-            );
-            return Err(de::Error::custom(DocError::UndeclaredSets));
+        match &manifest.compose {
+            Compose::With(composer) => {
+                if !manifest.package().sets().contains_key(&composer.value.from) {
+                    tracing::error!(
+                        suggestion = "declare a set in [package.sets] for the missing key",
+                        missing = %composer.value.from,
+                        "the set `compose.with.{}.{}` is undeclared",
+                        composer.key, composer.value.from
+                    );
+                    return Err(de::Error::custom(DocError::UndeclaredSets));
+                }
+            },
+            Compose::As(TrivialAtom::Nix(_)) => (),
+            Compose::As(TrivialAtom::Static(s)) => {
+                if !manifest.deps().is_empty() {
+                    tracing::error!(static_kind = ?s, "static atom declared dependencies");
+                    return Err(de::Error::custom(DocError::StaticDependencies));
+                }
+            },
         }
         Ok(ValidManifest(manifest))
     }
@@ -760,4 +806,12 @@ impl<'de> Deserialize<'de> for ValidManifest {
 /// A helper function for `serde(skip_serializing_if)` to omit `false` boolean values.
 pub(crate) fn not(b: &bool) -> bool {
     !b
+}
+
+fn atom_root() -> PathBuf {
+    PathBuf::from(".")
+}
+
+fn is_atom_root(v: &PathBuf) -> bool {
+    v == &atom_root()
 }
