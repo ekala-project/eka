@@ -663,51 +663,56 @@ impl WriteDeps<ValidManifest, Label> for AtomWriter {
         let doc = doc.as_mut();
         let mirror = self.mirror.to_string();
 
-        let package = doc
+        let mut set = doc
             .entry("package")
             .or_insert(toml_edit::table())
             .as_table_mut()
-            .unwrap();
-        package.set_implicit(true);
-
-        let sets = package
-            .entry("sets")
-            .or_insert(toml_edit::table())
-            .as_table_mut()
-            .unwrap();
-        sets.set_implicit(true);
-
-        let set = sets
-            .entry(self.set_tag.as_str())
-            .or_insert(toml_edit::value(Value::Array(Array::new())))
-            .as_value_mut()
-            .and_then(|v| v.as_array_mut())
-            .unwrap();
+            .and_then(|t| {
+                t.set_implicit(true);
+                t.entry("sets").or_insert(toml_edit::table()).as_table_mut()
+            })
+            .and_then(|t| {
+                t.set_implicit(true);
+                t.entry(self.set_tag.as_str())
+                    .or_insert(toml_edit::value(Value::Array(Array::new())))
+                    .as_value_mut()
+                    .and_then(|v| {
+                        v.as_array_mut().map(|v| v.to_owned()).or_else(|| {
+                            let mut a = Array::new();
+                            a.push(v.to_string());
+                            Some(a)
+                        })
+                    })
+            })
+            .ok_or(toml_edit::ser::Error::Custom(format!(
+                "writing set into `[package.sets]` failed: {}",
+                &self.set_tag
+            )))?;
 
         if !set.iter().any(|x| x.to_string().contains(&mirror)) {
             set.push(mirror);
             set.fmt();
         }
 
-        let deps = doc
+        let set = doc
             .entry("deps")
             .or_insert(toml_edit::table())
             .as_table_mut()
-            .unwrap();
-        deps.set_implicit(true);
+            .and_then(|t| {
+                t.set_implicit(true);
+                t.entry("from").or_insert(toml_edit::table()).as_table_mut()
+            })
+            .and_then(|t| {
+                t.set_implicit(true);
+                t.entry(self.set_tag.as_str())
+                    .or_insert(toml_edit::table())
+                    .as_table_mut()
+            })
+            .ok_or(toml_edit::ser::Error::Custom(format!(
+                "writing atom into `[package.from.{}]` failed: {}",
+                &self.set_tag, &key
+            )))?;
 
-        let from = deps
-            .entry("from")
-            .or_insert(toml_edit::table())
-            .as_table_mut()
-            .unwrap();
-        from.set_implicit(true);
-
-        let set = from
-            .entry(self.set_tag.as_str())
-            .or_insert(toml_edit::table())
-            .as_table_mut()
-            .unwrap();
         set.set_implicit(true);
 
         set[key.as_str()] = toml_edit::Item::Value(self.atom_req.version().to_string().into());

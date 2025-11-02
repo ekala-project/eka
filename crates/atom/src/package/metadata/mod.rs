@@ -683,21 +683,29 @@ impl<'a, S: LocalStorage> EkalaManager<'a, S> {
         })?;
 
         let doc = self.doc.as_mut();
-        let set = doc
+        let packages = doc
             .entry("set")
             .or_insert(toml_edit::table())
             .as_table_mut()
-            .unwrap();
+            .and_then(|t| {
+                t.set_implicit(true);
+                t.entry("packages")
+                    .or_insert(toml_edit::value(Value::Array(Array::new())))
+                    .as_value_mut()
+                    .and_then(|v| v.as_array_mut())
+            })
+            .ok_or(toml_edit::ser::Error::Custom(format!(
+                "writing path into `[set.packages]` failed: {}",
+                &path.display()
+            )))?;
 
-        let packages = set
-            .entry("packages")
-            .or_insert(toml_edit::value(Value::Array(Array::new())))
-            .as_value_mut()
-            .and_then(|v| v.as_array_mut())
-            .unwrap();
-
-        packages.push(path.display().to_string());
         packages.fmt();
+        for v in packages.iter_mut() {
+            *v = v.to_owned().decorated("\n\t", "");
+        }
+        let path: Value = path.display().to_string().into();
+        packages.push_formatted(path.decorated("\n\t", ",\n"));
+        doc.fmt();
 
         Ok(())
     }
