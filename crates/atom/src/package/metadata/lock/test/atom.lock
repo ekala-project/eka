@@ -1,7 +1,7 @@
 version = 1
 
-[compose.at.evaltime]
-with = "nix"
+[compose]
+use = "nix"
 entry = "."
 
 [sets]

@@ -361,27 +361,6 @@ pub enum GitSpec {
 ///
 /// The `ManifestWriter` now works with [`ValidManifest`] internally, providing
 /// validation and consistency checks for manifest operations.
-///
-/// # Example
-///
-/// ```rust,no_run
-/// use std::path::Path;
-///
-/// use atom::ManifestWriter;
-/// use atom::id::Tag;
-/// use atom::uri::Uri;
-///
-/// async {
-///     let mut writer = ManifestWriter::new(None, Path::new("/path/to/atom.toml"))
-///         .await
-///         .unwrap();
-///     let uri = "my-atom@^1.0.0".parse::<Uri>().unwrap();
-///     let key = "my-atom".parse::<Tag>().unwrap();
-///     // Note: add_uri and write_atomic methods are not publicly exposed
-///     // writer.add_uri(uri, Some(key)).unwrap();
-///     // writer.write_atomic().unwrap();
-/// };
-/// ```
 pub struct ManifestWriter<'a, S: LocalStorage> {
     path: PathBuf,
     doc: TypedDocument<ValidManifest>,

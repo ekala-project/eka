@@ -43,16 +43,6 @@
 //! - The `manifest` ref points to a minimal tree containing only the manifest.
 //! - The `origin` ref points to the original source commit for verification.
 //!
-//! ## Basic Usage
-//!
-//! ```rust,no_run
-//! use atom::{Atom, Label, ManifestWriter};
-//! use semver::Version;
-//!
-//! // Create a new atom manifest writer
-//! let writer = ManifestWriter::new(None, ".".as_ref());
-//! ```
-//!
 //! ## Manifest Structure
 //!
 //! Atom manifests include a required `[compose]` table that defines the atom's
