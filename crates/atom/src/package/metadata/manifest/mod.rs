@@ -119,9 +119,6 @@ pub(super) enum StaticAtom {
     /// Atom is provided at evaluation tme to consumers as shared configuration
     #[serde(rename = "config")]
     Config,
-    /// Atom is provided at build tme to consumers as, presumably, a build source
-    #[serde(rename = "src")]
-    BuildSrc,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
@@ -527,7 +524,7 @@ impl<'a, S: LocalStorage> ManifestWriter<'a, S> {
     }
 
     pub(super) fn set_lock_compose(&mut self, manifest: &ValidManifest) -> Result<(), DocError> {
-        use lock::{DepTime, EvalAtom};
+        use lock::Using;
         let compose = match &manifest.as_ref().compose {
             Compose::With(composer) => {
                 let root = self
@@ -547,24 +544,15 @@ impl<'a, S: LocalStorage> ManifestWriter<'a, S> {
                     id,
                     composer.value.from.to_owned(),
                 )?;
-                lock::Compose {
-                    at: DepTime::Eval(EvalAtom::Atom {
-                        atom: dep,
-                        entrypoint: composer.value.entry.to_owned(),
-                    }),
+                Using::Atom {
+                    atom: dep,
+                    entry: composer.value.entry.to_owned(),
                 }
             },
-            Compose::As(TrivialAtom::Nix(path)) => lock::Compose {
-                at: DepTime::Eval(EvalAtom::NixTrivial {
-                    entry: path.to_owned(),
-                }),
+            Compose::As(TrivialAtom::Nix(path)) => Using::NixTrivial {
+                entry: path.to_owned(),
             },
-            Compose::As(TrivialAtom::Static(StaticAtom::Config)) => lock::Compose {
-                at: DepTime::Eval(EvalAtom::Config),
-            },
-            Compose::As(TrivialAtom::Static(StaticAtom::BuildSrc)) => {
-                lock::Compose { at: DepTime::Build }
-            },
+            Compose::As(TrivialAtom::Static(StaticAtom::Config)) => Using::Config,
         };
         self.lock.compose = compose;
         Ok(())

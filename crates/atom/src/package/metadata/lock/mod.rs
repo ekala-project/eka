@@ -182,19 +182,9 @@ pub struct SetDetails {
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
+#[serde(tag = "use")]
 #[allow(clippy::large_enum_variant)]
-pub(super) enum DepTime {
-    #[serde(rename = "buildtime")]
-    #[default]
-    Build,
-    #[serde(rename = "evaltime")]
-    Eval(EvalAtom),
-}
-
-#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq, PartialOrd, Ord)]
-#[serde(tag = "with")]
-#[allow(clippy::large_enum_variant)]
-pub(super) enum EvalAtom {
+pub(super) enum Using {
     /// an atom containing a nix expression that is just evaluated by calling `import`
     #[serde(rename = "nix")]
     NixTrivial { entry: PathBuf },
@@ -203,17 +193,12 @@ pub(super) enum EvalAtom {
     Atom {
         #[serde(flatten)]
         atom: AtomDep,
-        entrypoint: PathBuf,
+        entry: PathBuf,
     },
     /// an atom that contains only static configuration for use at evaluation time to other atoms
     #[serde(rename = "static")]
+    #[default]
     Config,
-}
-
-#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
-#[serde(deny_unknown_fields)]
-pub(super) struct Compose {
-    pub(super) at: DepTime,
 }
 
 /// The root structure for the lockfile, containing resolved dependencies and sources.
@@ -231,7 +216,7 @@ pub struct Lockfile {
     /// maintaining backward compatibility.
     pub version: u8,
 
-    pub(super) compose: Compose,
+    pub(super) compose: Using,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) sets: BTreeMap<GitDigest, SetDetails>,
     /// The list of locked dependencies (absent or empty if none).
@@ -456,7 +441,7 @@ impl Default for Lockfile {
         Self {
             version: 1,
             sets: Default::default(),
-            compose: Compose::default(),
+            compose: Using::default(),
             deps: Default::default(),
         }
     }
