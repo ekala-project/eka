@@ -1,0 +1,157 @@
+<meta name="color-scheme" content="light dark">
+<link rel="stylesheet" href="../mdslides/deck.css" />
+
+:::::::::::::::::::::::::::::::
+
+Nix Sucks; Everything Else is Worse
+===============
+Building Better Software Supply Chains
+
+<small>Presented by Tim DeHerrera (nrdxp)</small>
+
+:::::::::::::::::::::::::::::::
+
+The Problem
+===========
+
+* "Works on my machine" issues
+* Dependency conflicts
+* Supply chain attacks
+* Non-reproducible environments
+
+<small><small>💡 **Demo:** Run `./examples/01-environment-degradation.sh` to see how environments degrade over time</small></small>
+
+:::::::::::::::::::::::::::::::
+
+Existing Tools Don't Solve This
+===============================
+
+* Virtual environments (venv, conda)
+* Containers (Docker)
+* Lockfiles (package-lock.json)
+
+<small>All have limitations in reproducibility and security</small>
+
+:::::::::::::::::::::::::::::::
+
+How Do You Solve It?
+====================
+
+**Basic Cryptography**
+
+* Hash: Unique fingerprint of content
+* Data structures: Organized storage
+* Merkle tree: Efficient verification
+
+<small><small>💡 **Demo:** Run `./examples/02-merkle-tree-demo.sh` to build a Merkle tree from scratch</small></small>
+
+:::::::::::::::::::::::::::::::
+
+Examples: Git & Blockchain
+==========================
+
+* **Git**: Commits as Merkle trees
+* **Bitcoin**: Transaction verification
+* **Benefits**: Tamper-proof, decentralized
+
+:::::::::::::::::::::::::::::::
+
+Nix Solves It
+=============
+
+* **Derivations**: Static build recipes
+* **Mathematical closure**: All dependencies in Merkle tree
+* **Pure functions**: Same inputs = same outputs
+
+<small><small>💡 **Demo:** Run `./examples/03-static-build-recipes.sh` to see derivations vs traditional builds</small></small>
+
+:::::::::::::::::::::::::::::::
+
+Building Derivations
+====================
+
+* High-level Nix language
+* Pure functions vs procedures
+* JSON with functions
+
+:::::::::::::::::::::::::::::::
+
+Nix Store
+=========
+
+* Content-addressed paths
+* `/nix/store/hash-name`
+* Immutable, reproducible
+
+:::::::::::::::::::::::::::::::
+
+What's Good About Nix
+=====================
+
+* Perfect reproducibility
+* Cryptographic security
+* [Large package ecosystem](https://repology.org/repositories/graphs)
+* Declarative configuration
+
+:::::::::::::::::::::::::::::::
+
+What's Wrong with Nix
+=====================
+
+* Too low-level, no package abstraction
+* Nixpkgs tightly coupled
+* Incredibly slow and heavyweight
+* Complex language, high cognitive load
+* No abstract interface to outside world
+
+<small><small>💡 **Live Demo:** Let's explore nixpkgs to see the pain of version management and coupling</small></small>
+
+:::::::::::::::::::::::::::::::
+
+How Atoms Solve It
+==================
+
+* Proper package abstraction
+* Efficient tracking and querying
+* Version resolution support
+* Decentralized infrastructure
+* No single points of failure
+
+:::::::::::::::::::::::::::::::
+
+How Eka Solves It
+=================
+
+* High-level interface to Nix
+* Manifest/lockfile separation
+* Abstract interaction with impure world
+* Sandboxed runtime options
+
+:::::::::::::::::::::::::::::::
+
+EOS: The Future
+===============
+
+* Distributed software delivery
+* Distributed metadata and trust
+* Decentralized querying
+* No central authority needed
+
+:::::::::::::::::::::::::::::::
+
+Lessons Learned
+===============
+
+* **Efficiency**: From Nix's slowness
+* **Decentralization**: From registry backlash
+* **Abstraction**: From low-level pain
+* **Natural Design**: Play to strengths, mitigate weaknesses
+
+:::::::::::::::::::::::::::::::
+
+Q&A
+===
+
+Thank you!
+
+<small>Questions?</small>
