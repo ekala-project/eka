@@ -1,0 +1,46 @@
+# Example atom manifest demonstrating dependency management in Eka
+# This shows how to declare package metadata, sets, composition, and various dependency types
+
+[package]
+# Unique identifier for this atom
+label = "foo"
+# Semantic version of this atom
+version = "0.1.0"
+
+[package.sets]
+# Define named sets of atom repositories for dependency resolution
+# Sets enable decentralized atoms by supporting multiple mirrors of the same repository
+# Repository identity is determined by its initialization commit, not the URL
+# 'atom' set points to the official atom repository (single mirror)
+atom = "https://github.com/ekala-project/atom"
+# 'home' set uses SSH for private repositories and demonstrates multiple mirrors
+# Multiple mirrors provide redundancy and allow atoms to be fundamentally decentralized
+home = ["ssh://git@github.com/nrdxp/home", "https://github.com/nrdxp/home"]
+
+[compose.with.atom-nix]
+# Compose this atom with a composer atom that provides a well-known API
+# 'atom-nix' is a special composer atom that implements the atom module system
+# 'entry' specifies where in our local atom structure the composer will begin its imports
+entry = "src"
+# 'from' specifies which set to compose with (the composer atom comes from the 'atom' set)
+from = "atom"
+
+[deps.from.home]
+# Dependencies from the 'home' set
+# Version constraint using caret (^) allows compatible updates
+hosts = "^0.1.0"
+
+[deps.direct.nix]
+# Direct Nix dependencies with various source types
+
+# Git repository dependency (follows nixpkgs-unstable branch)
+nixpkgs = { git = "https://github.com/nixos/nixpkgs", ref = "nixpkgs-unstable" }
+
+# Tarball archive dependency (dynamically fetched)
+nixpkgs-unstable.tar = "https://github.com/nixos/nixpkgs/archive/nixpkgs-unstable.tar.gz"
+
+# Patch file dependency (for applying modifications)
+patch.url = "https://patch-diff.githubusercontent.com/raw/cachix/snix/pull/1.patch"
+
+# Build dependency with unpacking (source code archive)
+zlib-1 = { build = "https://www.zlib.net/zlib-1.3.1.tar.gz", unpack = true }

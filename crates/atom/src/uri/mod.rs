@@ -97,7 +97,8 @@ mod tests;
 
 pub(crate) const VERSION_PLACEHOLDER: &str = "__VERSION__";
 
-static ALIASES: LazyLock<Aliases> = LazyLock::new(|| Aliases(config::CONFIG.aliases()));
+pub(crate) static ALIASES: LazyLock<Aliases> = LazyLock::new(Aliases::get_aliases);
+
 static ATOM_VERSION_REGEX: Lazy<Regex> =
     lazy_regex::lazy_regex!(r#"\{(?P<set>[^.}]+)\.(?P<atom>[^.}]+)\}"#);
 
@@ -153,7 +154,7 @@ pub enum UriError {
 }
 
 #[derive(Debug)]
-struct Aliases(&'static HashMap<&'static str, &'static str>);
+pub(crate) struct Aliases(&'static HashMap<Cow<'static, str>, Cow<'static, str>>);
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[cfg_attr(test, derive(Serialize, Deserialize))]
@@ -236,29 +237,36 @@ impl TryFrom<&str> for AliasedUrl {
 }
 
 impl Aliases {
-    fn get_alias(&self, s: &str) -> Result<&str, UriError> {
+    fn get_aliases() -> Self {
+        Self(config::CONFIG.uri_aliases())
+    }
+
+    pub(crate) fn get_alias(&self, s: &str) -> Result<Cow<'_, str>, UriError> {
         self.get(s)
-            .map_or_else(|| Err(UriError::NoAlias(s.into())), |s| Ok(*s))
+            .map_or_else(|| Err(UriError::NoAlias(s.into())), |s| Ok(s.clone()))
+    }
+
+    pub(crate) fn expand_alias<'a>(&self, mut res: Cow<'a, str>) -> Cow<'a, str> {
+        while let Some((s, rest)) = res.split_once(':') {
+            let resolved = if let Ok(s) = self.get_alias(s) {
+                s
+            } else {
+                return res;
+            };
+            res = Cow::Owned(format!("{resolved}/{rest}"))
+        }
+        res
     }
 
     fn resolve_alias(&'static self, s: &str) -> Result<Cow<'static, str>, UriError> {
         let res = self.get_alias(s)?;
 
-        // allow one level of indirection in alises, e.g. `org = gh:my-org`
-        let res = match res.split_once(':') {
-            Some((s, rest)) => {
-                let res = self.get_alias(s)?;
-                Cow::Owned(format!("{res}/{rest}"))
-            },
-            None => Cow::Borrowed(res),
-        };
-
-        Ok(res)
+        Ok(self.expand_alias(res))
     }
 }
 
 impl Deref for Aliases {
-    type Target = HashMap<&'static str, &'static str>;
+    type Target = HashMap<Cow<'static, str>, Cow<'static, str>>;
 
     fn deref(&self) -> &Self::Target {
         self.0
@@ -366,6 +374,12 @@ impl Uri {
     pub fn version(&self) -> Option<&VersionReq> {
         self.version.as_ref()
     }
+
+    /// Consumes the url and returns the raw values
+    #[must_use]
+    pub fn unpack(self) -> (Label, Option<Url>, Option<VersionReq>) {
+        (self.label, self.url, self.version)
+    }
 }
 
 impl<'a> TryFrom<Ref<'a>> for Uri {
@@ -470,33 +484,30 @@ impl<'a> UrlRef<'a> {
             .into();
 
         // special case for empty fragments, e.g. foo::my-atom
-        let rest = if rest.is_empty() { frag } else { rest };
+        let (rest, frag) = if rest.is_empty() {
+            (frag, rest)
+        } else {
+            (rest, frag)
+        };
 
         let rest = if !frag.contains(rest) && !frag.is_empty() {
             format!("{}/{}", rest, frag)
         } else {
             rest.into()
         };
-
         let path = if host.is_none() {
-            format!("{maybe_host}{delim}{rest}")
+            if maybe_host == rest {
+                rest
+            } else {
+                format!("{maybe_host}{delim}{rest}")
+            }
+        } else if maybe_host == rest {
+            frag.into()
         } else if !rest.starts_with('/') {
             format!("/{rest}")
         } else {
             rest.to_owned()
         };
-
-        tracing::trace!(
-            ?scheme,
-            delim,
-            host,
-            port,
-            path,
-            rest,
-            maybe_host,
-            frag,
-            ?resolved
-        );
 
         let alternate_form = scheme == Scheme::File;
         let port = if scheme == Scheme::Ssh {
@@ -520,9 +531,8 @@ impl<'a> UrlRef<'a> {
         )
         .map_err(|e| {
             tracing::debug!(?e);
-            e
+            e.into()
         })
-        .map_err(Into::into)
     }
 }
 
@@ -655,4 +665,64 @@ fn ssh_host(input: &str) -> IResult<&str, (&str, &str)> {
 
 fn url(input: &str) -> IResult<&str, Option<&str>> {
     opt_split(input, "::")
+}
+
+pub(crate) mod serde_gix_url {
+    use bstr::{BString, ByteSlice};
+    use serde::{Deserializer, Serializer};
+
+    /// Deserializes a `gix::url::Url` from a string.
+    pub(crate) fn deserialize<'de, D>(deserializer: D) -> Result<gix::url::Url, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        use serde::Deserialize;
+        let name = BString::deserialize(deserializer)?;
+        let has_schema = name.to_str().map(|s| s.contains("://")).is_ok_and(|b| b);
+        gix::url::parse(name.as_bstr())
+            .inspect(|url| {
+                if gix::url::Scheme::File == url.scheme && !has_schema {
+                    let url = url.to_owned().serialize_alternate_form(false);
+                    tracing::warn!(
+                        %url,
+                        "no schema detected; interpreting as file-path"
+                    )
+                }
+            })
+            .map_err(|e| <D::Error as serde::de::Error>::custom(e.to_string()))
+    }
+
+    /// Serializes a `gix::url::Url` to a string.
+    pub(crate) fn serialize<S>(url: &gix::url::Url, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let str = url.to_string();
+        serializer.serialize_str(&str)
+    }
+
+    pub(crate) mod maybe {
+        use serde::{Deserializer, Serializer};
+        pub(crate) fn serialize<S>(
+            url: &Option<gix::url::Url>,
+            serializer: S,
+        ) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            if let Some(url) = url {
+                super::serialize(url, serializer)
+            } else {
+                Err(serde::ser::Error::custom("no url to serialize"))
+            }
+        }
+        pub(crate) fn deserialize<'de, D>(
+            deserializer: D,
+        ) -> Result<Option<gix::url::Url>, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            super::deserialize(deserializer).map(Some)
+        }
+    }
 }

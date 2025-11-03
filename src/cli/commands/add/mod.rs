@@ -7,11 +7,10 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use atom::id::{Name, Tag};
-use atom::manifest::deps::GitSpec;
+use atom::package::GitSpec;
+use atom::storage::LocalStorage;
 use atom::uri::{AliasedUrl, Uri};
 use clap::{Parser, Subcommand};
-
-use crate::cli::store::Detected;
 
 //================================================================================================
 // Types
@@ -125,12 +124,8 @@ enum DirectSubs {
 //================================================================================================
 
 /// The main entry point for the `add` subcommand.
-pub(super) async fn run(store: Option<Detected>, args: Args) -> Result<()> {
-    let repo = match store {
-        Some(Detected::Git(repo)) => Some(repo),
-        _ => None,
-    };
-    let mut writer = atom::ManifestWriter::new(repo, &args.path).await?;
+pub(super) async fn run(storage: &impl LocalStorage, args: Args) -> Result<()> {
+    let mut writer = atom::ManifestWriter::new(storage, &args.path).await?;
 
     if let Some(AddSubs::Direct(DirectArgs {
         sub: DirectSubs::Nix(args),

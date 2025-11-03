@@ -207,10 +207,12 @@ dependencies = [
  "addr",
  "anyhow",
  "base32",
+ "bimap",
  "blake3",
  "bstr",
  "config",
  "either",
+ "eka-root-macro",
  "gix 0.73.0",
  "hex",
  "insta",
@@ -378,6 +380,15 @@ dependencies = [
  "tonic",
  "tonic-build",
  "tower 0.5.2",
+]
+
+[[package]]
+name = "bimap"
+version = "0.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "230c5f1ca6a325a32553f8640d31ac9b49f2411e901e427570154868b46da4f7"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
@@ -671,6 +682,7 @@ dependencies = [
  "figment",
  "gix 0.73.0",
  "serde",
+ "tracing",
 ]
 
 [[package]]
@@ -1118,7 +1130,7 @@ dependencies = [
 
 [[package]]
 name = "eka"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "atom",
@@ -1134,6 +1146,15 @@ dependencies = [
  "tracing-appender",
  "tracing-indicatif",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "eka-root-macro"
+version = "0.1.0"
+dependencies = [
+ "gix 0.73.0",
+ "quote",
+ "syn 2.0.104",
 ]
 
 [[package]]

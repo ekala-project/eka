@@ -3,14 +3,11 @@
 //! The `resolve` subcommand is responsible for resolving dependencies for a
 //! given set of atoms and writing the results to a lock file.
 
-use std::path::PathBuf;
-
 use anyhow::Result;
+use atom::ManifestWriter;
+use atom::storage::LocalStorage;
+use atom::uri::Uri;
 use clap::Parser;
-
-use crate::cli::store::Detected;
-
-mod git;
 
 //================================================================================================
 // Types
@@ -20,22 +17,8 @@ mod git;
 #[derive(Parser, Debug)]
 #[command(arg_required_else_help = true)]
 pub struct Args {
-    /// The path of the atom(s) to resolve dependencies for.
-    path: Vec<PathBuf>,
-    /// The output file for the lock (default: `atom.lock`).
-    #[arg(short, long, default_value = "atom.lock")]
-    output: PathBuf,
-    /// The resolution mode: `shallow` or `deep` (default: `shallow`).
-    #[arg(short, long, default_value = "shallow")]
-    mode: String,
-    #[command(flatten)]
-    store: StoreArgs,
-}
-
-#[derive(Parser, Debug)]
-struct StoreArgs {
-    #[command(flatten)]
-    git: git::GitArgs,
+    /// The URI of the local atom(s) to resolve dependencies for.
+    uri: Vec<Uri>,
 }
 
 //================================================================================================
@@ -43,6 +26,44 @@ struct StoreArgs {
 //================================================================================================
 
 /// The main entry point for the `resolve` subcommand.
-pub(super) fn run(_store: Detected, _args: Args) -> Result<()> {
+pub(super) async fn run(storage: impl LocalStorage + 'static, args: Args) -> Result<()> {
+    let ekala_root = storage.ekala_root_dir()?;
+
+    let manifest = storage.ekala_manifest()?;
+
+    async {
+        for uri in args.uri {
+            tracing::debug!(%uri, "attempting to resolve");
+            if let Some(url) = uri.url() {
+                if url.scheme == gix::url::Scheme::File && url.host().is_none() {
+                    let path = &storage.normalize(url.path.to_string())?;
+                    if manifest
+                        .set()
+                        .packages()
+                        .as_ref()
+                        .get_by_right(path)
+                        .is_some()
+                    {
+                        // FIXME: create a global transport pool instead of storing them in the
+                        // writer so we can do this asychronously
+                        let writer = ManifestWriter::new(&storage, &ekala_root.join(path)).await?;
+                        writer.write_atomic()?;
+                        tracing::info!(%uri, "successfully resolved and wrote updates");
+                    }
+                } else {
+                    tracing::warn!(%uri, "cannot lock external resources");
+                    continue;
+                }
+            } else if let Some(path) = manifest.set().packages().as_ref().get_by_left(uri.label()) {
+                let writer = ManifestWriter::new(&storage, &ekala_root.join(path)).await?;
+                writer.write_atomic()?;
+                tracing::info!(%uri, "successfully resolved and wrote updates");
+            } else {
+                tracing::warn!(%uri, "uri does not point at any locally declared atoms, skipping");
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    }
+    .await?;
     Ok(())
 }

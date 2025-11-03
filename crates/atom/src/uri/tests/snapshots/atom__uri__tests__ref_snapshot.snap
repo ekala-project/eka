@@ -1,6 +1,6 @@
 ---
 source: crates/atom/src/uri/tests/mod.rs
-assertion_line: 41
+assertion_line: 63
 expression: results
 ---
 - url:
@@ -175,7 +175,15 @@ expression: results
     scheme: ~
     user: ~
     pass: ~
-    frag: ~
+    frag: foo
+  atom:
+    label: foo
+    version: ~
+- url:
+    scheme: ~
+    user: ~
+    pass: ~
+    frag: foo.com
   atom:
     label: foo
     version: ~

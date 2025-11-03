@@ -1,3 +1,16 @@
+//! # URI Parsing Tests
+//!
+//! This module contains comprehensive tests for URI parsing functionality,
+//! ensuring that various URI formats are correctly parsed and handled.
+//!
+//! ## Test Coverage
+//!
+//! - **Alias Resolution**: Tests for various alias formats and edge cases
+//! - **URI Components**: Validation of scheme, user, password, host, and path parsing
+//! - **Version Specifications**: Testing of semantic version requirements
+//! - **Error Conditions**: Invalid URIs and malformed inputs
+//! - **Snapshot Testing**: Regression testing with stored snapshots
+
 use super::*;
 
 //================================================================================================
@@ -35,7 +48,8 @@ const ALIASES: &[&str] = &[
     // not an alias, but an ssh url without a username
     "my.ssh.com:my/repo::hello",
     "foo@^0.8",
-    "::foo",
+    "foo::foo",
+    "foo.com::foo",
     "::foo",
 ];
 

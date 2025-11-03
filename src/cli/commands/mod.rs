@@ -63,15 +63,29 @@ pub(super) enum Commands {
 
 /// The main entry point for the Eka CLI.
 pub async fn run(args: Args) -> anyhow::Result<()> {
-    let store = store::detect();
-    match args.command {
-        Commands::Add(args) => add::run(store.await.ok(), args).await?,
-        Commands::New(args) => new::run(store, args).await?,
-        Commands::Publish(args) => {
-            publish::run(store.await?, args).await?;
+    let store = store::detect()?;
+    match (args.command, store) {
+        (Commands::Add(args), store::Detected::Git(repo)) => {
+            add::run(repo, args).await?;
         },
-        Commands::Init(args) => init::run(store.await.ok(), args)?,
-        Commands::Resolve(args) => resolve::run(store.await?, args)?,
+        (Commands::Add(args), store::Detected::FileStorage(fs)) => add::run(&fs, args).await?,
+        (Commands::New(args), store::Detected::Git(repo)) => {
+            new::run(repo, args)?;
+        },
+        (Commands::New(args), store::Detected::FileStorage(fs)) => new::run(&fs, args)?,
+        (Commands::Publish(args), store::Detected::Git(repo)) => {
+            publish::run(repo, args).await?;
+        },
+        (Commands::Resolve(args), store::Detected::Git(repo)) => {
+            resolve::run(repo.to_owned(), args).await?;
+        },
+        (Commands::Resolve(args), store::Detected::FileStorage(fs)) => {
+            resolve::run(fs, args).await?
+        },
+        (Commands::Init(args), storage) => {
+            init::run(storage, args)?;
+        },
+        _ => (),
     }
     Ok(())
 }

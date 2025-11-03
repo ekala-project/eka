@@ -2,9 +2,8 @@
 
 use std::fs;
 
-use atom::store::git;
+use atom::storage::{LocalStoragePath, git};
 use gix::ThreadSafeRepository;
-use thiserror::Error;
 
 //================================================================================================
 // Types
@@ -16,21 +15,7 @@ use thiserror::Error;
 pub(super) enum Detected {
     /// A Git repository was detected.
     Git(&'static ThreadSafeRepository),
-    /// No supported version control system was detected.
-    #[allow(dead_code)]
-    None,
-}
-
-/// Errors that can occur during repository detection.
-#[derive(Error, Debug)]
-pub(crate) enum Error {
-    /// No supported repository was found in the current directory or its parents.
-    #[error("No supported repository found in this directory or its parents")]
-    FailedDetection,
-
-    /// An error occurred while discovering the repository.
-    #[error(transparent)]
-    Discover(#[from] Box<gix::discover::Error>),
+    FileStorage(atom::storage::LocalStoragePath),
 }
 
 //================================================================================================
@@ -38,7 +23,7 @@ pub(crate) enum Error {
 //================================================================================================
 
 /// Detects the version control system in the current directory.
-pub(super) async fn detect() -> Result<Detected, Error> {
+pub(super) fn detect() -> anyhow::Result<Detected> {
     if let Ok(Some(repo)) = git::repo() {
         let git_dir = fs::canonicalize(repo.path())
             .ok()
@@ -49,8 +34,10 @@ pub(super) async fn detect() -> Result<Detected, Error> {
             .map(|p| p.display().to_string());
 
         tracing::debug!(message = "Detected Git repository", git_dir, work_dir);
-        return Ok(Detected::Git(repo));
+        Ok(Detected::Git(repo))
+    } else {
+        Ok(Detected::FileStorage(LocalStoragePath::new(
+            std::env::current_dir()?,
+        )?))
     }
-
-    Err(Error::FailedDetection)
 }

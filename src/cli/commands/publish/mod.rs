@@ -8,11 +8,10 @@ mod git;
 use std::path::PathBuf;
 
 use anyhow::Result;
-use atom::publish::Stats;
-use atom::publish::error::PublishError;
+use atom::package::publish::Stats;
+use atom::package::publish::error::PublishError;
 use clap::Parser;
-
-use crate::cli::store::Detected;
+use gix::ThreadSafeRepository;
 
 //================================================================================================
 // Types
@@ -45,51 +44,47 @@ struct StoreArgs {
 //================================================================================================
 
 /// The main entry point for the `publish` subcommand.
-pub(super) async fn run(store: Detected, args: PublishArgs) -> Result<Stats, PublishError> {
+pub(super) async fn run(
+    repo: &'static ThreadSafeRepository,
+    args: PublishArgs,
+) -> Result<Stats, PublishError> {
     let mut stats = Stats::default();
-    #[allow(clippy::single_match)]
-    match store {
-        Detected::Git(repo) => {
-            use atom::publish::{Content, error};
-            use {Err as Skipped, Ok as Published};
-            let (results, mut errors) = git::run(repo, args).await?;
+    use atom::package::publish::{Content, error};
+    use {Err as Skipped, Ok as Published};
+    let (results, mut errors) = git::run(repo, args).await?;
 
-            for res in results {
-                match res {
-                    Ok(Published(atom)) => {
-                        stats.published += 1;
-                        let Content::Git(content) = atom.content();
-                        let name = content.content().name.clone();
-                        tracing::info!(
-                            atom.label = %atom.id().label(),
-                            path = %content.path().display(),
-                            r#ref = %name,
-                            "success"
-                        );
-                    },
-                    Ok(Skipped(label)) => {
-                        stats.skipped += 1;
-                        tracing::info!(atom.label = %label, "Skipping existing atom")
-                    },
-                    Err(e) => {
-                        stats.failed += 1;
-                        errors.push(e)
-                    },
-                }
-            }
-
-            for err in &errors {
-                err.warn()
-            }
-
-            tracing::info!(stats.published, stats.skipped, stats.failed);
-
-            if !errors.is_empty() {
-                return Err(PublishError::Git(error::git::Error::Failed));
-            }
-        },
-        _ => {},
+    for res in results {
+        match res {
+            Ok(Published(atom)) => {
+                stats.published += 1;
+                let Content::Git(content) = atom.content();
+                let name = content.content().name.clone();
+                tracing::info!(
+                    atom.label = %atom.id().label(),
+                    path = %content.path().display(),
+                    r#ref = %name,
+                    "success"
+                );
+            },
+            Ok(Skipped(label)) => {
+                stats.skipped += 1;
+                tracing::info!(atom.label = %label, "Skipping existing atom")
+            },
+            Err(e) => {
+                stats.failed += 1;
+                errors.push(e)
+            },
+        }
     }
 
+    for err in &errors {
+        err.warn()
+    }
+
+    tracing::info!(stats.published, stats.skipped, stats.failed);
+
+    if !errors.is_empty() {
+        return Err(PublishError::Git(error::git::Error::Failed));
+    }
     Ok(stats)
 }

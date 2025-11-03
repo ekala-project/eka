@@ -19,12 +19,12 @@
 //! ## Architecture
 //!
 //! The crate is organized into several key modules:
-//! - [`manifest`] - Defines the Atom manifest format and dependency specification.
-//! - [`lock`] - Manages the lockfile format for capturing resolved dependencies.
-//! - [`id`] - Handles Atom identification, hashing, and origin tracking.
-//! - [`uri`] - Provides tools for Atom URI parsing and resolution.
-//! - [`store`] - Implements storage backends for atoms, such as Git.
-//! - [`publish`] - Contains logic for publishing atoms to various stores.
+//! - [`package`] - Core package management functionality including manifests, lockfiles, and
+//!   metadata
+//! - [`id`] - Handles Atom identification, hashing, and origin tracking
+//! - [`uri`] - Provides tools for Atom URI parsing and resolution
+//! - [`storage`] - Implements storage backends for atoms, such as Git
+//! - [`log`] - Utility functions for progress indicators and logging
 //!
 //! ## Git Storage Example
 //!
@@ -43,19 +43,15 @@
 //! - The `manifest` ref points to a minimal tree containing only the manifest.
 //! - The `origin` ref points to the original source commit for verification.
 //!
-//! ## Basic Usage
+//! ## Manifest Structure
 //!
-//! ```rust,no_run
-//! use atom::{Atom, Label, Manifest};
-//! use semver::Version;
+//! Atom manifests include a required `[compose]` table that defines the atom's
+//! composer. The composer specifies which atom from a set provides the import
+//! functionality for this atom.
 //!
-//! // Create a new atom manifest
-//! let manifest = Manifest::new(
-//!     Label::try_from("my-atom").unwrap(),
-//!     Version::new(1, 0, 0),
-//!     Some("A sample atom".to_string()),
-//! );
-//! ```
+//! The `ValidManifest` type is the publicly exposed variant that includes
+//! post-deserialization validation to ensure manifest consistency. The `Manifest`
+//! type is a private implementation detail used internally.
 //!
 //! ## Features
 //!
@@ -69,42 +65,43 @@
 
 use std::sync::LazyLock;
 
-pub use self::core::Atom;
 pub use self::id::{AtomId, Compute, Label, Origin};
-pub use self::lock::Lockfile;
-pub use self::manifest::Manifest;
-pub use self::manifest::deps::ManifestWriter;
-pub use self::publish::ATOM_REFS;
+pub use self::package::metadata::lock::Lockfile;
+pub use self::package::metadata::{Atom, EkalaManager};
+pub use self::package::publish::ATOM_REFS;
+pub use self::package::{ManifestWriter, ValidManifest};
 
-mod core;
 pub mod id;
-pub mod lock;
 pub mod log;
-pub mod manifest;
-pub mod publish;
-pub mod store;
+pub mod package;
+pub mod storage;
 pub mod uri;
 
-const EKALA: &str = "ekala";
+// Sets EKA_ROOT_COMMIT_HASH
+eka_root_macro::eka_root_hash!();
+
 const ATOM: &str = "atom";
 /// The base32 alphabet used for encoding Atom hashes.
 ///
 /// This uses the RFC4648 hex alphabet without padding, which provides a good balance
 /// between readability and compactness for Atom identifiers.
 const BASE32: base32::Alphabet = base32::Alphabet::Rfc4648HexLower { padding: false };
+const EKALA: &str = "ekala";
 const LOCK: &str = "lock";
 const TOML: &str = "toml";
 
 /// The conventional filename for an Atom lockfile (e.g., `atom.lock`).
 ///
 /// This static variable is lazily initialized to ensure it is constructed only when needed.
-pub static LOCK_NAME: LazyLock<String> = LazyLock::new(|| format!("{}.{}", ATOM, LOCK));
+pub static ATOM_MANIFEST_NAME: LazyLock<String> = LazyLock::new(|| format!("{}.{}", ATOM, TOML));
 /// The conventional filename for an Atom manifest (e.g., `atom.toml`).
 ///
 /// This static variable is lazily initialized to ensure it is constructed only when needed.
-pub static ATOM_MANIFEST_NAME: LazyLock<String> = LazyLock::new(|| format!("{}.{}", ATOM, TOML));
-
+pub static EKALA_MANIFEST_NAME: LazyLock<String> = LazyLock::new(|| format!("{}.{}", EKALA, TOML));
 /// The conventional filename for an Ekala manifest (e.g., `ekala.toml`).
 ///
 /// This static variable is lazily initialized to ensure it is constructed only when needed.
-pub static EKALA_MANIFEST_NAME: LazyLock<String> = LazyLock::new(|| format!("{}.{}", EKALA, TOML));
+pub static LOCK_NAME: LazyLock<String> = LazyLock::new(|| format!("{}.{}", ATOM, LOCK));
+
+/// A type alias for a boxed error that is sendable and syncable.
+type BoxError = Box<dyn std::error::Error + Send + Sync>;
