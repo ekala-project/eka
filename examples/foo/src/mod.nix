@@ -1,0 +1,4 @@
+{
+  inherit deps;
+  Deps = deps;
+}
