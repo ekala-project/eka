@@ -1,4 +1,6 @@
-{ pkgs ? import <nixpkgs> {} }:
+{
+  pkgs ? import <nixpkgs> { },
+}:
 
 pkgs.mkShell {
   buildInputs = with pkgs; [
@@ -20,7 +22,7 @@ pkgs.mkShell {
 
     # For presentations
     pandoc
-    mdslides  # If available, otherwise we'll use the local one
+    mdslides # If available, otherwise we'll use the local one
   ];
 
   shellHook = ''

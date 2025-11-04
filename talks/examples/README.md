@@ -12,6 +12,7 @@ nix-shell shell.nix
 ```
 
 This provides:
+
 - `openssl` for hashing
 - `jq` for JSON processing
 - `git` for version control demos
@@ -24,12 +25,14 @@ This provides:
 **When to run:** During the "The Problem" section
 
 **What it shows:**
+
 - How environments accumulate changes over time
 - Why "works on my machine" fails
 - File conflicts and permission issues
 - The mess that traditional package management creates
 
 **Run it:**
+
 ```bash
 ./01-environment-degradation.sh
 ```
@@ -41,12 +44,14 @@ This provides:
 **When to run:** During the "Basic Cryptography" section
 
 **What it shows:**
+
 - How cryptographic hashes work
 - Building a simple Merkle tree from scratch
 - How changing one file affects the entire tree
 - Real Git commit hash example
 
 **Run it:**
+
 ```bash
 ./02-merkle-tree-demo.sh
 ```
@@ -58,12 +63,14 @@ This provides:
 **When to run:** During the "How Nix Solves It" section
 
 **What it shows:**
+
 - Traditional build scripts vs. declarative recipes
 - JSON build specifications
 - Nix derivation structure and content-addressing
 - Real derivation examples from the Nix store
 
 **Run it:**
+
 ```bash
 ./03-static-build-recipes.sh
 ```
@@ -75,12 +82,14 @@ This provides:
 **When to run:** During the "What's Wrong with Nix" section
 
 **What it shows:**
+
 - The pain of nixpkgs version management
 - Tight coupling between all packages
 - Version conflicts and rebuild costs
 - Why nixpkgs makes complex dependency management hard
 
 **Run it:**
+
 ```bash
 ./04-nixpkgs-pain-demo.sh
 ```
@@ -92,12 +101,14 @@ This provides:
 **When to run:** During the "Building Derivations" section
 
 **What it shows:**
+
 - What Nix expressions look like
 - Key Nix concepts (pure functions, declarative)
 - Why Nix expressions are powerful but complex
 - Sets up understanding for why Eka abstracts them
 
 **Run it:**
+
 ```bash
 ./05-nix-language-intro.sh
 ```
@@ -109,12 +120,14 @@ This provides:
 **When to run:** During the "How Atoms Solve It" and "How Eka Solves It" sections
 
 **What it shows:**
+
 - Real published atoms from Git repositories
 - Atom URIs and human-friendly addressing
 - Manifest (atom.toml) and lockfile (atom.lock) examples
 - How Eka provides familiar interfaces with Nix power
 
 **Run it:**
+
 ```bash
 ./06-eka-atoms-demo.sh
 ```
@@ -126,12 +139,14 @@ This provides:
 **When to run:** During the "Existing Tools Don't Solve This" section (after mentioning Docker)
 
 **What it shows:**
+
 - Why containers don't solve reproducibility
 - Base image drift and supply chain attacks
 - Dependency conflicts inside containers
 - Docker's strengths vs. limitations
 
 **Run it:**
+
 ```bash
 ./07-docker-limitations-demo.sh
 ```
@@ -143,12 +158,14 @@ This provides:
 **When to run:** During the "How Eka Solves It" section
 
 **What it shows:**
+
 - Complete Eka workflow from atom creation to publishing
 - Adding atom and legacy Nix dependencies
 - Manifest and lockfile generation
 - Publishing process (demonstrated, not executed)
 
 **Run it:**
+
 ```bash
 ./08-eka-workflow-demo.sh
 ```
@@ -158,12 +175,14 @@ This provides:
 **When to run:** During the "Existing Tools Don't Solve This" section (after mentioning Docker)
 
 **What it shows:**
+
 - Why containers don't solve reproducibility
 - Base image drift and supply chain attacks
 - Dependency conflicts inside containers
 - Docker's strengths vs. limitations
 
 **Run it:**
+
 ```bash
 ./05-docker-limitations-demo.sh
 ```
