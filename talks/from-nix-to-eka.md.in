@@ -11,33 +11,36 @@ Building Better Software Supply Chains
 
 :::::::::::::::::::::::::::::::
 
-The Problem
-===========
+The Problem: Entropy
+====================
 
 * "Works on my machine" issues
 * Dependency conflicts
 * Supply chain attacks
 * Non-reproducible environments
 
-<small><small>💡 **Demo:** Run `./examples/01-environment-degradation.sh` to see how environments degrade over time</small></small>
+<small><small>This is a universal problem (Mobile, Mac, Windows, Linux)</small></small>
 
 :::::::::::::::::::::::::::::::
 
-Existing Tools Don't Solve This
+The Purported Solution: Package Managers
+========================================
+
+* **Like a hacker's app store**
+* Install software onto your machine
+* Manage dependencies automatically
+* Handle updates and removals
+
+<small><small>_But..._ package managers don't solve the reproducibility problem we just described</small></small>
+
+<small><small>💡 **Demo:** Run `./examples/01-environment-degradation.sh` to see how package environments degrade over time</small></small>
+
+:::::::::::::::::::::::::::::::
+
+How Do You _Actually_ Solve This?
 ===============================
 
-* Virtual environments (venv, conda)
-* Containers (Docker)
-* Lockfiles (package-lock.json)
-
-<small>All have limitations in reproducibility and security</small>
-
-:::::::::::::::::::::::::::::::
-
-How Do You Solve It?
-====================
-
-**Basic Cryptography**
+**We Know How: Basic Cryptography**
 
 * Hash: Unique fingerprint of content
 * Data structures: Organized storage
@@ -45,25 +48,47 @@ How Do You Solve It?
 
 <small><small>💡 **Demo:** Run `./examples/02-merkle-tree-demo.sh` to build a Merkle tree from scratch</small></small>
 
+<small><small>Now that we understand cryptographic verification, let's see how existing "solutions" fall short</small></small>
+
 :::::::::::::::::::::::::::::::
 
-Examples: Git & Blockchain
-==========================
+Existing "Solutions" Don't Do This
+===============================
+
+* Virtual environments (venv, conda)
+  * doesn't prevent conflicts or guarantee reproducibility
+* Containers (Docker)
+  * bundles everything into mutable black boxes
+* Lockfiles (package-lock.json)
+  * relies on centralized registries vulnerable to attacks
+
+<small>All have limitations in reproducibility and security we know how to solve</small>
+
+<small><small>💡 **Demo:** Run `./examples/03-docker-limitations-demo.sh` to see why containers don't solve reproducibility</small></small>
+
+:::::::::::::::::::::::::::::::
+
+Tools Which "Do the Right Thing"
+===============================
+
+**A Bit of Inspiration**
 
 * **Git**: Commits as Merkle trees
 * **Bitcoin**: Transaction verification
 * **Benefits**: Tamper-proof, decentralized
 
+<small>_But..._ these tools aren't software package managers</small>
+
 :::::::::::::::::::::::::::::::
 
-Nix Solves It
-=============
+Nix Does This!
+==============
 
 * **Derivations**: Static build recipes
 * **Mathematical closure**: All dependencies in Merkle tree
-* **Pure functions**: Same inputs = same outputs
+* **_Pure_ functions**: Same inputs = same outputs
 
-<small><small>💡 **Demo:** Run `./examples/03-static-build-recipes.sh` to see derivations vs traditional builds</small></small>
+<small><small>💡 **Demo:** Run `./examples/04-static-build-recipes.sh` to see derivations vs traditional builds</small></small>
 
 :::::::::::::::::::::::::::::::
 
@@ -72,15 +97,17 @@ Building Derivations
 
 * High-level Nix language
 * Pure functions vs procedures
-* JSON with functions
+* JSON with functions (so they say)
+
+<small><small>💡 **Quick Demo:** Let's see a simple Nix expression</small></small>
 
 :::::::::::::::::::::::::::::::
 
 Nix Store
 =========
 
-* Content-addressed paths
-* `/nix/store/hash-name`
+* Cryptographically addressed paths
+* `/nix/store/<hash>-name`
 * Immutable, reproducible
 
 :::::::::::::::::::::::::::::::
@@ -88,8 +115,8 @@ Nix Store
 What's Good About Nix
 =====================
 
-* Perfect reproducibility
-* Cryptographic security
+* Perfect reproducibility of build inputs
+* Enables cryptographic security
 * [Large package ecosystem](https://repology.org/repositories/graphs)
 * Declarative configuration
 
@@ -99,6 +126,7 @@ What's Wrong with Nix
 =====================
 
 * Too low-level, no package abstraction
+* **Doesn't effectively leverage the security it enables**
 * Nixpkgs tightly coupled
 * Incredibly slow and heavyweight
 * Complex language, high cognitive load

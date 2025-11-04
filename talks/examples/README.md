@@ -87,6 +87,40 @@ This provides:
 
 **Key takeaway:** Nix's monolithic approach creates scaling and flexibility problems that Eka/Atoms solve through decoupling and proper abstraction.
 
+### 5. Nix Language Introduction (`05-nix-language-intro.sh`)
+
+**When to run:** During the "Building Derivations" section
+
+**What it shows:**
+- What Nix expressions look like
+- Key Nix concepts (pure functions, declarative)
+- Why Nix expressions are powerful but complex
+- Sets up understanding for why Eka abstracts them
+
+**Run it:**
+```bash
+./05-nix-language-intro.sh
+```
+
+**Key takeaway:** Nix expressions enable reproducible builds but are too complex for most users - this is what Eka abstracts away.
+
+### 6. Docker Limitations (`06-docker-limitations-demo.sh`)
+
+**When to run:** During the "Existing Tools Don't Solve This" section (after mentioning Docker)
+
+**What it shows:**
+- Why containers don't solve reproducibility
+- Base image drift and supply chain attacks
+- Dependency conflicts inside containers
+- Docker's strengths vs. limitations
+
+**Run it:**
+```bash
+./05-docker-limitations-demo.sh
+```
+
+**Key takeaway:** Docker is great for deployment but doesn't address the core dependency management and reproducibility problems that Eka/Atoms solve.
+
 ## Presentation Flow
 
 The examples are numbered to match the slide progression:
@@ -94,7 +128,8 @@ The examples are numbered to match the slide progression:
 1. **Slides 2-3:** Run example 1 (environment degradation)
 2. **Slides 4-5:** Run example 2 (Merkle trees)
 3. **Slides 6-7:** Run example 3 (build recipes)
-4. **Slides 8-9:** Run example 4 (nixpkgs coupling pain) + live demo
+4. **Slide 8:** Run example 5 (Docker limitations) after mentioning containers
+5. **Slides 9-10:** Run example 4 (nixpkgs coupling pain) + live demo
 
 ## Tips for Presenting
 
