@@ -104,7 +104,56 @@ This provides:
 
 **Key takeaway:** Nix expressions enable reproducible builds but are too complex for most users - this is what Eka abstracts away.
 
-### 6. Docker Limitations (`06-docker-limitations-demo.sh`)
+### 6. Eka Atoms Demo (`06-eka-atoms-demo.sh`)
+
+**When to run:** During the "How Atoms Solve It" and "How Eka Solves It" sections
+
+**What it shows:**
+- Real published atoms from Git repositories
+- Atom URIs and human-friendly addressing
+- Manifest (atom.toml) and lockfile (atom.lock) examples
+- How Eka provides familiar interfaces with Nix power
+
+**Run it:**
+```bash
+./06-eka-atoms-demo.sh
+```
+
+**Key takeaway:** Eka atoms provide decentralized, secure package management with a developer-friendly interface that abstracts away Nix complexity.
+
+### 7. Docker Limitations (`07-docker-limitations-demo.sh`)
+
+**When to run:** During the "Existing Tools Don't Solve This" section (after mentioning Docker)
+
+**What it shows:**
+- Why containers don't solve reproducibility
+- Base image drift and supply chain attacks
+- Dependency conflicts inside containers
+- Docker's strengths vs. limitations
+
+**Run it:**
+```bash
+./07-docker-limitations-demo.sh
+```
+
+**Key takeaway:** Docker is great for deployment but doesn't address the core dependency management and reproducibility problems that Eka/Atoms solve.
+
+### 8. Eka Workflow Demo (`08-eka-workflow-demo.sh`)
+
+**When to run:** During the "How Eka Solves It" section
+
+**What it shows:**
+- Complete Eka workflow from atom creation to publishing
+- Adding atom and legacy Nix dependencies
+- Manifest and lockfile generation
+- Publishing process (demonstrated, not executed)
+
+**Run it:**
+```bash
+./08-eka-workflow-demo.sh
+```
+
+**Key takeaway:** Eka provides a familiar package management workflow with Nix's security guarantees, bridging the gap between user-friendly interfaces and cryptographic reproducibility.
 
 **When to run:** During the "Existing Tools Don't Solve This" section (after mentioning Docker)
 

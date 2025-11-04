@@ -145,6 +145,8 @@ How Atoms Solve It
 * Decentralized infrastructure
 * No single points of failure
 
+<small><small>💡 **Demo:** Run `./examples/07-eka-atoms-demo.sh` to see real published atoms and Eka's interface</small></small>
+
 :::::::::::::::::::::::::::::::
 
 How Eka Solves It
@@ -154,6 +156,8 @@ How Eka Solves It
 * Manifest/lockfile separation
 * Abstract interaction with impure world
 * Sandboxed runtime options
+
+<small><small>💡 **Demo:** Run `./examples/08-eka-workflow-demo.sh` to see the complete Eka workflow in action</small></small>
 
 :::::::::::::::::::::::::::::::
 
