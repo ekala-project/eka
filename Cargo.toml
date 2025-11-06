@@ -6,7 +6,7 @@ workspace.members = [
 ]
 
 [package]
-edition = "2021"
+edition = "2024"
 name    = "eka"
 version = "0.3.0"
 

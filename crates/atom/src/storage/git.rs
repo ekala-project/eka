@@ -883,10 +883,9 @@ impl super::UnpackRef for Ref {
             full_ref_name: name,
             object: id,
         } = self
+            && name == V1_ROOT
         {
-            if name == V1_ROOT {
-                return Some(Root(id.to_owned()));
-            }
+            return Some(Root(id.to_owned()));
         }
         None
     }

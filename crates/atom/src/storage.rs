@@ -447,7 +447,7 @@ pub trait QueryVersion: QueryStore {
             .filter_map(|UnpackedRef { id, version, rev }| {
                 (id.label() == label && req.matches(&version)).then_some((version, rev))
             })
-            .max_by_key(|(ref version, _)| version.to_owned())
+            .max_by_key(|(version, _)| version.to_owned())
     }
 
     /// Finds the highest version of an atom matching the given version requirement.

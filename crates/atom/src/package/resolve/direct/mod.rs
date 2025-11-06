@@ -143,14 +143,13 @@ impl<'a, S: LocalStorage> ManifestWriter<'a, S> {
         key: Option<&Name>,
     ) -> Result<(Name, lock::Dep), DocError> {
         let get_dep = || {
-            if let Some((set, atom)) = &dep.from_version {
-                if let Some(root) = self.resolved.roots.get(&Either::Left(set.to_owned())) {
-                    let id = AtomId::from((*root, atom.to_owned()));
-                    if let Some(lock::Dep::Atom(atom)) =
-                        self.lock.deps.as_ref().get(&Either::Left(id))
-                    {
-                        return dep.new_from_version(atom.version());
-                    }
+            if let Some((set, atom)) = &dep.from_version
+                && let Some(root) = self.resolved.roots.get(&Either::Left(set.to_owned()))
+            {
+                let id = AtomId::from((*root, atom.to_owned()));
+                if let Some(lock::Dep::Atom(atom)) = self.lock.deps.as_ref().get(&Either::Left(id))
+                {
+                    return dep.new_from_version(atom.version());
                 }
             }
             dep
@@ -433,7 +432,7 @@ impl NixGit {
                 let version = extract_and_parse_semver(n.to_str().ok()?)?;
                 req.matches(&version).then_some((version, r))
             })
-            .max_by_key(|(ref version, _)| version.to_owned())
+            .max_by_key(|(version, _)| version.to_owned())
     }
 }
 

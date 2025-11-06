@@ -110,10 +110,10 @@ fn get_log_level(args: LogArgs) -> LevelFilter {
         _ => return LevelFilter::ERROR,
     }
 
-    if let Ok(rust_log) = std::env::var(EnvFilter::DEFAULT_ENV) {
-        if let Ok(level) = LevelFilter::from_str(&rust_log) {
-            return level;
-        }
+    if let Ok(rust_log) = std::env::var(EnvFilter::DEFAULT_ENV)
+        && let Ok(level) = LevelFilter::from_str(&rust_log)
+    {
+        return level;
     }
 
     match args.verbosity {

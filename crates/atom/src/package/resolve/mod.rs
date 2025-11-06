@@ -74,7 +74,7 @@ impl<'a, S: LocalStorage> ResolvedSets<'a, S> {
         if let Some((_, atom)) = versions
             .iter()
             .filter(|(v, _)| req.matches(v))
-            .max_by_key(|(ref version, _)| version.to_owned())
+            .max_by_key(|(version, _)| version.to_owned())
         {
             Ok(AtomDep::from(atom.to_owned()))
         } else {
@@ -459,29 +459,29 @@ impl<'a, 'b, S: LocalStorage> SetResolver<'a, 'b, S> {
         mirror: &SetMirror,
     ) -> Result<(), BoxError> {
         let prev = self.names.insert(root, set_tag.to_owned());
-        if let Some(prev_tag) = &prev {
-            if prev_tag != set_tag {
-                tracing::error!(
-                    message = "the same mirror exists in more than one set",
-                    set.mirror = %mirror,
-                    set.conflict.a = %set_tag,
-                    set.conflict.b = %prev_tag,
-                );
-                return Err(sets::Error::Inconsistent.into());
-            }
+        if let Some(prev_tag) = &prev
+            && prev_tag != set_tag
+        {
+            tracing::error!(
+                message = "the same mirror exists in more than one set",
+                set.mirror = %mirror,
+                set.conflict.a = %set_tag,
+                set.conflict.b = %prev_tag,
+            );
+            return Err(sets::Error::Inconsistent.into());
         }
         let prev = self.roots.insert(Either::Left(set_tag.to_owned()), root);
-        if let Some(prev) = &prev {
-            if prev != &root {
-                tracing::error!(
-                    message = "the mirrors in this set do not all point at the same set",
-                    set.name = %set_tag,
-                    set.mirror = %mirror,
-                    set.root.mirror = %*root,
-                    set.root.previous = %**prev,
-                );
-                return Err(sets::Error::Inconsistent.into());
-            }
+        if let Some(prev) = &prev
+            && prev != &root
+        {
+            tracing::error!(
+                message = "the mirrors in this set do not all point at the same set",
+                set.name = %set_tag,
+                set.mirror = %mirror,
+                set.root.mirror = %*root,
+                set.root.previous = %**prev,
+            );
+            return Err(sets::Error::Inconsistent.into());
         }
         self.roots.insert(Either::Right(mirror.to_owned()), root);
         Ok(())
@@ -753,10 +753,10 @@ impl<'a, S: LocalStorage> ManifestWriter<'a, S> {
             .deps
             .as_ref()
             .get(&either::Either::Left(id.to_owned()))
+            && dep.rev().is_some()
+            && !req.matches(dep.version())
         {
-            if dep.rev().is_some() && !req.matches(dep.version()) {
-                self.lock_atom(req, id, set_tag)?;
-            }
+            self.lock_atom(req, id, set_tag)?;
         }
         Ok(())
     }

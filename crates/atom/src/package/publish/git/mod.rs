@@ -386,13 +386,13 @@ impl<'a> Publish<Root> for GitContext<'a> {
         let r = &context.refs(RefKind::Content);
         let lr = self.repo.find_reference(&r.to_string());
 
-        if let Ok(lr) = lr {
-            if let Some((v, id)) = remotes.get(context.atom.id.label()) {
-                if r.version == v && lr.id().detach() == *id {
-                    // Remote and local atoms are identical; skip.
-                    return Ok(Skipped(context.atom.spec.take_label()));
-                }
-            }
+        if let Ok(lr) = lr
+            && let Some((v, id)) = remotes.get(context.atom.id.label())
+            && r.version == v
+            && lr.id().detach() == *id
+        {
+            // Remote and local atoms are identical; skip.
+            return Ok(Skipped(context.atom.spec.take_label()));
         }
 
         let refs = context
@@ -428,24 +428,24 @@ impl<'a> StateValidator<Root> for GitPublisher<'a> {
 
         for entry in record.records {
             let path = PathBuf::from(entry.filepath.to_str_lossy().as_ref());
-            if entry.mode.is_blob() && path.file_name() == Some(crate::ATOM_MANIFEST_NAME.as_ref())
+            if entry.mode.is_blob()
+                && path.file_name() == Some(crate::ATOM_MANIFEST_NAME.as_ref())
+                && let Ok(obj) = publisher.repo.find_object(entry.oid)
             {
-                if let Ok(obj) = publisher.repo.find_object(entry.oid) {
-                    match publisher.verify_manifest(&obj, &path) {
-                        Ok(atom) => {
-                            if let Some(duplicate) = atoms.get(atom.label()) {
-                                tracing::warn!(
-                                    message = "Two atoms share the same ID",
-                                    duplicate.label = %atom.label(),
-                                    fst = %path.display(),
-                                    snd = %duplicate.display(),
-                                );
-                                return Err(Error::Duplicates);
-                            }
-                            atoms.insert(atom.take_label(), path);
-                        },
-                        Err(e) => e.warn(),
-                    }
+                match publisher.verify_manifest(&obj, &path) {
+                    Ok(atom) => {
+                        if let Some(duplicate) = atoms.get(atom.label()) {
+                            tracing::warn!(
+                                message = "Two atoms share the same ID",
+                                duplicate.label = %atom.label(),
+                                fst = %path.display(),
+                                snd = %duplicate.display(),
+                            );
+                            return Err(Error::Duplicates);
+                        }
+                        atoms.insert(atom.take_label(), path);
+                    },
+                    Err(e) => e.warn(),
                 }
             }
         }

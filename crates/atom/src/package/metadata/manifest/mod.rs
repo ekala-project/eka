@@ -465,7 +465,11 @@ impl<'a, S: LocalStorage> ManifestWriter<'a, S> {
 
     /// Constructs a new `ManifestWriter`, ensuring that the manifest and lock file constraints
     /// are respected.
-    pub async fn open_and_resolve(storage: &'a S, path: &Path) -> Result<Self, AtomError> {
+    pub async fn open_and_resolve(
+        storage: &'a S,
+        path: &Path,
+        fresh: bool,
+    ) -> Result<Self, AtomError> {
         use std::fs;
         let path = if path.file_name() == Some(OsStr::new(crate::ATOM_MANIFEST_NAME.as_str())) {
             path.into()
@@ -482,7 +486,9 @@ impl<'a, S: LocalStorage> ManifestWriter<'a, S> {
             .get_and_check_sets()
             .await?;
 
-        let lock = if let Ok(lock_str) = fs::read_to_string(&lock_path) {
+        let lock = if let Ok(lock_str) = fs::read_to_string(&lock_path)
+            && !fresh
+        {
             toml_edit::de::from_str(&lock_str).inspect_err(
                 |_| tracing::error!(lock = %lock_path.display(), suggestion = "delete and regenerate", "lockfile is invalid"),
             )?

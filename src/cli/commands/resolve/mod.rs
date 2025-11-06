@@ -15,10 +15,14 @@ use clap::Parser;
 
 /// The `resolve` subcommand.
 #[derive(Parser, Debug)]
-#[command(arg_required_else_help = true)]
+#[command(arg_required_else_help = true, next_help_heading = "Resolve Options")]
 pub struct Args {
     /// The URI of the local atom(s) to resolve dependencies for.
     atom: Vec<LocalAtom>,
+    /// Ignore well specified dependencies in the lock, and update all of them to their highest
+    /// matching versions, similar to if you deleted the lock file manually.
+    #[clap(long, short)]
+    fresh: bool,
 }
 
 //================================================================================================
@@ -34,7 +38,8 @@ pub(super) async fn run(storage: impl LocalStorage + 'static, args: Args) -> Res
         tracing::debug!(path = %path.as_ref().display(), "attempting to resolve dependencies");
 
         let writer =
-            ManifestWriter::open_and_resolve(&storage, &to_storage_root.join(&path)).await?;
+            ManifestWriter::open_and_resolve(&storage, &to_storage_root.join(&path), args.fresh)
+                .await?;
         writer.write_atomic()?;
 
         tracing::info!(path = %path.as_ref().display(), "successfully resolved and wrote updates");

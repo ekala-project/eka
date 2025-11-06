@@ -19,9 +19,9 @@ mod store;
 // Types
 //================================================================================================
 
-/// The top-level command-line arguments for Eka.
+#[allow(missing_docs)] // gets generated into the help text
 #[derive(Parser)]
-#[command(author, version, about, long_about = None)]
+#[command(author, version, about, long_about = None, next_help_heading = "Global Options")]
 pub struct Args {
     /// Change the current working directory.
     ///
@@ -101,11 +101,11 @@ pub fn change_directory() -> Vec<String> {
                 seen = Some(true);
                 return arg;
             }
-            if let Some(cd) = seen {
-                if cd {
-                    std::env::set_current_dir(&arg).ok();
-                    seen = Some(false);
-                }
+            if let Some(cd) = seen
+                && cd
+            {
+                std::env::set_current_dir(&arg).ok();
+                seen = Some(false);
             }
             arg
         })

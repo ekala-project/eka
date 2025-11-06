@@ -328,8 +328,8 @@ impl std::fmt::Display for Dep {
 impl From<&AtomDep> for AtomId<Root> {
     fn from(dep: &AtomDep) -> Self {
         let root = Root::from(dep.set());
-        let id = AtomId::from((root, dep.label().to_owned()));
-        id
+
+        AtomId::from((root, dep.label().to_owned()))
     }
 }
 

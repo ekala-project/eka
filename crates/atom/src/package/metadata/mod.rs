@@ -671,7 +671,7 @@ impl<'a, S: LocalStorage> EkalaManager<'a, S> {
             atom.path = %package_path.as_ref().display(),
             set = %self.path.display()
         );
-        let writer = ManifestWriter::open_and_resolve(self.storage, &atom_toml).await?;
+        let writer = ManifestWriter::open_and_resolve(self.storage, &atom_toml, true).await?;
         writer.write_atomic()?;
 
         Ok(())
