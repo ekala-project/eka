@@ -93,6 +93,7 @@ cargo build --release
 ### Development Environment
 
 The Nix shell provides all necessary dependencies including:
+
 - Exact Rust version (as specified in `rust-toolchain.toml`)
 - snix and protocol buffer dependencies
 - All required build tools
@@ -198,6 +199,7 @@ let manager: EkalaManager = /* ... */;
 ```
 
 Key modules include:
+
 - `atom::id` - Atom identification and cryptographic hashing
 - `atom::package` - Manifest and lockfile management
 - `atom::uri` - URI parsing and resolution
