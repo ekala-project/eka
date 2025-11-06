@@ -1,12 +1,25 @@
 # Eka: A New Foundation for the Software Supply Chain
 
-> ⚠️ **Warning:** Eka is in early experimental stages. Features are unstable and subject to change.
+> ⚠️ **Warning:** Eka is still in early stages. Features are unstable and subject to change.
 
-`eka` is a command-line tool for managing software dependencies using the **Atom Protocol**, a new standard for decentralized software distribution. It is designed from the ground up to provide a more efficient, secure, and reproducible development experience.
+A command-line tool for decentralized software dependency management using the Atom Protocol.
+
+[![standard-readme compliant](https://img.shields.io/badge/readme%20style-standard-brightgreen.svg?style=flat-square)](https://github.com/RichardLitt/standard-readme)
+
+## Table of Contents
+
+- [Background](#background)
+- [Install](#install)
+- [Usage](#usage)
+- [API](#api)
+- [Contributing](#contributing)
+- [License](#license)
+
+## Background
 
 This is the first step towards a more resilient and transparent software supply chain, free from the single points of failure inherent in traditional, centralized package registries.
 
-## What is the Atom Protocol?
+### What is the Atom Protocol?
 
 The [Atom Protocol](https://docs.eka.rs/atom/) represents a fundamental rethinking of software dependency management, moving beyond traditional package registries to create a decentralized, cryptographically-secure foundation for the software supply chain. At its heart lies a new standard that treats software packages as verifiable, immutable slices of Git repositories. This approach eliminates single points of failure while providing mathematical guarantees of integrity and reproducibility.
 
@@ -24,7 +37,7 @@ The protocol addresses the inherent limitations of centralized package registrie
 
 - **Designed for Efficiency:** By creating unambiguous, content-addressed cryptographic IDs for every package, Atom enables a future for highly efficient, decentralized build pipelines. This foundation allows for a system that is not only more secure and resilient but is also designed for high-performance, distributed build systems.
 
-## The Nix Connection: A Complete, Reproducible Workflow
+### The Nix Connection: A Complete, Reproducible Workflow
 
 A verifiable, git-native source packaging format is only half of the story. To achieve true end-to-end supply chain security, the integrity of the source code must be translated into a build artifact from a reproducible build process. This requires a deterministic build system that can guarantee identical inputs—a core strength of Nix.
 
@@ -32,11 +45,11 @@ A verifiable, git-native source packaging format is only half of the story. To a
 
 - **Source Code Management (The Atom Protocol):** This is the foundational layer, concerned with the verifiable, decentralized distribution of _source code_. Its ambition is to be a universal, language-agnostic standard.
 
-- **Artifact Build System (Nix / Eos):** This is the backend, responsible for taking locked source dependencies and producing a final software artifact. The long-term vision is for this to be handled by **Eos**, a distributed build scheduler that can orchestrate builds across multiple machines for maximum efficiency.
+- **Artifact Build System (Nix / Eos):** This is the backend, responsible for taking locked source dependencies and producing a final software artifact. The long-term vision is for this to be handled by **Eos**, a distributed build scheduler that will eventually power Eka's evaluation backend.
 
 `eka` is the package manager that bridges these two layers. Its primary expertise is managing _source code_ dependencies to produce a locked set of inputs. However, it is also a package manager in the traditional sense, as it will communicate with the build system (`Eos`) to build, fetch, and install the final _artifacts_, providing a seamless experience for developers.
 
-## The Ekala Ecosystem
+### The Ekala Ecosystem
 
 This work is centered on four core components, which will eventually be unified into a single monorepo:
 
@@ -45,190 +58,122 @@ This work is centered on four core components, which will eventually be unified 
 - **Atom Format:** A verifiable, versioned, and git-native format for publishing source code, designed for decentralized distribution and end-to-end integrity.
 - **Eos (Future):** A planned distributed, content-addressed build scheduler that will eventually power Eka's evaluation backend.
 
-## Design Goals
+### Design Goals
 
 - **Disciplined:** Eka maintains a clean separation of concerns. It is an expert at managing source code dependencies, while delegating the heavy lifting of evaluation and building to a dedicated backend like Nix or Eos.
 - **Fast:** Dependency management commands in `eka` are designed to be exceptionally fast, operating primarily on static metadata. Querying, resolving, and locking atoms are near-instantaneous operations.
 - **Conceptually High-Level:** Developers care about packages, versions, and reproducibility, not the low-level details of Nix derivations. Eka provides an interface that speaks to developers at their level of concern, abstracting away the complexity of the underlying build system.
 - **User-Centric:** No matter how well designed a system's architecture, if it's painful to use, it will fail. Eka's philosophy integrates user experience as a core part of the development cycle, augmenting rather than opposing efficiency and performance. This harmonious balance of interface and technical excellence enables highly efficient implementations. For example, by carefully considering how mirrors were presented to users, we landed on an elegant data model that made efficient asynchronous resolution across many mirrors trivially efficient—the prototype model would have made this difficult or impossible. This demonstrates how UX and efficiency are directly coupled through thoughtful data modeling.
 
-## Core Concepts
+For more information about the project's vision and roadmap, see the [ROADMAP.md](./ROADMAP.md).
 
-### Atom Identity and Cryptographic IDs
+### Talk: "Nix Sucks, Everything Else is Worse"
 
-At the core of Eka's security model is the concept of **atom identity**—a cryptographically unique identifier that provides mathematical guarantees of authenticity and prevents name collisions across the global namespace.
+For a deeper dive into the problems Eka aims to solve and the technical foundations behind it, watch the talk ["Nix Sucks, Everything Else is Worse"](https://odysee.com/@nrdxp:6/Nix-Sucks-Everything-else-is-Worse:4?r=dKZibSSnzMGP3T5e5whD2QmoMj1AUijf) by Tim DeHerrera, the creator of Eka.
 
-#### How Atom IDs Work
+## Install
 
-Every atom has a unique identity derived from two fundamental components:
+### Prerequisites
 
-1. **Repository Identity:** Established through an initialization commit with injected entropy, providing robust disambiguation of forks from mirrors and temporal anchoring for provenance tracking.
+- [Nix](https://nixos.org/download.html) (required for the build environment)
 
-2. **Atom Label:** A human-readable identifier (like `serde` or `tokio`) that must be unique within its repository. Labels provide user-friendly naming while the cryptographic hash ensures global uniqueness.
+### From Source
 
-These components are combined using the BLAKE3 cryptographic hash function to create a globally unique identifier.
+Building Eka requires specific dependencies. The easiest way to set everything up properly, including the Rust compiler, is to use the provided Nix shell:
 
-This construction provides several security properties:
-
-- **Collision Resistance:** The cryptographic hash makes it computationally infeasible to create two different inputs that produce the same ID.
-- **Uniqueness:** Each atom has a mathematically unique identity, preventing confusion between packages from different repositories.
-- **Verifiability:** The ID can be independently computed and verified by anyone with access to the repository.
-
-#### Example: Resolving Dependencies
-
-Consider two different repositories both containing a package named `utils`:
-
-```toml
-# Repository A (github.com/company-a/atoms)
-[package]
-label = "utils"
-version = "1.0.0"
-
-# Repository B (github.com/company-b/atoms)
-[package]
-label = "utils"
-version = "2.0.0"
+```bash
+git clone https://github.com/ekala-project/eka.git
+cd eka
+nix-shell # or `direnv allow`, if you prefer
+# Inside the shell:
+cargo build --release
+# Binary will be at target/release/eka
 ```
 
-Despite having the same label, these atoms have completely different identities because they originate from different repositories. The cryptographic ID ensures that `company-a/utils` can never be confused with `company-b/utils`, even if both repositories are compromised, renamed, or forked.
+### Development Environment
 
-**Practical Implications:** This approach eliminates "dependency confusion" attacks where malicious packages with identical names can replace legitimate ones. The cryptographic foundation makes it mathematically impossible for an attacker to create a package that appears legitimate to the system, providing strong security guarantees against supply chain attacks. It also makes it trivial for a build service to keep track of artifacts and metadata related to a specific package across time, which will be Eos' bread & butter in the future.
+The Nix shell provides all necessary dependencies including:
+- Exact Rust version (as specified in `rust-toolchain.toml`)
+- snix and protocol buffer dependencies
+- All required build tools
 
-### Reproducibility Through Manifests and Locks
+```bash
+nix-shell
+# or with direnv: direnv allow
+```
 
-Eka achieves true end-to-end reproducibility by separating source code management from build execution, with deterministic build backends translating source integrity into artifact integrity.
+## Usage
 
-#### The Manifest: Declarative Dependencies
+### Basic Commands
 
-The `atom.toml` manifest serves as your project's declarative dependency specification, defining what your project needs without specifying exact versions:
+Initialize a new Eka package set:
+
+```bash
+eka init
+```
+
+Create a new atom, and at it to the set:
+
+```bash
+eka new demo-app
+cd demo-app
+```
+
+Add dependencies using Atom URIs:
+
+```bash
+eka add gh:nrdxp/home::dev
+eka add gh:nrdxp/home::hosts
+```
+
+Add direct Nix dependencies:
+
+```bash
+eka add direct nix pkgs --git nixpkgs-unstable
+```
+
+Resolve and lock dependencies:
+
+```bash
+eka resolve
+```
+
+Publish atoms:
+
+```bash
+eka publish demo-app
+```
+
+### Example Project Structure
+
+After initialization, your project will have:
+
+```
+demo-app/
+├── atom.toml      # Manifest file
+├── atom.lock      # Lock file
+└── src/           # Your source code
+```
+
+### Manifest Example
 
 ```toml
 [package]
-label = "my-web-app"
+label = "demo-app"
 version = "0.1.0"
 
 [package.sets]
-company-atoms = "git@github.com:our-company/atoms"
-public-atoms = ["https://atoms.example.com", "https://mirror.atoms.example.com"]
+company-atoms = "git@github.com:nrdxp/home"
 
 [deps.from.company-atoms]
-auth-lib = "^2.1"
-logging = "^1.0"
-
-[deps.from.public-atoms]
-serde = "^1.0"
+dev = "^1.0"
+hosts = "^1.0"
 
 [deps.direct.nix]
-# Direct dependencies for non-atom sources
-nixpkgs = { git = "https://github.com/NixOS/nixpkgs", ref = "nixos-unstable" }
+pkgs = { git = "https://github.com/NixOS/nixpkgs", ref = "nixos-unstable" }
 ```
 
-The manifest supports:
-
-- **Semantic Versioning:** Version constraints like `^2.1` allow automatic updates within compatible ranges.
-- **Multiple Sources:** Dependencies can be sourced from different repositories or mirrors.
-- **Mixed Ecosystems:** Support for both atom dependencies and direct backend-specific dependencies.
-
-#### The Lockfile: Cryptographic Snapshot
-
-The `atom.lock` file captures the exact resolved state of all dependencies, creating a cryptographic snapshot that ensures reproducible builds:
-
-```toml
-version = 1
-
-[sets]
-"<hash-of-company-root>" = ["git@github.com:our-company/atoms"]
-"<hash-of-public-root>" = ["https://atoms.example.com", "https://mirror.atoms.example.com"]
-
-[[deps]]
-type = "atom"
-label = "auth-lib"
-version = "2.1.3"
-set = "<hash-of-company-root>"
-rev = "<exact-git-commit>"
-id = "<cryptographic-atom-id>"
-
-[[deps]]
-type = "atom"
-label = "serde"
-version = "1.0.42"
-set = "<hash-of-public-root>"
-rev = "<exact-git-commit>"
-id = "<cryptographic-atom-id>"
-```
-
-The lockfile provides:
-
-- **Exact Versions:** Pinning to specific versions and commits eliminates ambiguity.
-- **Cryptographic Verification:** Each dependency includes its cryptographic ID for integrity verification.
-- **Source Tracking:** Records which repository set each dependency came from.
-
-**Practical Implications:** With the lockfile, builds are completely reproducible across different machines, operating systems, and time. The same `atom.lock` will always produce identical artifacts, eliminating "works on my machine" problems and ensuring supply chain security. This reproducibility extends from source code to final binaries, providing end-to-end integrity guarantees.
-
-### Efficiency and Performance
-
-The Atom Protocol is designed for high-performance, decentralized build systems through content-addressed cryptographic IDs and backend-agnostic abstractions. While currently implemented with Git, the core traits ensure compatibility with future version control systems or distributed storage backends.
-
-#### Content-Addressed Efficiency
-
-By using cryptographic hashes as identifiers, the protocol enables:
-
-- **Deduplication:** Identical content is stored only once, reducing storage and bandwidth requirements.
-- **Parallel Resolution:** Dependencies can be fetched and verified concurrently without conflicts.
-- **Incremental Updates:** Only changed atoms need to be downloaded, minimizing network overhead.
-
-#### Separate History for Atoms
-
-Each atom maintains its own independent history through dedicated references, allowing for efficient tracking of version-specific changes without requiring full repository clones. This design enables:
-
-- **Version Isolation:** Each atom version exists as a self-contained, verifiable unit.
-- **Selective Fetching:** Only relevant atom changes need to be retrieved, optimizing performance.
-- **Concurrent Processing:** Multiple atoms can be resolved simultaneously across distributed systems.
-
-#### Unique Ref Hierarchy for Fast Discovery
-
-The structured namespace (`refs/ekala/`) optimizes atom discovery:
-
-- **Repository Identity:** `refs/ekala/init` establishes temporal anchoring.
-- **Atom Content:** `refs/ekala/atoms/<label>/<version>` provides direct access to atom content.
-- **Metadata Separation:** Parallel hierarchies enable efficient querying without expensive traversals.
-
-This architecture enables near-instantaneous remote querying, which is absolutely essential for decentralized systems to remain viable and performant. Without this capability, the distributed nature of the protocol would introduce prohibitive latency, rendering decentralized package management impractical. By leveraging efficient asynchronous query mechanisms, the system can simultaneously interrogate hundreds of mirrors, processing results as they arrive without blocking operations. This parallel processing ensures that dependency resolution remains fast and reliable, even in highly distributed environments where sources may be geographically dispersed or intermittently available.
-
-#### Backend Agnosticism
-
-The protocol's abstraction layer ensures that fundamental concepts—cryptographic identity, content addressing, and decentralized distribution—are independent of the underlying storage or version control system. Future implementations could leverage distributed hash tables, object storage, or alternative VCS while maintaining identical security and efficiency guarantees.
-
-### Global Namespace Management
-
-Eka's global namespace combines human-readable labels with cryptographic verification, enabling secure, decentralized collaboration across organizations.
-
-#### Repository Identity and Discovery
-
-The `ekala.toml` manifest serves as the single source of truth for a repository's atom composition:
-
-```toml
-# ekala.toml - Repository manifest
-[set]
-packages = [
-    "path/to/auth-lib",
-    "path/to/logging",
-    "path/to/ui-components"
-]
-
-[metadata]
-domain = "our-company.com"
-license = "MIT"
-tags = ["internal", "production-ready"]
-```
-
-This manifest defines:
-
-- **Package Inventory:** Which atoms are available in the repository.
-- **Metadata:** Domain, license, and categorization information.
-- **Discovery:** Enables automated discovery and indexing of available atoms.
-
-#### Atom URIs: User-Friendly Addressing
+### Atom URIs: User-Friendly Addressing
 
 While the underlying system uses cryptographic IDs for security, developers interact with atoms through intuitive URIs that abstract away the complexity:
 
@@ -236,29 +181,48 @@ While the underlying system uses cryptographic IDs for security, developers inte
 - `gl:group/project::library` - GitLab addressing
 - `company-atoms::auth-lib` - Custom alias for internal repositories
 
-These URIs are resolved to full URLs in the manifest & cryptographic IDs in the lockfile, ensuring portability and security regardless of locally configured aliases. The URI system supports:
+## API
 
-- **Version Constraints:** Semantic versioning and exact version pinning.
-- **Aliases:** User configurable, custom names for frequently used repositories.
-- **Heuristics:** Intelligent heuristics help determine the most appropirate schema (e.g. `git@` implies ssh://) to obviate the need to express it in 90% of cases.
+### Rust Library
 
-### Why This Matters: Beyond Package Management
+The `atom` crate provides a comprehensive Rust API for working with the Atom Protocol:
 
-Eka is not just another package manager—it's a foundational technology for a more resilient software ecosystem. By combining decentralization, cryptographic security, and reproducible builds, Eka addresses the fundamental vulnerabilities that have plagued software development for decades.
+```rust
+use atom::{AtomId, Lockfile, ValidManifest, EkalaManager};
 
-The result is a system where:
+// Core types for Atom management
+let atom_id: AtomId = /* ... */;
+let lockfile: Lockfile = /* ... */;
+let manifest: ValidManifest = /* ... */;
+let manager: EkalaManager = /* ... */;
+```
 
-- **Security is built-in**, not bolted on through after-the-fact audits
-- **Availability is guaranteed** through decentralization and community resilience
-- **Reproducibility is automatic** through cryptographic locking and deterministic builds
-- **Collaboration is seamless** through global namespace management and intuitive URIs
+Key modules include:
+- `atom::id` - Atom identification and cryptographic hashing
+- `atom::package` - Manifest and lockfile management
+- `atom::uri` - URI parsing and resolution
+- `atom::storage` - Storage backend implementations
 
-This foundation enables not just better package management, but a complete rethinking of how we build, distribute, and trust software in an increasingly interconnected world. Eka provides the foundation for a software supply chain that is as reliable and secure as the underlying mathematics that power it.
+See the [atom crate documentation](https://docs.rs/atom) for detailed API information.
 
-## Development
+### CLI Interface
 
-The architecture of Eka is guided by a series of Architectural Decision Records (ADRs). To learn more about the technical details, please refer to the [ADRs](./adrs).
+Eka provides a command-line interface built on top of the atom library:
 
-For a detailed breakdown of the development plan, please see the full [ROADMAP.md](./ROADMAP.md).
+```bash
+eka --help  # Show available commands
+```
 
-[atom-nix]: https://github.com/ekala-project/atom
+See the [CLI reference](./docs/reference/cli-reference.md) for detailed command information.
+
+## Contributing
+
+Please read through our [contributing guidelines](./CONTRIBUTING.md). Included are directions for opening issues, coding standards, and notes on development.
+
+Join our [Discord server](https://discord.gg/DgC9Snxmg7) for informal chat and collaboration.
+
+## License
+
+GNU General Public License v3.0 or later
+
+See [LICENSE](./LICENSE) for the full license text.
