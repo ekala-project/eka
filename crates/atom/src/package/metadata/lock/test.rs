@@ -15,8 +15,9 @@ const TOML_LOCK: &str = include_str!("test/atom.lock");
 #[test]
 fn parse_lock() -> anyhow::Result<()> {
     // Test that a valid lockfile can be parsed successfully.
-    let _lock: Lockfile = toml_edit::de::from_str(TOML_LOCK)?;
+    let lock: Lockfile = toml_edit::de::from_str(TOML_LOCK)?;
 
+    assert_eq!(lock.locker, super::LOCK_ATOM.to_owned());
     // Test that a lockfile with an invalid dependency is rejected.
     let invalid_lock_str = r#"
 version = 1

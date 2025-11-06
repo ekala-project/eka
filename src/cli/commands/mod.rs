@@ -70,9 +70,9 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
         },
         (Commands::Add(args), store::Detected::FileStorage(fs)) => add::run(&fs, args).await?,
         (Commands::New(args), store::Detected::Git(repo)) => {
-            new::run(repo, args)?;
+            new::run(repo, args).await?;
         },
-        (Commands::New(args), store::Detected::FileStorage(fs)) => new::run(&fs, args)?,
+        (Commands::New(args), store::Detected::FileStorage(fs)) => new::run(&fs, args).await?,
         (Commands::Publish(args), store::Detected::Git(repo)) => {
             publish::run(repo, args).await?;
         },

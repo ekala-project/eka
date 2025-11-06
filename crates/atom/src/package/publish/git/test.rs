@@ -15,7 +15,11 @@ use crate::storage::{Init, git};
 //================================================================================================
 
 trait MockAtom {
-    fn mock(&self, id: &str, version: &str) -> Result<(NamedTempFile, ObjectId), anyhow::Error>;
+    async fn mock(
+        &self,
+        id: &str,
+        version: &str,
+    ) -> Result<(NamedTempFile, ObjectId), anyhow::Error>;
 }
 
 //================================================================================================
@@ -23,7 +27,11 @@ trait MockAtom {
 //================================================================================================
 
 impl MockAtom for gix::ThreadSafeRepository {
-    fn mock(&self, label: &str, version: &str) -> Result<(NamedTempFile, ObjectId), anyhow::Error> {
+    async fn mock(
+        &self,
+        label: &str,
+        version: &str,
+    ) -> Result<(NamedTempFile, ObjectId), anyhow::Error> {
         use gix::objs::Tree;
         use gix::objs::tree::Entry;
         use semver::Version;
@@ -37,7 +45,9 @@ impl MockAtom for gix::ThreadSafeRepository {
 
         self.ekala_init(None)?;
         let mut ekala = EkalaManager::new(self)?;
-        ekala.new_atom_at_path(label.try_into()?, &atom_dir, Version::from_str(version)?)?;
+        ekala
+            .new_atom_at_path(label.try_into()?, &atom_dir, Version::from_str(version)?)
+            .await?;
 
         let buf = std::fs::read_to_string(&atom_file)?;
 
@@ -120,7 +130,7 @@ async fn publish_atom() -> Result<(), anyhow::Error> {
     remote.get_refs(Some("refs/heads/*:refs/heads/*"), None)?;
 
     let label = "foo";
-    let (file_path, src) = safe.mock(label, "0.1.0")?;
+    let (file_path, src) = safe.mock(label, "0.1.0").await?;
 
     let (paths, publisher) = GitPublisher::new(&repo, "origin", "HEAD", progress)?.build()?;
     let path = paths

@@ -75,11 +75,15 @@ use std::ffi::OsStr;
 use std::fmt::{self, Display};
 use std::ops::Deref;
 use std::str::FromStr;
+use std::sync::LazyLock;
 
 use serde::{Deserialize, Serialize, Serializer};
 use thiserror::Error;
 
+use crate::storage::git::Root;
+
 const ID_MAX: usize = 128;
+pub(crate) static LOCK_LABEL: LazyLock<Label> = LazyLock::new(|| Label(crate::LOCK_LABEL.into()));
 
 //================================================================================================
 // Types
@@ -268,6 +272,14 @@ impl<R> AtomId<R> {
     /// Returns a reference to the atom's Unicode identifier.
     pub fn label(&self) -> &Label {
         &self.label
+    }
+}
+
+/// in the case we already have a calculated root label combo, we should be able to infallibly
+/// construct an AtomId to check against
+impl From<(Root, Label)> for AtomId<Root> {
+    fn from((origin, label): (Root, Label)) -> Self {
+        AtomId { origin, label }
     }
 }
 

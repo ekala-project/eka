@@ -70,6 +70,8 @@ pub(super) const V1_ROOT: &str = "refs/ekala/init";
 // Statics
 //================================================================================================
 
+pub(crate) static LOCK_ROOT: Root = Root(ObjectId::Sha1(crate::EKA_ROOT_COMMIT_HASH));
+
 static DEFAULT_REMOTE: OnceLock<Cow<str>> = OnceLock::new();
 /// Provide a lazily instantiated static reference to the git repository.
 static REPO: OnceLock<Option<ThreadSafeRepository>> = OnceLock::new();
@@ -637,14 +639,6 @@ impl From<GitDigest> for Root {
     }
 }
 
-impl Origin<Root> for Root {
-    type Error = String;
-
-    fn calculate_origin(&self) -> Result<Root, Self::Error> {
-        Ok(self.to_owned())
-    }
-}
-
 impl super::QueryStore for gix::Url {
     type Error = Error;
     type Ref = Ref;
@@ -909,7 +903,7 @@ impl super::UnpackRef for Ref {
         let rev = p.or(t).map(ToOwned::to_owned)?;
 
         Some(UnpackedRef {
-            id: AtomId::construct(root, label).ok()?,
+            id: AtomId::from((*root, label)),
             version,
             rev,
         })
@@ -922,7 +916,8 @@ impl<T: QueryStore> QueryVersion for T {}
 // Functions
 //================================================================================================
 
-/// Return a static reference to the default remote configured for pushing
+/// Return a static reference to the default remote configured for pushing; defaults to origin if
+/// detection fails
 pub fn default_remote() -> &'static str {
     use gix::remote::Direction;
     DEFAULT_REMOTE

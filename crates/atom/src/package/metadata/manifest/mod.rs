@@ -458,9 +458,6 @@ impl Dependency {
 }
 
 impl<'a, S: LocalStorage> ManifestWriter<'a, S> {
-    pub(crate) const ATOM_BUG: &'static str = "bug, `AtomId` construction is infallible when \
-                                               derived directly from a root and doesn't need to \
-                                               be calculated";
     pub(crate) const RESOLUTION_ERR_MSG: &'static str =
         "unlocked dependency could not be resolved remotely";
     pub(crate) const UPDATE_DEPENDENCY: &'static str =
@@ -511,8 +508,7 @@ impl<'a, S: LocalStorage> ManifestWriter<'a, S> {
                     .roots()
                     .get(&either::Either::Left(composer.value.from.to_owned()))
                     .ok_or(DocError::ComposerSet)?;
-                let id = AtomId::construct(root, composer.key.to_owned())
-                    .map_err(|_| DocError::AtomIdConstruct)?;
+                let id = AtomId::from((*root, composer.key.to_owned()));
                 let dep = self.lock_atom(
                     composer
                         .value
