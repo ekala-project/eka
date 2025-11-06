@@ -1,10 +1,15 @@
+use std::sync::atomic::AtomicBool;
+
+use gix::progress::Discard;
 use gix::revision::walk::Info;
 use gix::{ObjectId, ThreadSafeRepository};
 use proc_macro::TokenStream;
 use quote::quote;
 
 const LOCK_LABEL: &str = "nix-lock";
-const LOCK_VERSION: &str = "0.1.0";
+const LOCK_MAJOR: u64 = 0;
+const LOCK_MINOR: u64 = 1;
+const LOCK_PATCH: u64 = 0;
 
 /// Computes Eka's repository root commit hash at compile time
 #[proc_macro]
@@ -23,8 +28,10 @@ pub fn eka_origin_info(_input: TokenStream) -> TokenStream {
     let rev_tokens = rev.iter().map(|&byte| quote! { #byte });
 
     quote! {
+        const LOCK_MAJOR: u64 = #LOCK_MAJOR;
+        const LOCK_MINOR: u64 = #LOCK_MINOR;
+        const LOCK_PATCH: u64 = #LOCK_PATCH;
         pub(crate) const LOCK_LABEL: &str = #LOCK_LABEL;
-        pub(crate) const LOCK_VERSION: &str = #LOCK_VERSION;
         pub(crate) const LOCK_REV: [u8; 20] = [#(#rev_tokens),*];
         pub(crate) const EKA_ORIGIN_URL: &str = #url;
         pub(crate) const EKA_ROOT_COMMIT_HASH: [u8; 20] = [#(#root_tokens),*];
@@ -33,7 +40,7 @@ pub fn eka_origin_info(_input: TokenStream) -> TokenStream {
 }
 
 fn compute_eka_root_hash() -> Result<[u8; 20], Box<dyn std::error::Error>> {
-    let repo = get_repo()?.to_thread_local();
+    let repo = get_repo().to_thread_local();
     let head = repo.head_commit()?;
     let root = calculate_origin(&head)?;
 
@@ -41,19 +48,42 @@ fn compute_eka_root_hash() -> Result<[u8; 20], Box<dyn std::error::Error>> {
 }
 
 fn lock_rev() -> [u8; 20] {
-    let revspec = format!("refs/eka/atoms/{}/{}", LOCK_LABEL, LOCK_VERSION);
-    if let Some(ObjectId::Sha1(bytes)) = get_repo().ok().and_then(|r| {
-        r.to_thread_local()
-            .rev_parse_single(revspec.as_str())
-            .ok()
-            .map(|i| i.detach())
-    }) {
+    let version = format!("{}.{}.{}", LOCK_MAJOR, LOCK_MINOR, LOCK_PATCH);
+    let revspec = format!("refs/eka/atoms/{}/{}", LOCK_LABEL, &version);
+
+    let repo = get_repo().to_thread_local();
+    let remote = default_remote();
+    let mut remote = repo
+        .try_find_remote_without_url_rewrite(remote.as_str())
+        .and_then(|x| x.ok())
+        .unwrap_or_else(|| panic!("couldn't open default remote: {}", remote));
+    remote
+        .replace_refspecs([revspec.as_str()], gix::remote::Direction::Fetch)
+        .ok();
+
+    if let Some(ObjectId::Sha1(bytes)) = remote
+        .connect(gix::remote::Direction::Fetch)
+        .ok()
+        .and_then(|c| c.prepare_fetch(Discard, Default::default()).ok())
+        .and_then(|q| {
+            q.with_write_packed_refs_only(true)
+                .receive(Discard, &AtomicBool::new(false))
+                .ok()
+        })
+        .and_then(|o| {
+            o.ref_map.remote_refs.iter().find_map(|r| {
+                let (n, p, _) = r.unpack();
+
+                p.and_then(|t| if n == revspec { Some(t.into()) } else { None })
+            })
+        })
+    {
         bytes
     } else {
         panic!(
             "aborting compilation. eka lock rev could not be calculated, make sure you have \
              published first: ::{}@{}",
-            LOCK_LABEL, LOCK_VERSION
+            LOCK_LABEL, &version
         )
     }
 }
@@ -61,30 +91,23 @@ fn lock_rev() -> [u8; 20] {
 fn eka_origin() -> gix::Url {
     let remote = default_remote();
     get_repo()
-        .ok()
-        .and_then(|r| {
-            r.to_thread_local()
-                .try_find_remote_without_url_rewrite(remote.as_str())
-                .and_then(|r| r.ok())
-                .map(|r| r.url(gix::remote::Direction::Push).map(ToOwned::to_owned))
-        })
-        .flatten()
+        .to_thread_local()
+        .try_find_remote_without_url_rewrite(remote.as_str())
+        .and_then(|r| r.ok())
+        .and_then(|r| r.url(gix::remote::Direction::Push).map(ToOwned::to_owned))
         .expect("aborting compilation. cannot detect origin url of eka repository")
 }
 
 fn default_remote() -> String {
     use gix::remote::Direction;
     get_repo()
-        .ok()
-        .and_then(|repo| {
-            repo.to_thread_local()
-                .remote_default_name(Direction::Push)
-                .map(|s| s.to_string())
-        })
+        .to_thread_local()
+        .remote_default_name(Direction::Push)
+        .map(|s| s.to_string())
         .unwrap_or("origin".into())
 }
 
-fn get_repo() -> Result<ThreadSafeRepository, Box<gix::discover::Error>> {
+fn get_repo() -> ThreadSafeRepository {
     use gix::discover::upwards::Options;
     use gix::sec::Trust;
     use gix::sec::trust::Mapping;
@@ -92,7 +115,8 @@ fn get_repo() -> Result<ThreadSafeRepository, Box<gix::discover::Error>> {
         required_trust: Trust::Full,
         ..Default::default()
     };
-    ThreadSafeRepository::discover_opts(".", opts, Mapping::default()).map_err(Box::new)
+    ThreadSafeRepository::discover_opts(".", opts, Mapping::default())
+        .expect("repo could not be opened, are you in a detached head?")
 }
 
 fn calculate_origin(commit: &gix::Commit) -> Result<[u8; 20], gix::revision::walk::Error> {

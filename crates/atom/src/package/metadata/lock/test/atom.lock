@@ -1,5 +1,13 @@
 version = 1
 
+[locker]
+label = "nix-lock"
+version = "0.1.0"
+set = "4abbd2644bc3585e9be95deb277ccf48f6ed26ac"
+rev = "d4f261e4f8dd43e2285a85b2bef03c0add219657"
+mirror = "https://github.com/ekala-project/eka"
+id = "r3rlam6bd31t9i04ggug7avs8vf8981q7a3b6gobemk1gfs50qm0"
+
 [compose]
 use = "nix"
 entry = "."

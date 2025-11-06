@@ -93,22 +93,16 @@ use crate::{AtomId, BoxError, id, package, storage, uri};
 pub(in crate::package) mod direct;
 
 static LOCK_ATOM: LazyLock<AtomDep> = LazyLock::new(|| {
-    let label: Label = crate::LOCK_LABEL.parse().unwrap_or_else(|e| {
-        panic!(
-            "error: {}\nlock label invalid, eka is corrupted: {}",
-            e,
-            crate::LOCK_LABEL
-        )
-    });
+    let label: Label = id::LOCK_LABEL.to_owned();
     let id = AtomId::from((storage::git::LOCK_ROOT, label));
     let hash = id.compute_hash();
-    let version = Version::parse(crate::LOCK_VERSION).unwrap_or_else(|e| {
-        panic!(
-            "error: {}\n lock version invalid, this binary cannot be trusted: {}",
-            e,
-            crate::LOCK_VERSION
-        )
-    });
+    let version = Version {
+        major: crate::LOCK_MAJOR,
+        minor: crate::LOCK_MINOR,
+        patch: crate::LOCK_PATCH,
+        pre: Default::default(),
+        build: Default::default(),
+    };
 
     let mirror = gix::url::parse(crate::EKA_ORIGIN_URL.into()).ok();
     AtomDep {

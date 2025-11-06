@@ -75,6 +75,7 @@ use std::ffi::OsStr;
 use std::fmt::{self, Display};
 use std::ops::Deref;
 use std::str::FromStr;
+use std::sync::LazyLock;
 
 use serde::{Deserialize, Serialize, Serializer};
 use thiserror::Error;
@@ -82,6 +83,7 @@ use thiserror::Error;
 use crate::storage::git::Root;
 
 const ID_MAX: usize = 128;
+pub(crate) static LOCK_LABEL: LazyLock<Label> = LazyLock::new(|| Label(crate::LOCK_LABEL.into()));
 
 //================================================================================================
 // Types
