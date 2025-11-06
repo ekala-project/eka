@@ -33,7 +33,7 @@ use toml_edit::DocumentMut;
 use super::{AtomError, sets};
 use crate::storage::LocalStorage;
 use crate::uri::AliasedUrl;
-use crate::{ATOM_MANIFEST_NAME, id, storage};
+use crate::{ATOM_MANIFEST_NAME, ManifestWriter, id, storage};
 
 pub mod lock;
 pub mod manifest;
@@ -482,9 +482,20 @@ impl<'de> Deserialize<'de> for AtomMap {
             } else {
                 path.clean()
             };
-            let label =
+            let label = if let Ok(l) =
                 Manifest::get_atom_label(normalized.join(crate::ATOM_MANIFEST_NAME.as_str()))
-                    .map_err(de::Error::custom)?;
+                    .inspect_err(|e| {
+                        tracing::warn!(
+                            error = %e,
+                            path = %normalized.display(),
+                            suggestion = "you likely want to remove it from the set, or perhaps recreate it",
+                            "atom no longer exists"
+                        )
+                    }) {
+                l
+            } else {
+                continue;
+            };
             if let Overwritten::Both(.., (_, path))
             | Overwritten::Left(.., path)
             | Overwritten::Right(.., path)
@@ -604,7 +615,7 @@ impl<'a, S: LocalStorage> EkalaManager<'a, S> {
     }
 
     /// writes a new, minimal atom.toml to path, and updates the ekala.toml manifest
-    pub fn new_atom_at_path(
+    pub async fn new_atom_at_path(
         &mut self,
         label: Label,
         package_path: impl AsRef<Path>,
@@ -651,7 +662,7 @@ impl<'a, S: LocalStorage> EkalaManager<'a, S> {
                     fs::remove_dir_all(&package_path).ok();
                 })?;
         }
-        tmp.persist(atom_toml)?;
+        tmp.persist(&atom_toml)?;
         self.write_atomic()?;
         tracing::info!(
             message = "successfully added package to set",
@@ -659,6 +670,9 @@ impl<'a, S: LocalStorage> EkalaManager<'a, S> {
             atom.path = %package_path.as_ref().display(),
             set = %self.path.display()
         );
+        let writer = ManifestWriter::new(self.storage, &atom_toml).await?;
+        writer.write_atomic()?;
+
         Ok(())
     }
 

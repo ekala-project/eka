@@ -601,7 +601,9 @@ impl<'a, S: LocalStorage> ManifestWriter<'a, S> {
         )?;
         tmp_lock.write_all(toml_edit::ser::to_string_pretty(self.lock())?.as_bytes())?;
         tmp.persist(self.path())?;
-        tmp_lock.persist(lock_path)?;
+        if !self.lock().compose.is_config() {
+            tmp_lock.persist(lock_path)?;
+        }
         Ok(())
     }
 
@@ -667,8 +669,7 @@ impl<'a, S: LocalStorage> ManifestWriter<'a, S> {
                         set = %set_tag,
                         "checking sync status"
                     );
-                    let id = AtomId::construct(&root, label.to_owned())
-                        .map_err(|_| DocError::AtomIdConstruct)?;
+                    let id = AtomId::from((root, label.to_owned()));
                     self.synchronize_atom(req.to_owned(), id.to_owned(), set_tag.to_owned())
                         .map_err(|error| {
                             tracing::error!(
@@ -849,7 +850,7 @@ impl<'a, S: LocalStorage> ManifestWriter<'a, S> {
         uri: &Uri,
         root: &Root,
     ) -> Result<(AtomReq, AtomDep), crate::storage::git::Error> {
-        let id = AtomId::construct(root, uri.label().to_owned()).expect(Self::ATOM_BUG);
+        let id = AtomId::from((*root, uri.label().to_owned()));
         let dep = self
             .resolved()
             .resolve_atom(&id, uri.version().unwrap_or(&VersionReq::STAR))?;
@@ -943,7 +944,7 @@ impl<'a, S: LocalStorage> ManifestWriter<'a, S> {
                     .unwrap_or(&VersionReq::parse(atom.version().to_string().as_str())?)
                     .to_owned(),
             );
-            let id = AtomId::construct(&root, uri.label().to_owned()).expect(Self::ATOM_BUG);
+            let id = AtomId::from((root, uri.label().to_owned()));
             let mut version = atom.version().clone();
             version.pre = Prerelease::new("local")?;
             let unpacked = UnpackedRef {

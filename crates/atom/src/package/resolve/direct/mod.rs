@@ -145,12 +145,11 @@ impl<'a, S: LocalStorage> ManifestWriter<'a, S> {
         let get_dep = || {
             if let Some((set, atom)) = &dep.from_version {
                 if let Some(root) = self.resolved.roots.get(&Either::Left(set.to_owned())) {
-                    if let Ok(id) = AtomId::construct(root, atom.to_owned()) {
-                        if let Some(lock::Dep::Atom(atom)) =
-                            self.lock.deps.as_ref().get(&Either::Left(id))
-                        {
-                            return dep.new_from_version(atom.version());
-                        }
+                    let id = AtomId::from((*root, atom.to_owned()));
+                    if let Some(lock::Dep::Atom(atom)) =
+                        self.lock.deps.as_ref().get(&Either::Left(id))
+                    {
+                        return dep.new_from_version(atom.version());
                     }
                 }
             }

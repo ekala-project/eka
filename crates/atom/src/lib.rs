@@ -62,7 +62,6 @@
 //! - **Efficient caching** for remote operations.
 
 #![deny(missing_docs)]
-
 use std::sync::LazyLock;
 
 pub use self::id::{AtomId, Compute, Label, Origin};
@@ -77,8 +76,8 @@ pub mod package;
 pub mod storage;
 pub mod uri;
 
-// Sets EKA_ROOT_COMMIT_HASH
-eka_root_macro::eka_root_hash!();
+// Sets compile time constants
+eka_root_macro::eka_origin_info!();
 
 const ATOM: &str = "atom";
 /// The base32 alphabet used for encoding Atom hashes.

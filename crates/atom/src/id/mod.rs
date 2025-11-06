@@ -79,6 +79,8 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize, Serializer};
 use thiserror::Error;
 
+use crate::storage::git::Root;
+
 const ID_MAX: usize = 128;
 
 //================================================================================================
@@ -268,6 +270,14 @@ impl<R> AtomId<R> {
     /// Returns a reference to the atom's Unicode identifier.
     pub fn label(&self) -> &Label {
         &self.label
+    }
+}
+
+/// in the case we already have a calculated root label combo, we should be able to infallibly
+/// construct an AtomId to check against
+impl From<(Root, Label)> for AtomId<Root> {
+    fn from((origin, label): (Root, Label)) -> Self {
+        AtomId { origin, label }
     }
 }
 

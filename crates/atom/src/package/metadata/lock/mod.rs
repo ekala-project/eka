@@ -73,11 +73,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Deref;
 use std::path::PathBuf;
+use std::sync::LazyLock;
 
 use direct::{BuildSrc, NixDep, NixGitDep, NixTarDep};
 use gix::ObjectId;
 use hex::ToHex;
-use id::{AtomDigest, Label, Name, Tag};
+use id::{AtomDigest, Compute, Label, Name, Tag};
 use manifest::SetMirror;
 use package::sets::ResolvedAtom;
 use semver::Version;
@@ -87,9 +88,38 @@ use storage::git::Root;
 use uri::serde_gix_url;
 
 use super::{GitDigest, manifest};
-use crate::{AtomId, BoxError, Compute, id, package, storage, uri};
+use crate::{AtomId, BoxError, id, package, storage, uri};
 
 pub(in crate::package) mod direct;
+
+static LOCK_ATOM: LazyLock<AtomDep> = LazyLock::new(|| {
+    let label: Label = crate::LOCK_LABEL.parse().unwrap_or_else(|e| {
+        panic!(
+            "error: {}\nlock label invalid, eka is corrupted: {}",
+            e,
+            crate::LOCK_LABEL
+        )
+    });
+    let id = AtomId::from((storage::git::LOCK_ROOT, label));
+    let hash = id.compute_hash();
+    let version = Version::parse(crate::LOCK_VERSION).unwrap_or_else(|e| {
+        panic!(
+            "error: {}\n lock version invalid, this binary cannot be trusted: {}",
+            e,
+            crate::LOCK_VERSION
+        )
+    });
+
+    let mirror = gix::url::parse(crate::EKA_ORIGIN_URL.into()).ok();
+    AtomDep {
+        label: id.label().to_owned(),
+        version,
+        set: GitDigest::Sha1(crate::EKA_ROOT_COMMIT_HASH),
+        rev: Some(GitDigest::Sha1(crate::LOCK_REV)),
+        mirror,
+        id: hash,
+    }
+});
 
 //================================================================================================
 // Types
@@ -184,7 +214,7 @@ pub struct SetDetails {
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
 #[serde(tag = "use")]
 #[allow(clippy::large_enum_variant)]
-pub(super) enum Using {
+pub(in crate::package) enum Using {
     /// an atom containing a nix expression that is just evaluated by calling `import`
     #[serde(rename = "nix")]
     NixTrivial { entry: PathBuf },
@@ -216,7 +246,9 @@ pub struct Lockfile {
     /// maintaining backward compatibility.
     pub version: u8,
 
-    pub(super) compose: Using,
+    locker: AtomDep,
+
+    pub(in crate::package) compose: Using,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) sets: BTreeMap<GitDigest, SetDetails>,
     /// The list of locked dependencies (absent or empty if none).
@@ -238,6 +270,12 @@ pub(in crate::package) enum LockError {
 //================================================================================================
 // Impls
 //================================================================================================
+
+impl Using {
+    pub(crate) fn is_config(&self) -> bool {
+        matches!(self, Self::Config)
+    }
+}
 
 impl AtomDep {
     pub(in crate::package) fn new(
@@ -296,8 +334,7 @@ impl std::fmt::Display for Dep {
 impl From<&AtomDep> for AtomId<Root> {
     fn from(dep: &AtomDep) -> Self {
         let root = Root::from(dep.set());
-        // unwrap is safe, as calculate_origin will always suceed for src of type Root
-        let id = AtomId::construct(&root, dep.label().to_owned()).unwrap();
+        let id = AtomId::from((root, dep.label().to_owned()));
         id
     }
 }
@@ -440,6 +477,7 @@ impl Default for Lockfile {
     fn default() -> Self {
         Self {
             version: 1,
+            locker: LOCK_ATOM.to_owned(),
             sets: Default::default(),
             compose: Using::default(),
             deps: Default::default(),

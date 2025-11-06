@@ -87,7 +87,7 @@ use std::path::{Path, PathBuf};
 use bstr::BStr;
 use semver::{Version, VersionReq};
 
-use crate::package::EkalaManifest;
+use crate::package::{AtomError, EkalaManifest};
 use crate::storage::git::Root;
 use crate::{AtomId, Label};
 
@@ -124,6 +124,9 @@ pub enum StorageError {
     /// a tempfile persistance error
     #[error(transparent)]
     Persist(#[from] tempfile::PersistError),
+    /// a tempfile persistance error
+    #[error(transparent)]
+    Atom(#[from] AtomError),
 }
 
 /// Type alias for unpacked atom reference information.
