@@ -103,6 +103,9 @@ pub enum StorageError {
     /// couldn't locate the storage root
     #[error("could not locate the storage root directory")]
     NotStorage,
+    /// path normalization failed
+    #[error("path normalization failed")]
+    NotNormal,
     #[error(transparent)]
     /// a document error
     Doc(#[from] crate::package::metadata::DocError),

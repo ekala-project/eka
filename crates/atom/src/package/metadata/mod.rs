@@ -104,7 +104,7 @@ pub struct AtomMap(BiBTreeMap<Label, PathBuf>);
 /// Errors that can occur when working with a `TypedDocument`.
 pub enum DocError {
     /// Missing atom from manifest
-    #[error("the atom directory disappeared or is inaccessible: {0}")]
+    #[error("the atom directory is inaccessible: {0}")]
     Missing(PathBuf),
     /// The manifest path could not be accessed.
     #[error("the ekala.toml could not be located")]
@@ -130,6 +130,7 @@ pub enum DocError {
     /// Duplicate atoms were found in the ekala manifest
     #[error("locked atoms could not be synchronized with manifest")]
     SyncFailed,
+    /// A dynamic atom must specify a composer
     #[error("Composer set not declared")]
     ComposerSet,
     /// A TOML deserialization error occurred.
@@ -670,7 +671,7 @@ impl<'a, S: LocalStorage> EkalaManager<'a, S> {
             atom.path = %package_path.as_ref().display(),
             set = %self.path.display()
         );
-        let writer = ManifestWriter::new(self.storage, &atom_toml).await?;
+        let writer = ManifestWriter::open_and_resolve(self.storage, &atom_toml).await?;
         writer.write_atomic()?;
 
         Ok(())

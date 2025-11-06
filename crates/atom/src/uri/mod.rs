@@ -74,9 +74,11 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::ops::Deref;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::LazyLock;
 
+use either::Either;
 use gix::Url;
 use lazy_regex::{Lazy, Regex};
 use nom::branch::alt;
@@ -90,7 +92,9 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use super::id::{Label, Tag};
+use crate::DocError;
 use crate::id::Error;
+use crate::storage::{LocalStorage, StorageError};
 
 #[cfg(test)]
 mod tests;
@@ -126,6 +130,12 @@ pub struct Uri {
     /// The requested Atom version.
     version: Option<VersionReq>,
 }
+
+/// Represents an atom that is searched for locally (where a full url is not needed)
+///
+/// In the `Label` case, we resolve the path from the set manifest.
+#[derive(Debug, Clone)]
+pub struct LocalAtom(Either<Label, PathBuf>);
 
 /// An error encountered when constructing the concrete types from an Atom URI.
 #[derive(Error, Debug)]
@@ -270,6 +280,56 @@ impl Deref for Aliases {
 
     fn deref(&self) -> &Self::Target {
         self.0
+    }
+}
+
+impl LocalAtom {
+    /// get the atom path associated with this local atom, if it exists
+    pub fn path_from_storage(
+        &self,
+        storage: &impl LocalStorage,
+    ) -> Result<impl AsRef<Path>, StorageError> {
+        let manifest = storage.ekala_manifest().map_err(|e| {
+            tracing::warn!(error = %e);
+            DocError::MissingEkala
+        })?;
+        let path = match &**self {
+            Either::Right(path) => &storage.normalize(path).map_err(|e| {
+                tracing::warn!(error = %e);
+                StorageError::NotNormal
+            })?,
+            Either::Left(label) => manifest
+                .set()
+                .packages()
+                .as_ref()
+                .get_by_left(label)
+                .ok_or_else(|| {
+                    tracing::warn!(%label, "passed label missing");
+                    DocError::NoLocal
+                })?,
+        };
+        Ok(path.to_owned())
+    }
+}
+
+impl FromStr for LocalAtom {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if let Ok(label) = Label::try_from(s.strip_prefix("::").unwrap_or(s)) {
+            Ok(LocalAtom(Either::Left(label)))
+        } else {
+            Ok(LocalAtom(Either::Right(PathBuf::from(s))))
+        }
+    }
+}
+
+impl Deref for LocalAtom {
+    type Target = Either<Label, PathBuf>;
+
+    fn deref(&self) -> &Self::Target {
+        let LocalAtom(inner) = self;
+        inner
     }
 }
 

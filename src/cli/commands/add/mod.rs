@@ -125,7 +125,7 @@ enum DirectSubs {
 
 /// The main entry point for the `add` subcommand.
 pub(super) async fn run(storage: &impl LocalStorage, args: Args) -> Result<()> {
-    let mut writer = atom::ManifestWriter::new(storage, &args.path).await?;
+    let mut writer = atom::ManifestWriter::open_and_resolve(storage, &args.path).await?;
 
     if let Some(AddSubs::Direct(DirectArgs {
         sub: DirectSubs::Nix(args),

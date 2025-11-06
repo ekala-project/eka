@@ -465,7 +465,7 @@ impl<'a, S: LocalStorage> ManifestWriter<'a, S> {
 
     /// Constructs a new `ManifestWriter`, ensuring that the manifest and lock file constraints
     /// are respected.
-    pub async fn new(storage: &'a S, path: &Path) -> Result<Self, AtomError> {
+    pub async fn open_and_resolve(storage: &'a S, path: &Path) -> Result<Self, AtomError> {
         use std::fs;
         let path = if path.file_name() == Some(OsStr::new(crate::ATOM_MANIFEST_NAME.as_str())) {
             path.into()
