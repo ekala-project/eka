@@ -1,7 +1,6 @@
 //! This module defines Git-specific logic for the `publish` subcommand.
 
 use std::collections::HashSet;
-use std::path::Path;
 
 use atom::package::publish::error::git::Error;
 use atom::package::publish::git::{GitOutcome, GitPublisher, GitResult};
@@ -43,7 +42,7 @@ pub(super) struct GitArgs {
 pub(super) async fn run(
     repo: &ThreadSafeRepository,
     args: PublishArgs,
-) -> GitResult<(Vec<GitResult<GitOutcome>>, Vec<Error>)> {
+) -> anyhow::Result<(Vec<GitResult<GitOutcome>>, Vec<Error>)> {
     let span = tracing::Span::current();
     span.pb_set_style(
         &ProgressStyle::with_template("{spinner:.green} {msg}: running for [{elapsed}]")
@@ -61,24 +60,25 @@ pub(super) async fn run(
 
     let mut errors = Vec::with_capacity(args.path.len());
 
-    let paths = if args.recursive {
-        let paths: HashSet<_> = if !repo.is_bare() {
-            let cwd = repo.normalize(repo.current_dir()).map_err(Box::new)?;
-            atoms
-                .into_values()
-                .filter_map(|path| path.strip_prefix(&cwd).map(Path::to_path_buf).ok())
-                .collect()
-        } else {
-            atoms.into_values().collect()
-        };
+    let paths: HashSet<_> = if args.all {
+        // FIXME: just use the AtomMap throughout the publishing process
+        let paths: HashSet<_> = atoms.as_ref().right_values().cloned().collect();
 
-        if paths.is_empty() {
-            return Err(Error::NotFound);
-        }
         paths
     } else {
-        args.path.into_iter().collect()
+        args.path
+            .iter()
+            .filter(|p| {
+                repo.normalize(p)
+                    .map(|p| atoms.as_ref().contains_right(&p))
+                    .is_ok_and(|b| b)
+            })
+            .cloned()
+            .collect()
     };
+    if paths.is_empty() {
+        return Err(Error::NotFound)?;
+    }
 
     let remote = publisher.remote();
     let remote_atoms = {

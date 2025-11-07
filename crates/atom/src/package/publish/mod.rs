@@ -79,6 +79,7 @@ use std::sync::LazyLock;
 use self::git::GitContent;
 use crate::AtomId;
 use crate::id::Label;
+use crate::package::metadata::AtomMap;
 
 pub mod error;
 pub mod git;
@@ -137,11 +138,6 @@ pub struct Record<R> {
     content: Content,
 }
 
-/// A [`HashMap`] containing all valid atoms in the current workspace.
-///
-/// The map links an [`Label`] to the file path of its manifest.
-type ValidAtoms = HashMap<Label, PathBuf>;
-
 /// A `Result` indicating that an atom may have been skipped.
 ///
 /// This is used instead of an `Option` to provide information about *which*
@@ -165,24 +161,25 @@ type PublishOutcome<R> = MaybeSkipped<Record<R>>;
 /// clean and consistent state in the store are verified before any publishing
 /// can occur. A [`Publish`] implementation can only be constructed through a
 /// builder.
-pub trait Builder<'a, R> {
+pub trait Builder {
     /// The error type returned by the [`Builder::build`] method.
     type Error;
     /// The [`Publish`] implementation to construct.
-    type Publisher: Publish<R>;
-
+    type Publisher: Publish;
     /// Collects and validates all atoms in the worktree.
     ///
     /// This method must be called before publishing to ensure that there are
     /// no duplicate atoms. It is the only way to construct a [`Publish`]
     /// implementation.
-    fn build(self) -> Result<(ValidAtoms, Self::Publisher), Self::Error>;
+    fn build(self) -> Result<(AtomMap, Self::Publisher), Self::Error>;
 }
 
 /// The primary trait for exposing atom publishing logic for a given store.
-pub trait Publish<R>: private::Sealed {
+pub trait Publish: private::Sealed {
     /// The error type returned by the publisher.
     type Error;
+    /// Represents the type which serves as the genesis in atom id calculation
+    type Genesis;
     /// The type representing the machine-readable identity for a specific version of an atom.
     type Id;
 
@@ -207,7 +204,7 @@ pub trait Publish<R>: private::Sealed {
         &self,
         paths: C,
         remotes: HashMap<Label, (semver::Version, Self::Id)>,
-    ) -> Vec<Result<PublishOutcome<R>, Self::Error>>
+    ) -> Vec<Result<PublishOutcome<Self::Genesis>, Self::Error>>
     where
         C: IntoIterator<Item = PathBuf>;
 
@@ -225,7 +222,7 @@ pub trait Publish<R>: private::Sealed {
         &self,
         path: P,
         remotes: &HashMap<Label, (semver::Version, Self::Id)>,
-    ) -> Result<PublishOutcome<R>, Self::Error>;
+    ) -> Result<PublishOutcome<Self::Genesis>, Self::Error>;
 }
 
 /// Validates the state of the atom source.
@@ -234,12 +231,12 @@ pub trait Publish<R>: private::Sealed {
 /// the store is never allowed to enter an inconsistent state. Any conditions
 /// that would result in an inconsistent state will return an error, making it
 /// impossible to construct a publisher until the state is corrected.
-trait StateValidator<R> {
+trait StateValidator {
     type Error;
-    type Publisher: Publish<R>;
+    type Publisher: Publish;
 
     /// Validates the state of the atom source.
-    fn validate(publisher: &Self::Publisher) -> Result<ValidAtoms, Self::Error>;
+    fn validate(publisher: &Self::Publisher) -> Result<AtomMap, Self::Error>;
 }
 
 //================================================================================================

@@ -80,12 +80,15 @@ pub mod git {
         /// The path given does not point to an Atom.
         #[error("The given path does not point to an Atom")]
         NotAnAtom(PathBuf),
-        /// No Atoms were found under the given directory.
-        #[error("Failed to find any Atoms under the current directory")]
+        /// No Atoms were found in the manifest which can be published.
+        #[error("Failed to find any publishable atoms")]
         NotFound,
         /// The remote is not initialized as an Ekala store.
         #[error("Remote is not initialized")]
         NotInitialized,
+        /// The remote is not initialized as an Ekala store.
+        #[error("Repository is not initialized at requested revision")]
+        NotLocallyInitialized,
         /// Failed to update a git reference.
         #[error(transparent)]
         RefUpdateFailed(#[from] gix::reference::edit::Error),
@@ -107,6 +110,9 @@ pub mod git {
         /// Failed to write a git object.
         #[error(transparent)]
         WriteFailed(#[from] object::write::Error),
+        /// Failed to deserialize
+        #[error(transparent)]
+        Deserialize(#[from] toml_edit::de::Error),
     }
 
     //================================================================================================

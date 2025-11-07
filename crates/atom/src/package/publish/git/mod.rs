@@ -45,7 +45,6 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use bstr::ByteSlice;
 use gix::diff::object::Commit as AtomCommit;
 use gix::protocol::transport::client::Transport;
 use gix::{Commit, ObjectId, Reference, Remote, Repository, Tree};
@@ -53,9 +52,10 @@ use semver::Version;
 use tokio::task::JoinSet;
 
 use super::error::git::Error;
-use super::{Builder, Content, Publish, PublishOutcome, Record, StateValidator, ValidAtoms};
+use super::{Builder, Content, Publish, PublishOutcome, Record, StateValidator};
 use crate::id::Label;
-use crate::package::metadata::AtomPaths;
+use crate::package::EkalaManifest;
+use crate::package::metadata::{AtomMap, AtomPaths};
 use crate::storage::git::Root;
 use crate::storage::{NormalizeStorePath, QueryStore};
 use crate::{Atom, AtomId};
@@ -173,12 +173,11 @@ type GitRecord = Record<Root>;
 //================================================================================================
 // Impls
 //================================================================================================
-
-impl<'a> Builder<'a, Root> for GitPublisher<'a> {
+impl<'a> Builder for GitPublisher<'a> {
     type Error = Error;
     type Publisher = GitContext<'a>;
 
-    fn build(self) -> Result<(ValidAtoms, Self::Publisher), Self::Error> {
+    fn build(self) -> Result<(AtomMap, Self::Publisher), Self::Error> {
         let publisher = GitContext::set(
             self.repo,
             self.remote.clone(),
@@ -318,8 +317,9 @@ impl<'a> GitPublisher<'a> {
     }
 }
 
-impl<'a> Publish<Root> for GitContext<'a> {
+impl<'a> Publish for GitContext<'a> {
     type Error = Error;
+    type Genesis = Root;
     type Id = ObjectId;
 
     /// Publishes a collection of Atoms to the Git store.
@@ -409,50 +409,21 @@ impl<'a> Publish<Root> for GitContext<'a> {
 
 impl<'a> super::private::Sealed for GitContext<'a> {}
 
-impl<'a> StateValidator<Root> for GitPublisher<'a> {
+impl<'a> StateValidator for GitPublisher<'a> {
     type Error = Error;
     type Publisher = GitContext<'a>;
 
-    fn validate(publisher: &Self::Publisher) -> Result<ValidAtoms, Self::Error> {
-        use gix::traverse::tree::Recorder;
-        let mut record = Recorder::default();
-
-        publisher
+    fn validate(publisher: &Self::Publisher) -> Result<AtomMap, Self::Error> {
+        if let Some(ekala_blob) = publisher
             .tree()
-            .traverse()
-            .breadthfirst(&mut record)
-            .map_err(|_| Error::NotFound)?;
-
-        let cap = calculate_capacity(record.records.len());
-        let mut atoms: HashMap<Label, PathBuf> = HashMap::with_capacity(cap);
-
-        for entry in record.records {
-            let path = PathBuf::from(entry.filepath.to_str_lossy().as_ref());
-            if entry.mode.is_blob()
-                && path.file_name() == Some(crate::ATOM_MANIFEST_NAME.as_ref())
-                && let Ok(obj) = publisher.repo.find_object(entry.oid)
-            {
-                match publisher.verify_manifest(&obj, &path) {
-                    Ok(atom) => {
-                        if let Some(duplicate) = atoms.get(atom.label()) {
-                            tracing::warn!(
-                                message = "Two atoms share the same ID",
-                                duplicate.label = %atom.label(),
-                                fst = %path.display(),
-                                snd = %duplicate.display(),
-                            );
-                            return Err(Error::Duplicates);
-                        }
-                        atoms.insert(atom.take_label(), path);
-                    },
-                    Err(e) => e.warn(),
-                }
-            }
+            .lookup_entry_by_path(crate::EKALA_MANIFEST_NAME.as_str())?
+        {
+            let manifest: EkalaManifest = toml_edit::de::from_slice(&ekala_blob.object()?.data)?;
+            let atoms = manifest.set.packages;
+            Ok(atoms)
+        } else {
+            Err(Error::NotLocallyInitialized)
         }
-
-        tracing::trace!(repo.atoms.valid.count = atoms.len());
-
-        Ok(atoms)
     }
 }
 
@@ -461,17 +432,4 @@ impl<'a> AtomContext<'a> {
         let (atom, paths) = git.find_and_verify_atom(path)?;
         Ok(Self { paths, atom, git })
     }
-}
-
-//================================================================================================
-// Functions
-//================================================================================================
-
-/// Calculates a reasonable capacity for a HashMap based on the number of records.
-fn calculate_capacity(record_count: usize) -> usize {
-    let log_count = (record_count as f64).log2();
-    let base_multiplier = 20.0;
-    let scaling_factor = (log_count - 10.0).max(0.0).powf(2.0);
-    let multiplier = base_multiplier + scaling_factor * 10.0;
-    (log_count * multiplier).ceil() as usize
 }

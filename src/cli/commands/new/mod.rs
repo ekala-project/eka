@@ -42,7 +42,7 @@ pub(super) async fn run(storage: &impl LocalStorage, args: Args) -> Result<()> {
         args.path.file_name().unwrap_or(OsStr::new("")).try_into()?
     };
 
-    let mut manager = EkalaManager::new(storage)?;
+    let mut manager = EkalaManager::open(storage)?;
 
     manager
         .new_atom_at_path(label, args.path, args.version)

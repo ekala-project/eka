@@ -310,7 +310,7 @@ impl<'a> GitContext<'a> {
 //================================================================================================
 
 /// Reads the full content of a Git blob object into a specified output format.
-fn read_blob<F, R>(obj: &Object, mut f: F) -> GitResult<R>
+pub(super) fn read_blob<F, R>(obj: &Object, mut f: F) -> GitResult<R>
 where
     F: FnMut(&mut dyn Read) -> io::Result<R>,
 {

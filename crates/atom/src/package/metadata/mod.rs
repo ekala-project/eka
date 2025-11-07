@@ -587,7 +587,7 @@ impl MetaData {
 impl<'a, S: LocalStorage> EkalaManager<'a, S> {
     /// Create a new manifest writer, traversing upward to locate the nearest ekala.toml if
     /// necessary.
-    pub fn new(storage: &'a S) -> Result<Self, AtomError> {
+    pub fn open(storage: &'a S) -> Result<Self, AtomError> {
         let path = storage
             .ekala_root_dir()
             .map_err(|e| {
@@ -613,6 +613,11 @@ impl<'a, S: LocalStorage> EkalaManager<'a, S> {
             manifest,
             storage,
         })
+    }
+
+    /// return `AtomMap` structure from the contained Ekala manifest
+    pub fn atoms(&self) -> &AtomMap {
+        self.manifest.set().packages()
     }
 
     /// writes a new, minimal atom.toml to path, and updates the ekala.toml manifest
