@@ -1,10 +1,10 @@
 <meta name="color-scheme" content="light dark">
-<link rel="stylesheet" href="../mdslides/deck.css" />
+<link rel="stylesheet" href="deck.css" />
 
 :::::::::::::::::::::::::::::::
 
 Nix Sucks; Everything Else is Worse
-===============
+===================================
 Building Better Software Supply Chains
 
 <small>Presented by Tim DeHerrera (nrdxp)</small>
