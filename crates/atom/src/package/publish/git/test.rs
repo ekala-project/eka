@@ -1,25 +1,21 @@
 use std::collections::HashMap;
 use std::os::unix::fs::MetadataExt;
+use std::path::PathBuf;
 use std::str::FromStr;
 
-use anyhow::Context;
+use anyhow::{Context, anyhow};
 use gix::prelude::ReferenceExt;
 use gix::{ObjectId, ThreadSafeRepository};
-use tempfile::{Builder, NamedTempFile};
 
 use super::super::{Content, Publish, Record};
-use crate::storage::{Init, git};
+use crate::storage::{EkalaStorage, git};
 
 //================================================================================================
 // Traits
 //================================================================================================
 
 trait MockAtom {
-    async fn mock(
-        &self,
-        id: &str,
-        version: &str,
-    ) -> Result<(NamedTempFile, ObjectId), anyhow::Error>;
+    async fn mock(&self, id: &str, version: &str) -> Result<(PathBuf, ObjectId), anyhow::Error>;
 }
 
 //================================================================================================
@@ -27,11 +23,7 @@ trait MockAtom {
 //================================================================================================
 
 impl MockAtom for gix::ThreadSafeRepository {
-    async fn mock(
-        &self,
-        label: &str,
-        version: &str,
-    ) -> Result<(NamedTempFile, ObjectId), anyhow::Error> {
+    async fn mock(&self, label: &str, version: &str) -> Result<(PathBuf, ObjectId), anyhow::Error> {
         use gix::objs::Tree;
         use gix::objs::tree::Entry;
         use semver::Version;
@@ -40,11 +32,10 @@ impl MockAtom for gix::ThreadSafeRepository {
 
         let repo = self.to_thread_local();
         let work_dir = repo.workdir().context("No workdir")?;
-        let atom_dir = Builder::new().tempdir_in(work_dir)?;
-        let atom_file = atom_dir.as_ref().join(crate::ATOM_MANIFEST_NAME.as_str());
+        let atom_dir = work_dir.join(label);
+        let atom_file = atom_dir.join(crate::ATOM_MANIFEST_NAME.as_str());
 
-        self.ekala_init(None)?;
-        let mut ekala = EkalaManager::new(self)?;
+        let mut ekala = EkalaManager::open(self)?;
         ekala
             .new_atom_at_path(label.try_into()?, &atom_dir, Version::from_str(version)?)
             .await?;
@@ -72,22 +63,35 @@ impl MockAtom for gix::ThreadSafeRepository {
         let oid = repo.write_object(tree)?.detach();
 
         let filename = atom_dir
-            .as_ref()
             .to_path_buf()
             .strip_prefix(work_dir)?
             .display()
             .to_string()
             .into();
 
-        let entry = Entry {
+        let entry_dir = Entry {
             mode: TryFrom::try_from(0o40000)
                 .map_err(|m| anyhow::anyhow!("invalid entry mode: {}", m))?,
             filename,
             oid,
         };
 
+        let filename = crate::EKALA_MANIFEST_NAME.to_string().into();
+        let buf = std::fs::read(
+            repo.ekala_root_dir()?
+                .join(crate::EKALA_MANIFEST_NAME.as_str()),
+        )?;
+        let oid = repo.write_blob(buf)?.detach();
+
+        let entry = Entry {
+            mode: TryFrom::try_from(mode)
+                .map_err(|m| anyhow::anyhow!("invalid entry mode: {}", m))?,
+            filename,
+            oid,
+        };
+
         let tree = Tree {
-            entries: vec![entry],
+            entries: vec![entry, entry_dir],
         };
 
         let oid = repo.write_object(tree)?.detach();
@@ -104,11 +108,7 @@ impl MockAtom for gix::ThreadSafeRepository {
             )?
             .detach();
 
-        let tmp = NamedTempFile::from_parts(
-            std::fs::File::open(&atom_file)?,
-            tempfile::TempPath::from_path(atom_file),
-        );
-        Ok((tmp, atom_oid))
+        Ok((atom_file, atom_oid))
     }
 }
 
@@ -116,30 +116,53 @@ impl MockAtom for gix::ThreadSafeRepository {
 // Functions
 //================================================================================================
 
+use tracing_subscriber::filter::EnvFilter;
+use tracing_subscriber::fmt;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+fn init_tracing() {
+    tracing_subscriber::registry()
+        .with(fmt::layer().compact())  // Or .pretty() for nicer formatting
+        .with(EnvFilter::from_default_env())  // Respects RUST_LOG env var
+        .init();
+}
+
 #[tokio::test]
 async fn publish_atom() -> Result<(), anyhow::Error> {
     use super::{Builder, GitPublisher};
     use crate::id::Label;
     use crate::storage::{Init, QueryStore};
-    let (repo, _remote) = git::test::init_repo_and_remote()?;
-    let safe = ThreadSafeRepository::open(repo.as_ref())?;
-    let repo = safe.to_thread_local();
+    init_tracing();
+
+    let (repo_dir, _remote) = git::test::init_repo_and_remote()?;
+    std::env::set_current_dir(&repo_dir)?;
+    let repo = ThreadSafeRepository::open(repo_dir.as_ref())?;
+    let repo = repo.to_thread_local();
     let remote = repo.find_remote("origin")?;
     let progress = &tracing::info_span!("test");
-    remote.ekala_init(None)?;
     remote.get_refs(Some("refs/heads/*:refs/heads/*"), None)?;
+    repo.ekala_init(None)?;
+    remote.ekala_init(None)?;
 
     let label = "foo";
-    let (file_path, src) = safe.mock(label, "0.1.0").await?;
+    let repo = repo.into_sync();
+    let (file_path, src) = repo.mock(label, "0.1.0").await?;
+    let repo = repo.to_thread_local();
 
     let (paths, publisher) = GitPublisher::new(&repo, "origin", "HEAD", progress)?.build()?;
     let path = paths
-        .get(&Label::try_from(label)?)
+        .as_ref()
+        .get_by_left(&Label::try_from(label)?)
         .context("path is messed up")?;
     let result = publisher.publish_atom(path, &HashMap::new())?;
     let mut errors = Vec::with_capacity(1);
     publisher.await_pushes(&mut errors).await;
-    (!errors.is_empty()).then_some(0).context("push errors")?;
+    if !errors.is_empty() {
+        for e in errors {
+            tracing::error!(%e)
+        }
+        return Err(anyhow!("push errors"));
+    }
 
     let content = match result {
         Ok(Record {
@@ -155,7 +178,7 @@ async fn publish_atom() -> Result<(), anyhow::Error> {
         .find_commit(content_ref.into_fully_peeled_id()?)?
         .tree()?
         .detach();
-    let dir = file_path.as_ref().to_path_buf();
+    let dir = file_path.to_path_buf();
     let dir = dir
         .parent()
         .and_then(|f| f.file_name())
@@ -166,7 +189,7 @@ async fn publish_atom() -> Result<(), anyhow::Error> {
         .lookup_entry_by_path(dir)?
         .ok_or(anyhow::anyhow!("no tree in orgin"))?
         .object()?;
-    let path = file_path.path().strip_prefix(repo.workdir().context("")?)?;
+    let path = file_path.strip_prefix(repo.workdir().context("")?)?;
 
     assert_eq!(origin_id, src);
     assert_eq!(path, content.path);

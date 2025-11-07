@@ -233,6 +233,7 @@ dependencies = [
  "toml_edit 0.23.5",
  "tracing",
  "tracing-indicatif",
+ "tracing-subscriber",
  "unicode-ident",
  "unicode-normalization",
  "url",

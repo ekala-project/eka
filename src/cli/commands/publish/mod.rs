@@ -7,7 +7,6 @@ mod git;
 
 use std::path::PathBuf;
 
-use anyhow::Result;
 use atom::package::publish::Stats;
 use atom::package::publish::error::PublishError;
 use clap::Parser;
@@ -21,12 +20,12 @@ use gix::ThreadSafeRepository;
 #[derive(Parser, Debug)]
 #[command(arg_required_else_help = true, next_help_heading = "Publish Options")]
 pub(in super::super) struct PublishArgs {
-    /// Publish all the atoms in and under the current working directory.
+    /// Publish all the atoms in the set.
     #[arg(long, short, conflicts_with = "path")]
-    recursive: bool,
+    all: bool,
 
     /// Path(s) to the atom(s) to publish
-    #[arg(required_unless_present = "recursive")]
+    #[arg(required_unless_present = "all")]
     path: Vec<PathBuf>,
     #[command(flatten)]
     store: StoreArgs,
@@ -47,7 +46,7 @@ struct StoreArgs {
 pub(super) async fn run(
     repo: &'static ThreadSafeRepository,
     args: PublishArgs,
-) -> Result<Stats, PublishError> {
+) -> anyhow::Result<Stats> {
     let mut stats = Stats::default();
     use atom::package::publish::{Content, error};
     use {Err as Skipped, Ok as Published};
@@ -84,7 +83,7 @@ pub(super) async fn run(
     tracing::info!(stats.published, stats.skipped, stats.failed);
 
     if !errors.is_empty() {
-        return Err(PublishError::Git(error::git::Error::Failed));
+        return Err(PublishError::Git(error::git::Error::Failed))?;
     }
     Ok(stats)
 }

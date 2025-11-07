@@ -92,7 +92,7 @@ impl<'a, 'b, S: LocalStorage> SetResolver<'a, 'b, S> {
     /// Creates a new `SetResolver` to validate the package sets in a manifest.
     pub(super) fn new(storage: &'a S, manifest: &'b Manifest) -> Result<Self, AtomError> {
         let len = manifest.package().sets().len();
-        let ekala = EkalaManager::new(storage)?;
+        let ekala = EkalaManager::open(storage)?;
         Ok(Self {
             manifest,
             ekala,
