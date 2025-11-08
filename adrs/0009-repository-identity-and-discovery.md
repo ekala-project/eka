@@ -97,12 +97,10 @@ An atom's identity is a cryptographic hash. This ADR formalizes its components.
 To support this architecture, a unified and consistent Git refspec is required. All `ekala`-specific refs will live under the `refs/ekala/` namespace.
 
 - **Repository Identity**: Repository identity is established through a single ref that points to the latest initialization commit, leveraging Git's Merkle tree structure (where each commit contains references to its parent commits).
-
   - **Format**: `refs/ekala/init`
   - **Content**: Points to the entropy-injected initialization commit hash. The root commit is implicitly encoded through the commit's ancestry chain, eliminating the need for a separate root ref.
 
 - **Atom Content**: The primary ref for an atom points directly to its content. This path is optimized for the most common operation.
-
   - **Format**: `refs/ekala/atoms/<atom-label>/<version>`
 
 - **Atom Metadata**: Secondary information about an atom is stored in parallel hierarchies, correlated by the shared `<atom-label>/<version>` path.

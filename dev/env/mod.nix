@@ -1,12 +1,13 @@
 let
   inherit (deps) pins;
+  system = cfg.platform;
 in
 {
   Shell = mod.shell;
   Pkgs = mod.pkgs;
-  pkgs = pins.nixpkgs.import "" { system = cfg.platform; };
+  pkgs = pins.nixpkgs.import "" { inherit system; };
   fenix = pins.fenix.import "" {
-    system = cfg.platform;
+    inherit system;
     inherit (mod) pkgs;
   };
 }

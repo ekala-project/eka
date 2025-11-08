@@ -58,7 +58,6 @@ Eka requires a lockfile mechanism to capture resolved dependencies for reproduci
    ```
 
    **Dependency Types**:
-
    - **atom**: `AtomDep` with id, version, rev, optional url/path
    - **pin**: `PinDep` with name, url, hash, optional path
    - **pin+git**: `PinGitDep` with name, url, rev, optional path
@@ -66,11 +65,9 @@ Eka requires a lockfile mechanism to capture resolved dependencies for reproduci
    - **from**: `FromDep` with name, from, optional get/path
 
    **Source Types**:
-
    - **build**: `BuildSrc` with name, url, hash
 
    Validation rules:
-
    - Tagged enum ensures type determines required fields at compile time
    - `#[serde(deny_unknown_fields)]` prevents unknown fields
    - `WrappedNixHash` for Nix-compatible hash validation
@@ -78,7 +75,6 @@ Eka requires a lockfile mechanism to capture resolved dependencies for reproduci
    - Paths relative to declaring atom; no cycles in 'from' refs
 
 2. **API Design**:
-
    - In `crates/atom/src/lock.rs`: Define `Lockfile` struct with `Option<Vec<Dep>>`, `Option<Vec<Src>>` for optional serialization.
      - Tagged enums: `Dep` with variants (Atom, Pin, PinGit, PinTar, From), `Src` with variants (Build).
      - `WrappedNixHash` wrapper for Nix-compatible hash handling.
@@ -90,7 +86,6 @@ Eka requires a lockfile mechanism to capture resolved dependencies for reproduci
    - CLI Integration: In `src/cli/commands/resolve/mod.rs`, parse args (path, output, mode), call API, write atom.lock.
 
 3. **Remote Querying Strategy**:
-
    - Use `gix` crate for efficient operations to fetch refs without cloning.
    - Cache: Local directory `~/.eka/cache/refs/` with JSON files per repo (TTL 1h, invalidate on version change).
    - For atoms: Query `refs/atoms/{id}/*` patterns to list versions/revisions.
@@ -99,7 +94,6 @@ Eka requires a lockfile mechanism to capture resolved dependencies for reproduci
    - Git remote handling: Support for custom remotes via `--remote` flag in CLI.
 
 4. **Resolution Flow**:
-
    - Parse manifest for direct deps (URIs/ids).
    - For each dependency: Resolve URI to store ref, fetch available versions via querying.
    - Select matching version (latest/default or specified).
@@ -110,7 +104,6 @@ Eka requires a lockfile mechanism to capture resolved dependencies for reproduci
    - Support for build-time sources (registries, etc.).
 
 5. **Integration & Extensibility**:
-
    - Nix: Generate Nix-compatible imports from lock (future: export to flake.lock).
    - Type Safety: Tagged enums ensure compile-time validation of dependency types.
    - Testing: Use handwritten examples as golden tests via insta in `crates/atom/src/lock/test.rs`.

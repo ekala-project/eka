@@ -19,7 +19,6 @@ The implementation introduces a `BlobCacheManager` that stores cache metadata in
 1.  **`BlobCacheManager` Implementation in `snix-castore`:**
 
     A new `BlobCacheManager` is implemented in `snix-castore`. It acts as the cache backend for the `http-cache-reqwest` middleware.
-
     - **Storage:** It uses a `redb` database to store a mapping from cache keys (URLs) to the `B3Digest` of the cached response body. The response bodies themselves are stored in the `BlobService`.
     - **Serialization:** The `HttpResponse` and `CachePolicy` are serialized together into the blob store using `bincode`.
 
@@ -54,7 +53,6 @@ The implementation introduces a `BlobCacheManager` that stores cache metadata in
 2.  **`Fetcher` Modification in `snix-glue`:**
 
     The `Fetcher` is updated to use a `reqwest_middleware::ClientWithMiddleware` and its constructor is modified to accept an optional cache path.
-
     - **`Fetcher::new`:** The constructor now takes an optional `cache_path: Option<PathBuf>`. If a path is provided, it initializes the `BlobCacheManager` and configures the `http-cache-reqwest` middleware. If not, it falls back to a non-caching client.
     - **Error Handling:** The `FetcherError` enum is extended to include errors from the middleware.
 
@@ -96,7 +94,6 @@ The implementation introduces a `BlobCacheManager` that stores cache metadata in
 **Consequences:**
 
 - **Pros:**
-
   - **Explicit Configuration:** The caching behavior is made explicit through the `cache_path` parameter, improving clarity.
   - **Unified Storage:** The cache leverages the existing `BlobService`, storing cached HTTP responses alongside other content-addressed data. This simplifies storage management and allows for potential deduplication.
   - **Backend Agnostic:** The solution is not tied to a specific `BlobService` implementation (like `ObjectStoreBlobService`) and works with any compatible backend.
