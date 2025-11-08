@@ -1,4 +1,8 @@
 let
-  inherit (import ./dev) env;
+  dev = import ./dev {
+    extraConfig = {
+      platform = builtins.currentSystem or "x86_64-linux";
+    };
+  };
 in
-env.shell
+dev.shell
