@@ -1,0 +1,189 @@
+<meta name="color-scheme" content="light dark">
+<link rel="stylesheet" href="deck.css" />
+
+:::::::::::::::::::::::::::::::
+
+Nix Sucks; Everything Else is Worse
+===================================
+Building Better Software Supply Chains
+
+<small>Presented by Tim DeHerrera (nrdxp)</small>
+
+:::::::::::::::::::::::::::::::
+
+The Problem: Entropy
+====================
+
+* "Works on my machine" issues
+* Dependency conflicts
+* Supply chain attacks
+* Non-reproducible environments
+
+<small><small>This is a universal problem (Mobile, Mac, Windows, Linux)</small></small>
+
+:::::::::::::::::::::::::::::::
+
+The Purported Solution: Package Managers
+========================================
+
+* **Like a hacker's app store**
+* Install software onto your machine
+* Manage dependencies automatically
+* Handle updates and removals
+
+<small><small>_But..._ package managers don't solve the reproducibility problem we just described</small></small>
+
+<small><small>💡 **Demo:** Run `./examples/01-environment-degradation.sh` to see how package environments degrade over time</small></small>
+
+:::::::::::::::::::::::::::::::
+
+How Do You _Actually_ Solve This?
+===============================
+
+**We Know How: Basic Cryptography**
+
+* Hash: Unique fingerprint of content
+* Data structures: Organized storage
+* Merkle tree: Efficient verification
+
+<small><small>💡 **Demo:** Run `./examples/02-merkle-tree-demo.sh` to build a Merkle tree from scratch</small></small>
+
+<small><small>Now that we understand cryptographic verification, let's see how existing "solutions" fall short</small></small>
+
+:::::::::::::::::::::::::::::::
+
+Existing "Solutions" Don't Do This
+===============================
+
+* Virtual environments (venv, conda)
+  * doesn't prevent conflicts or guarantee reproducibility
+* Containers (Docker)
+  * bundles everything into mutable black boxes
+* Lockfiles (package-lock.json)
+  * relies on centralized registries vulnerable to attacks
+
+<small>All have limitations in reproducibility and security we know how to solve</small>
+
+<small><small>💡 **Demo:** Run `./examples/03-docker-limitations-demo.sh` to see why containers don't solve reproducibility</small></small>
+
+:::::::::::::::::::::::::::::::
+
+Tools Which "Do the Right Thing"
+===============================
+
+**A Bit of Inspiration**
+
+* **Git**: Commits as Merkle trees
+* **Bitcoin**: Transaction verification
+* **Benefits**: Tamper-proof, decentralized
+
+<small>_But..._ these tools aren't software package managers</small>
+
+:::::::::::::::::::::::::::::::
+
+Nix Does This!
+==============
+
+* **Derivations**: Static build recipes
+* **Mathematical closure**: All dependencies in Merkle tree
+* **_Pure_ functions**: Same inputs = same outputs
+
+<small><small>💡 **Demo:** Run `./examples/04-static-build-recipes.sh` to see derivations vs traditional builds</small></small>
+
+:::::::::::::::::::::::::::::::
+
+Building Derivations
+====================
+
+* High-level Nix language
+* Pure functions vs procedures
+* JSON with functions (so they say)
+
+<small><small>💡 **Quick Demo:** Let's see a simple Nix expression</small></small>
+
+:::::::::::::::::::::::::::::::
+
+Nix Store
+=========
+
+* Cryptographically addressed paths
+* `/nix/store/<hash>-name`
+* Immutable, reproducible
+
+:::::::::::::::::::::::::::::::
+
+What's Good About Nix
+=====================
+
+* Perfect reproducibility of build inputs
+* Enables cryptographic security
+* [Large package ecosystem](https://repology.org/repositories/graphs)
+* Declarative configuration
+
+:::::::::::::::::::::::::::::::
+
+What's Wrong with Nix
+=====================
+
+* Too low-level, no package abstraction
+* **Doesn't effectively leverage the security it enables**
+* Nixpkgs tightly coupled
+* Incredibly slow and heavyweight
+* Complex language, high cognitive load
+* No abstract interface to outside world
+
+<small><small>💡 **Live Demo:** Let's explore nixpkgs to see the pain of version management and coupling</small></small>
+
+:::::::::::::::::::::::::::::::
+
+How Atoms Solve It
+==================
+
+* Proper package abstraction
+* Efficient tracking and querying
+* Version resolution support
+* Decentralized infrastructure
+* No single points of failure
+
+<small><small>💡 **Demo:** Run `./examples/07-eka-atoms-demo.sh` to see real published atoms and Eka's interface</small></small>
+
+:::::::::::::::::::::::::::::::
+
+How Eka Solves It
+=================
+
+* High-level interface to Nix
+* Manifest/lockfile separation
+* Abstract interaction with impure world
+* Sandboxed runtime options
+
+<small><small>💡 **Demo:** Run `./examples/08-eka-workflow-demo.sh` to see the complete Eka workflow in action</small></small>
+
+:::::::::::::::::::::::::::::::
+
+EOS: The Future
+===============
+
+* Distributed software delivery
+* Distributed metadata and trust
+* Decentralized querying
+* No central authority needed
+
+:::::::::::::::::::::::::::::::
+
+Lessons Learned
+===============
+
+* **Efficiency**: From Nix's slowness
+* **Decentralization**: From registry backlash
+* **Abstraction**: From low-level pain
+* **Natural Design**: Play to strengths, mitigate weaknesses
+
+:::::::::::::::::::::::::::::::
+
+Q&A
+===
+
+Thank you!
+
+<small>Questions?</small>

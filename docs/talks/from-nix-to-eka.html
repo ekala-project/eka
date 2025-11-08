@@ -1,0 +1,161 @@
+<meta name="color-scheme" content="light dark">
+<link rel="stylesheet" href="deck.css" />
+<article>
+<section id='page-1'>
+<h1>Nix Sucks; Everything Else is Worse</h1>
+<p>Building Better Software Supply Chains</p>
+<p><small>Presented by Tim DeHerrera (nrdxp)</small></p>
+</section>
+<section id='page-2'>
+<h1>The Problem: Entropy</h1>
+<ul>
+<li>&quot;Works on my machine&quot; issues</li>
+<li>Dependency conflicts</li>
+<li>Supply chain attacks</li>
+<li>Non-reproducible environments</li>
+</ul>
+<p><small><small>This is a universal problem (Mobile, Mac, Windows, Linux)</small></small></p>
+</section>
+<section id='page-3'>
+<h1>The Purported Solution: Package Managers</h1>
+<ul>
+<li><strong>Like a hacker's app store</strong></li>
+<li>Install software onto your machine</li>
+<li>Manage dependencies automatically</li>
+<li>Handle updates and removals</li>
+</ul>
+<p><small><small><em>But...</em> package managers don't solve the reproducibility problem we just described</small></small></p>
+<p><small><small>💡 <strong>Demo:</strong> Run <code>./examples/01-environment-degradation.sh</code> to see how package environments degrade over time</small></small></p>
+</section>
+<section id='page-4'>
+<h1>How Do You <em>Actually</em> Solve This?</h1>
+<p><strong>We Know How: Basic Cryptography</strong></p>
+<ul>
+<li>Hash: Unique fingerprint of content</li>
+<li>Data structures: Organized storage</li>
+<li>Merkle tree: Efficient verification</li>
+</ul>
+<p><small><small>💡 <strong>Demo:</strong> Run <code>./examples/02-merkle-tree-demo.sh</code> to build a Merkle tree from scratch</small></small></p>
+<p><small><small>Now that we understand cryptographic verification, let's see how existing &quot;solutions&quot; fall short</small></small></p>
+</section>
+<section id='page-5'>
+<h1>Existing &quot;Solutions&quot; Don't Do This</h1>
+<ul>
+<li>Virtual environments (venv, conda)<ul>
+<li>doesn't prevent conflicts or guarantee reproducibility</li>
+</ul>
+</li>
+<li>Containers (Docker)<ul>
+<li>bundles everything into mutable black boxes</li>
+</ul>
+</li>
+<li>Lockfiles (package-lock.json)<ul>
+<li>relies on centralized registries vulnerable to attacks</li>
+</ul>
+</li>
+</ul>
+<p><small>All have limitations in reproducibility and security we know how to solve</small></p>
+<p><small><small>💡 <strong>Demo:</strong> Run <code>./examples/03-docker-limitations-demo.sh</code> to see why containers don't solve reproducibility</small></small></p>
+</section>
+<section id='page-6'>
+<h1>Tools Which &quot;Do the Right Thing&quot;</h1>
+<p><strong>A Bit of Inspiration</strong></p>
+<ul>
+<li><strong>Git</strong>: Commits as Merkle trees</li>
+<li><strong>Bitcoin</strong>: Transaction verification</li>
+<li><strong>Benefits</strong>: Tamper-proof, decentralized</li>
+</ul>
+<p><small><em>But...</em> these tools aren't software package managers</small></p>
+</section>
+<section id='page-7'>
+<h1>Nix Does This!</h1>
+<ul>
+<li><strong>Derivations</strong>: Static build recipes</li>
+<li><strong>Mathematical closure</strong>: All dependencies in Merkle tree</li>
+<li><strong><em>Pure</em> functions</strong>: Same inputs = same outputs</li>
+</ul>
+<p><small><small>💡 <strong>Demo:</strong> Run <code>./examples/04-static-build-recipes.sh</code> to see derivations vs traditional builds</small></small></p>
+</section>
+<section id='page-8'>
+<h1>Building Derivations</h1>
+<ul>
+<li>High-level Nix language</li>
+<li>Pure functions vs procedures</li>
+<li>JSON with functions (so they say)</li>
+</ul>
+<p><small><small>💡 <strong>Quick Demo:</strong> Let's see a simple Nix expression</small></small></p>
+</section>
+<section id='page-9'>
+<h1>Nix Store</h1>
+<ul>
+<li>Cryptographically addressed paths</li>
+<li><code>/nix/store/&lt;hash&gt;-name</code></li>
+<li>Immutable, reproducible</li>
+</ul>
+</section>
+<section id='page-10'>
+<h1>What's Good About Nix</h1>
+<ul>
+<li>Perfect reproducibility of build inputs</li>
+<li>Enables cryptographic security</li>
+<li><a href="https://repology.org/repositories/graphs">Large package ecosystem</a></li>
+<li>Declarative configuration</li>
+</ul>
+</section>
+<section id='page-11'>
+<h1>What's Wrong with Nix</h1>
+<ul>
+<li>Too low-level, no package abstraction</li>
+<li><strong>Doesn't effectively leverage the security it enables</strong></li>
+<li>Nixpkgs tightly coupled</li>
+<li>Incredibly slow and heavyweight</li>
+<li>Complex language, high cognitive load</li>
+<li>No abstract interface to outside world</li>
+</ul>
+<p><small><small>💡 <strong>Live Demo:</strong> Let's explore nixpkgs to see the pain of version management and coupling</small></small></p>
+</section>
+<section id='page-12'>
+<h1>How Atoms Solve It</h1>
+<ul>
+<li>Proper package abstraction</li>
+<li>Efficient tracking and querying</li>
+<li>Version resolution support</li>
+<li>Decentralized infrastructure</li>
+<li>No single points of failure</li>
+</ul>
+<p><small><small>💡 <strong>Demo:</strong> Run <code>./examples/07-eka-atoms-demo.sh</code> to see real published atoms and Eka's interface</small></small></p>
+</section>
+<section id='page-13'>
+<h1>How Eka Solves It</h1>
+<ul>
+<li>High-level interface to Nix</li>
+<li>Manifest/lockfile separation</li>
+<li>Abstract interaction with impure world</li>
+<li>Sandboxed runtime options</li>
+</ul>
+<p><small><small>💡 <strong>Demo:</strong> Run <code>./examples/08-eka-workflow-demo.sh</code> to see the complete Eka workflow in action</small></small></p>
+</section>
+<section id='page-14'>
+<h1>EOS: The Future</h1>
+<ul>
+<li>Distributed software delivery</li>
+<li>Distributed metadata and trust</li>
+<li>Decentralized querying</li>
+<li>No central authority needed</li>
+</ul>
+</section>
+<section id='page-15'>
+<h1>Lessons Learned</h1>
+<ul>
+<li><strong>Efficiency</strong>: From Nix's slowness</li>
+<li><strong>Decentralization</strong>: From registry backlash</li>
+<li><strong>Abstraction</strong>: From low-level pain</li>
+<li><strong>Natural Design</strong>: Play to strengths, mitigate weaknesses</li>
+</ul>
+</section>
+<section id='page-16'>
+<h1>Q&amp;A</h1>
+<p>Thank you!</p>
+<p><small>Questions?</small></p>
+</section>
+</article>
