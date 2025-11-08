@@ -11,7 +11,7 @@
 //! facilitating unambiguous identification and retrieval across diverse
 //! repositories. This is achieved through:
 //!
-//! - An immutable **origin** identifier (e.g., a repository's root commit hash) to anchor the
+//! - An immutable **genesis** identifier (e.g., a repository's root commit hash) to anchor the
 //!   namespace.
 //! - A human-readable **label** (moniker) that is validated for descriptiveness and safety.
 //! - A machine-readable **id** that combines the origin and label into a globally unique
@@ -50,7 +50,7 @@
 //!
 //! ```rust,no_run
 //! use atom::storage::git::Root;
-//! use atom::{AtomId, Compute, Label, Origin};
+//! use atom::{AtomId, Compute, Genesis, Label};
 //!
 //! // Create a validated atom label.
 //! let label = Label::try_from("my-atom").unwrap();
@@ -103,7 +103,7 @@ pub struct AtomDigest([u8; 32]);
 /// the oldest commit in a Git repository).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct AtomId<R> {
-    origin: R,
+    genesis: R,
     label: Label,
 }
 
@@ -165,7 +165,7 @@ pub struct Tag(String);
 ///
 /// This trait provides a method to compute a cryptographically secure hash
 /// that can serve as a unique identifier for an atom in storage backends.
-pub trait Compute<'id, T>: Borrow<[u8]> {
+pub trait Compute: Borrow<[u8]> {
     /// Computes the BLAKE3 hash of this `AtomId`.
     ///
     /// The hash is keyed with the atom's root value, ensuring that atoms with
@@ -175,22 +175,24 @@ pub trait Compute<'id, T>: Borrow<[u8]> {
     ///
     /// An `IdHash` containing the 32-byte BLAKE3 hash and a reference to the
     /// original `AtomId`.
-    fn compute_hash(&'id self) -> AtomDigest;
+    fn compute_hash(&self) -> AtomDigest;
 }
 
 /// A trait for constructing new instances of an `AtomId`.
 ///
 /// This trait defines how to calculate the `root` field for an `AtomId`.
-pub trait Origin<R> {
+pub trait Genesis {
     /// The error type returned by the `calculate_origin` method.
     type Error;
+    /// The type representing the genesis hash
+    type Genesis;
 
     /// Calculates the root field for the `AtomId`.
     ///
     /// # Errors
     ///
     /// This function will return an error if the calculation fails.
-    fn calculate_origin(&self) -> Result<R, Self::Error>;
+    fn calculate_genesis(&self) -> Result<Self::Genesis, Self::Error>;
 }
 
 /// A trait representing the unambiguous rules to validate and construct an identifier.
@@ -278,14 +280,14 @@ impl<R> AtomId<R> {
 /// in the case we already have a calculated root label combo, we should be able to infallibly
 /// construct an AtomId to check against
 impl From<(Root, Label)> for AtomId<Root> {
-    fn from((origin, label): (Root, Label)) -> Self {
-        AtomId { origin, label }
+    fn from((genesis, label): (Root, Label)) -> Self {
+        AtomId { genesis, label }
     }
 }
 
 impl<R> AtomId<R>
 where
-    for<'id> AtomId<R>: Compute<'id, R>,
+    for<'id> AtomId<R>: Compute,
 {
     /// Computes an atom's origin and constructs its ID.
     ///
@@ -296,15 +298,15 @@ where
     /// This function will return an error if the call to `calculate_origin` fails.
     pub fn construct<T>(src: &T, label: Label) -> Result<Self, T::Error>
     where
-        T: Origin<R>,
+        T: Genesis<Genesis = R>,
     {
-        let origin = src.calculate_origin()?;
-        Ok(AtomId { origin, label })
+        let genesis = src.calculate_genesis()?;
+        Ok(AtomId { genesis, label })
     }
 
     /// Returns the root field, which serves as a derived key for the BLAKE3 hash.
     pub fn root(&self) -> &R {
-        &self.origin
+        &self.genesis
     }
 }
 
@@ -352,11 +354,11 @@ impl<T> Borrow<[u8]> for AtomId<T> {
     }
 }
 
-impl<'id, R: AsRef<[u8]>> Compute<'id, R> for AtomId<R> {
-    fn compute_hash(&'id self) -> AtomDigest {
+impl<R: AsRef<[u8]>> Compute for AtomId<R> {
+    fn compute_hash(&self) -> AtomDigest {
         use blake3::Hasher;
 
-        let key = blake3::derive_key("AtomId", self.origin.as_ref());
+        let key = blake3::derive_key("AtomId", self.genesis.as_ref());
 
         let mut hasher = Hasher::new_keyed(&key);
         hasher.update(self.label.as_bytes());
@@ -366,7 +368,7 @@ impl<'id, R: AsRef<[u8]>> Compute<'id, R> for AtomId<R> {
 
 impl<R> Display for AtomId<R>
 where
-    for<'id> AtomId<R>: Compute<'id, R>,
+    for<'id> AtomId<R>: Compute,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = self.compute_hash();

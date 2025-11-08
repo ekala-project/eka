@@ -39,7 +39,7 @@ use std::path::PathBuf;
 use either::Either;
 use gix::ObjectId;
 use gix::protocol::transport::client::Transport;
-use id::{Name, Origin, Tag};
+use id::{Genesis, Name, Tag};
 use lock::direct::NixUrls;
 use lock::{AtomDep, SetDetails};
 use metadata::manifest::{AtomReq, AtomWriter, SetMirror, WriteDeps};
@@ -186,12 +186,12 @@ impl<'a, 'b, S: LocalStorage> SetResolver<'a, 'b, S> {
     /// process). Remote mirror results are collected asynchronously and processed later in
     /// `get_and_check_sets`.
     fn process_mirror(&mut self, set_tag: &'b Tag, mirror: &'b SetMirror) -> Result<(), BoxError> {
-        use crate::id::Origin;
+        use crate::id::Genesis;
         use crate::storage::{QueryStore, QueryVersion};
 
         match mirror {
             SetMirror::Local => {
-                if let Ok(root) = self.ekala.storage.ekala_root(None) {
+                if let Ok(root) = self.ekala.storage.ekala_genesis(None) {
                     self.check_set_consistency(set_tag, root, &SetMirror::Local)?;
                     self.update_sets(set_tag, root, SetMirror::Local);
                 } else {
@@ -209,7 +209,7 @@ impl<'a, 'b, S: LocalStorage> SetResolver<'a, 'b, S> {
                     })
                     .await?;
                     let atoms = atoms?;
-                    let root = atoms.calculate_origin().inspect_err(|_| {
+                    let root = atoms.calculate_genesis().inspect_err(|_| {
                         tracing::warn!(
                             set.tag = %set_name,
                             set.mirror = %url,
@@ -506,7 +506,7 @@ impl Uri {
         if url.is_some_and(|u| u.scheme != gix::url::Scheme::File) {
             let url = url.unwrap();
             let atoms = url.get_atoms(transport)?;
-            let ObjectId::Sha1(root) = *atoms.calculate_origin()?;
+            let ObjectId::Sha1(root) = *atoms.calculate_genesis()?;
             let (version, oid) = <gix::url::Url as QueryVersion>::process_highest_match(
                 atoms.clone(),
                 label,
@@ -816,7 +816,7 @@ impl<'a, S: LocalStorage> ManifestWriter<'a, S> {
             let dep = lock::Dep::Atom(atom.to_owned());
             self.insert_or_update_and_log(Either::Left(id), &dep);
             Ok(atom)
-        } else if let Ok(root) = self.resolved.ekala.storage.ekala_root(None) {
+        } else if let Ok(root) = self.resolved.ekala.storage.ekala_genesis(None) {
             let uri = Uri::from((id.label().to_owned(), Some(req)));
             let (_, atom) = self.resolve_from_local(&uri, root).map_err(|e| {
                 tracing::error!(message = %e);
@@ -1024,10 +1024,15 @@ impl<'a, S: LocalStorage> ManifestWriter<'a, S> {
             uri.resolve(transport)
         } else {
             /* we are in a local git repository */
-            let root = self.resolved.ekala.storage.ekala_root(None).map_err(|e| {
-                tracing::error!(message = %e);
-                crate::storage::git::Error::RootNotFound
-            })?;
+            let root = self
+                .resolved
+                .ekala
+                .storage
+                .ekala_genesis(None)
+                .map_err(|e| {
+                    tracing::error!(message = %e);
+                    crate::storage::git::Error::RootNotFound
+                })?;
 
             self.resolve_from_local(uri, root)
         }

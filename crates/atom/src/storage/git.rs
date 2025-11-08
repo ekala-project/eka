@@ -52,7 +52,7 @@ use semver::Version;
 use thiserror::Error as ThisError;
 
 use super::{EkalaStorage, Init, NormalizeStorePath, QueryStore, QueryVersion, UnpackedRef};
-use crate::id::Origin;
+use crate::id::Genesis;
 use crate::package::AtomError;
 use crate::package::metadata::{DocError, EkalaManifest, GitDigest};
 use crate::{AtomId, Label};
@@ -227,10 +227,11 @@ impl AsRef<[u8]> for Root {
     }
 }
 
-impl<'a> Origin<Root> for Commit<'a> {
+impl<'a> Genesis for Commit<'a> {
     type Error = Error;
+    type Genesis = Root;
 
-    fn calculate_origin(&self) -> Result<Root, Self::Error> {
+    fn calculate_genesis(&self) -> Result<Root, Self::Error> {
         use gix::revision::walk::Sorting;
         use gix::traverse::commit::simple::CommitTimeOrder;
         let mut walk = self
@@ -288,9 +289,9 @@ impl Init for ThreadSafeRepository {
         local.ekala_init(transport)
     }
 
-    fn ekala_root(&self, transport: Option<&mut Self::Transport>) -> Result<Root, Self::Error> {
+    fn ekala_genesis(&self, transport: Option<&mut Self::Transport>) -> Result<Root, Self::Error> {
         let local = self.to_thread_local();
-        local.ekala_root(transport)
+        local.ekala_genesis(transport)
     }
 
     fn commit_init(&self, content: &str) -> Result<(), Self::Error> {
@@ -374,10 +375,10 @@ impl Init for gix::Repository {
         Ok(())
     }
 
-    fn ekala_root(&self, _: Option<&mut ()>) -> Result<Root, Self::Error> {
+    fn ekala_genesis(&self, _: Option<&mut ()>) -> Result<Root, Self::Error> {
         self.head_commit()
             .map_err(|e| Error::Generic(Box::new(e)))?
-            .calculate_origin()
+            .calculate_genesis()
     }
 }
 
@@ -419,11 +420,11 @@ impl<'repo> Init for gix::Remote<'repo> {
     ///
     /// On success, it returns the verified [`Root`] commit ID.
     #[tracing::instrument(skip(transport))]
-    fn ekala_root(
+    fn ekala_genesis(
         &self,
         transport: Option<&mut Box<dyn Transport + Send>>,
     ) -> Result<Root, Self::Error> {
-        use crate::id::Origin;
+        use crate::id::Genesis;
 
         let span = tracing::Span::current();
         crate::log::set_sub_task(&span, "💪 ensuring consistency with remote");
@@ -459,7 +460,7 @@ impl<'repo> Init for gix::Remote<'repo> {
                     })
                     .and_then(|c| {
                         if c.parent_ids().count() != 0 {
-                            c.calculate_origin().map(|r| *r)
+                            c.calculate_genesis().map(|r| *r)
                         } else {
                             Ok(c.id)
                         }
@@ -522,7 +523,7 @@ impl<'repo> Init for gix::Remote<'repo> {
     fn ekala_init(&self, transport: Option<&mut Box<dyn Transport + Send>>) -> Result<(), Error> {
         use gix::refs::transaction::PreviousValue;
 
-        use crate::Origin;
+        use crate::Genesis;
 
         let transport = if let Some(transport) = transport {
             transport
@@ -537,9 +538,9 @@ impl<'repo> Init for gix::Remote<'repo> {
         let root = *repo
             .find_commit(head)
             .map_err(Box::new)?
-            .calculate_origin()?;
+            .calculate_genesis()?;
 
-        if let Ok(id) = self.ekala_root(Some(transport)) {
+        if let Ok(id) = self.ekala_genesis(Some(transport)) {
             if root != *id {
                 tracing::error!(
                     reported.root = %*id,
@@ -614,10 +615,11 @@ impl EkalaStorage for gix::ThreadSafeRepository {
 
 impl NormalizeStorePath for gix::ThreadSafeRepository {}
 
-impl Origin<Root> for Vec<AtomQuery> {
+impl Genesis for Vec<AtomQuery> {
     type Error = Error;
+    type Genesis = Root;
 
-    fn calculate_origin(&self) -> Result<Root, Self::Error> {
+    fn calculate_genesis(&self) -> Result<Root, Self::Error> {
         self.iter()
             .try_fold(None, |first, item| match first {
                 Some(r) if &r == item.id.root() => Ok(first),

@@ -51,7 +51,7 @@
 //! let repo = gix::open(".")?;
 //! let remote = repo.find_remote("origin")?;
 //! remote.ekala_init(None)?;
-//! let root = remote.ekala_root(None)?;
+//! let root = remote.ekala_genesis(None)?;
 //!
 //! // Query references from a remote store
 //! let url = gix::url::parse("https://github.com/example/repo.git".into())?;
@@ -164,9 +164,9 @@ pub trait Init {
     type Transport: Send + 'static;
     /// Initialize the Ekala store.
     fn ekala_init(&self, transport: Option<&mut Self::Transport>) -> Result<(), Self::Error>;
-    /// Returns the root as reported by the local or remote store, or an error if it is
+    /// Returns the genesis as reported by the local or remote store, or an error if it is
     /// inconsistent.
-    fn ekala_root(&self, transport: Option<&mut Self::Transport>) -> Result<Root, Self::Error>;
+    fn ekala_genesis(&self, transport: Option<&mut Self::Transport>) -> Result<Root, Self::Error>;
     /// Make initialization atomic by performing the actual transaction in a separate step
     fn commit_init(&self, _content: &str) -> Result<(), Self::Error> {
         Ok(())
@@ -613,7 +613,7 @@ impl Init for LocalStoragePath {
         Ok(())
     }
 
-    fn ekala_root(&self, _: Option<&mut ()>) -> Result<Root, Self::Error> {
+    fn ekala_genesis(&self, _: Option<&mut ()>) -> Result<Root, Self::Error> {
         Ok(git::NULLROOT)
     }
 }

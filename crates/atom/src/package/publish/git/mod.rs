@@ -299,7 +299,7 @@ impl<'a> GitPublisher<'a> {
         let remote = repo.find_remote(remote_str).map_err(Box::new)?;
         let mut transport = remote.get_transport().map_err(Box::new)?;
         // TODO: we actually need to verify the label
-        let root = remote.ekala_root(Some(&mut transport)).map_err(|e| {
+        let root = remote.ekala_genesis(Some(&mut transport)).map_err(|e| {
             e.warn();
             tracing::warn!("Did you run `eka init`?");
             Error::NotInitialized

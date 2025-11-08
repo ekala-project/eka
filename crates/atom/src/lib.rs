@@ -64,7 +64,7 @@
 #![deny(missing_docs)]
 use std::sync::LazyLock;
 
-pub use self::id::{AtomId, Compute, Label, Origin};
+pub use self::id::{AtomId, Compute, Genesis, Label};
 pub use self::package::metadata::lock::Lockfile;
 pub use self::package::metadata::{Atom, DocError, EkalaManager};
 pub use self::package::publish::ATOM_REFS;
