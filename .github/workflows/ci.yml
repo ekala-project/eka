@@ -29,6 +29,9 @@ jobs:
           fetch-depth: 0 # full history, needed root calculation in CI
       - name: Install Nix
         uses: nixbuild/nix-quick-install-action@v34
+        with:
+          nix_conf: |
+            extra-experimental-features = pipe-operators
       - name: Setup Cache
         uses: DeterminateSystems/magic-nix-cache-action@v13
       - uses: Swatinem/rust-cache@v2.8.1
