@@ -23,6 +23,7 @@ pkgs.mkShell.override { stdenv = pkgs.clangStdenv; } {
       taplo
       nodePackages.prettier
       mod.fenix.default.rustfmt
+      nil
       toolchain
       mold
       protobuf
