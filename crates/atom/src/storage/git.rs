@@ -367,9 +367,12 @@ impl Init for gix::Repository {
             .write(gix::index::write::Options::default())
             .map_err(|e| Error::Generic(Box::new(e)))?;
 
-        self.commit("HEAD", "init: ekala project", id, vec![
-            self.head_id().map_err(|e| Error::Generic(Box::new(e)))?,
-        ])
+        self.commit(
+            "HEAD",
+            "init: ekala project",
+            id,
+            vec![self.head_id().map_err(|e| Error::Generic(Box::new(e)))?],
+        )
         .map_err(|e| Error::Generic(Box::new(e)))?;
 
         Ok(())

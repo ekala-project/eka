@@ -1,5 +1,5 @@
 [set]
-packages = ["nix-lock"]
+packages = ["nix-lock", "dev"]
 
 [metadata]
 tags = ["eka", "ekala", "atom"]

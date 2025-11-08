@@ -1,0 +1,14 @@
+[package]
+label   = "dev"
+version = "0.1.0"
+
+[package.sets]
+atom = "https://github.com/ekala-project/atom"
+
+[compose.with.atom-nix]
+entry = "env"
+from  = "atom"
+
+[deps.direct.nix]
+fenix.git = "https://github.com/nix-community/fenix.git"
+nixpkgs   = { git = "https://github.com/nixos/nixpkgs", ref = "nixpkgs-unstable" }

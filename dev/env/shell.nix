@@ -1,6 +1,6 @@
 let
-  inherit (atom) pkgs;
-  toolchain = atom.fenix.fromToolchainFile { file = "${mod}/rust-toolchain.toml"; };
+  inherit (mod) pkgs;
+  toolchain = mod.fenix.fromToolchainFile { file = "${mod}/rust-toolchain.toml"; };
 
   protos = pkgs.fetchFromGitHub {
     owner = "nrdxp";
@@ -22,7 +22,8 @@ pkgs.mkShell.override { stdenv = pkgs.clangStdenv; } {
       shfmt
       taplo
       nodePackages.prettier
-      atom.fenix.default.rustfmt
+      mod.fenix.default.rustfmt
+      nil
       toolchain
       mold
       protobuf
@@ -30,8 +31,7 @@ pkgs.mkShell.override { stdenv = pkgs.clangStdenv; } {
       cargo-shear
     ]
     ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
-      darwin.apple_sdk.frameworks.SystemConfiguration
-      darwin.apple_sdk.frameworks.DiskArbitration
+      apple-sdk
       libiconv
     ];
 }

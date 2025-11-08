@@ -23,9 +23,14 @@ pub(crate) fn init_repo_and_remote() -> Result<(TempDir, TempDir), anyhow::Error
         repo.empty_tree().id(),
         no_parents.clone(),
     )?;
-    remote.commit_as(sig, sig, "HEAD", "2nd", repo.empty_tree().id(), vec![
-        init.detach(),
-    ])?;
+    remote.commit_as(
+        sig,
+        sig,
+        "HEAD",
+        "2nd",
+        repo.empty_tree().id(),
+        vec![init.detach()],
+    )?;
 
     let config_file = repo.git_dir().join("config");
     let mut config = File::from_path_no_includes(config_file.clone(), Source::Local)?;

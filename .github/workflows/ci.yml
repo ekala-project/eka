@@ -29,11 +29,14 @@ jobs:
           fetch-depth: 0 # full history, needed root calculation in CI
       - name: Install Nix
         uses: nixbuild/nix-quick-install-action@v34
+        with:
+          nix_conf: |
+            extra-experimental-features = pipe-operators
       - name: Setup Cache
         uses: DeterminateSystems/magic-nix-cache-action@v13
       - uses: Swatinem/rust-cache@v2.8.1
       - name: Eval Devshell
-        run: nix-instantiate shell.nix --add-root shell
+        run: nix-instantiate dev --add-root shell -A shell
       - name: Check Format
         run: nix-shell shell --run "treefmt --ci"
       - name: Lint
