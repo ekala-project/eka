@@ -11,4 +11,8 @@ let
       ref = "refs/eka/atoms/${locker.label}/${locker.version}";
     };
 in
-lockexpr ./. lockstr
+lockexpr ./. lockstr {
+  extraConfig = {
+    platform = builtins.currentSystem or "x86_64-linux";
+  };
+}

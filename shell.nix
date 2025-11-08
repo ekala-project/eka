@@ -1,8 +1,4 @@
 let
-  dev = import ./dev {
-    extraConfig = {
-      platform = builtins.currentSystem or "x86_64-linux";
-    };
-  };
+  dev = import ./dev;
 in
 dev.shell

@@ -30,8 +30,8 @@ pkgs.mkShell.override { stdenv = pkgs.clangStdenv; } {
       cargo-shear
     ]
     ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
-      darwin.apple_sdk.frameworks.SystemConfiguration
-      darwin.apple_sdk.frameworks.DiskArbitration
+      darwin.apple-sdk.frameworks.SystemConfiguration
+      darwin.apple-sdk.frameworks.DiskArbitration
       libiconv
     ];
 }
