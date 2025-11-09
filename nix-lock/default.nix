@@ -1,6 +1,5 @@
 root: lockstr:
 {
-  localAtoms ? { },
   # FIXME: strictly for compatibility until eka has a calling interface
   extraExtern ? { },
   extraConfig ? { },
@@ -11,6 +10,36 @@ let
   f =
     root: lock:
     let
+      localSet =
+        let
+          builder =
+            path:
+            let
+              ekala = path + "/ekala.toml";
+              hasSet = builtins.readFileType path == "directory" && builtins.pathExists ekala;
+              toml = builtins.fromTOML (builtins.readFile ekala);
+              locals = builtins.listToAttrs (
+                map (
+                  rel:
+                  let
+                    toml_path = path + "/${rel}/atom.toml";
+                    atom = builtins.fromTOML (builtins.readFile toml_path);
+                  in
+                  {
+                    name = atom.package.label;
+                    value = dirOf toml_path;
+                  }
+                ) toml.set.packages
+              );
+            in
+            if path == /. then
+              { }
+            else if hasSet then
+              locals
+            else
+              builder (dirOf path);
+        in
+        builder root;
       entrypoint = lock.compose.entry or "";
       isLocalSet = builtins.mapAttrs (_: v: builtins.elem "::" v.mirrors) lock.sets;
       composer =
@@ -44,8 +73,8 @@ let
           dep:
           let
             fetch =
-              if isLocalSet."${dep.set}" && localAtoms ? ${dep.label} then
-                localAtoms.${dep.label}
+              if isLocalSet."${dep.set}" && localSet ? ${dep.label} then
+                localSet.${dep.label}
               else
                 builtins.fetchGit {
                   name = dep.label;
