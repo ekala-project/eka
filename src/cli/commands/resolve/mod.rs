@@ -23,6 +23,9 @@ pub struct Args {
     /// matching versions, similar to if you deleted the lock file manually.
     #[clap(long, short)]
     fresh: bool,
+    /// Resolve all atoms in the set
+    #[clap(long, short, conflicts_with = "atom")]
+    all: bool,
 }
 
 //================================================================================================
@@ -33,16 +36,31 @@ pub struct Args {
 pub(super) async fn run(storage: impl LocalStorage + 'static, args: Args) -> Result<()> {
     let to_storage_root = storage.rel_from_root(storage.cwd()?)?;
 
-    for atom in args.atom {
-        let path = atom.path_from_storage(&storage)?;
-        tracing::debug!(path = %path.as_ref().display(), "attempting to resolve dependencies");
+    if args.all {
+        let manifest = storage.ekala_manifest()?;
+        for (_, path) in manifest.set().packages().as_ref() {
+            tracing::debug!(path = %path.display(), "attempting to resolve dependencies");
+            let writer =
+                ManifestWriter::open_and_resolve(&storage, &to_storage_root.join(path), args.fresh)
+                    .await?;
+            writer.write_atomic()?;
+            tracing::info!(path = %path.display(), "successfully resolved and wrote updates");
+        }
+    } else {
+        for atom in args.atom {
+            let path = atom.path_from_storage(&storage)?;
+            tracing::debug!(path = %path.as_ref().display(), "attempting to resolve dependencies");
 
-        let writer =
-            ManifestWriter::open_and_resolve(&storage, &to_storage_root.join(&path), args.fresh)
-                .await?;
-        writer.write_atomic()?;
+            let writer = ManifestWriter::open_and_resolve(
+                &storage,
+                &to_storage_root.join(&path),
+                args.fresh,
+            )
+            .await?;
+            writer.write_atomic()?;
 
-        tracing::info!(path = %path.as_ref().display(), "successfully resolved and wrote updates");
+            tracing::info!(path = %path.as_ref().display(), "successfully resolved and wrote updates");
+        }
     }
     Ok(())
 }
