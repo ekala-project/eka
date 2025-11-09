@@ -9,7 +9,7 @@ use quote::quote;
 const LOCK_LABEL: &str = "nix-lock";
 const LOCK_MAJOR: u64 = 0;
 const LOCK_MINOR: u64 = 1;
-const LOCK_PATCH: u64 = 3;
+const LOCK_PATCH: u64 = 4;
 
 /// Computes Eka's repository root commit hash at compile time
 #[proc_macro]
