@@ -91,7 +91,7 @@ let
           dep:
           let
             fetch = builtins.fetchGit {
-              inherit (dep) name rev url;
+              inherit (dep) rev url;
               shallow = true;
             };
           in
@@ -103,7 +103,7 @@ let
           dep:
           let
             fetch = builtins.fetchTarball {
-              inherit (dep) name url;
+              inherit (dep) url;
               sha256 = dep.hash;
             };
           in
@@ -115,7 +115,7 @@ let
           dep:
           let
             fetch = builtins.fetchurl {
-              inherit (dep) name url;
+              inherit (dep) url;
               sha256 = dep.hash;
             };
           in
