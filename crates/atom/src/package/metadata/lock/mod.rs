@@ -240,11 +240,12 @@ pub struct Lockfile {
     /// maintaining backward compatibility.
     pub version: u8,
 
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) sets: BTreeMap<GitDigest, SetDetails>,
+
     locker: AtomDep,
 
     pub(in crate::package) compose: Using,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub(crate) sets: BTreeMap<GitDigest, SetDetails>,
     /// The list of locked dependencies (absent or empty if none).
     ///
     /// This field contains all the resolved dependencies with their exact

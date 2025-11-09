@@ -85,9 +85,8 @@ let
             lockPath = fetch + "/atom.lock";
             lockstr = if builtins.pathExists lockPath then builtins.readFile lockPath else "";
             thisLock = builtins.fromTOML lockstr;
-            root = fetch + "/${thisLock.compose.entry or ""}";
           in
-          f root thisLock;
+          f fetch thisLock;
         "nix+git" =
           dep:
           let
