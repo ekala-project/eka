@@ -164,7 +164,7 @@ let
         ) { } lock.deps;
       in
       composer (root + "/${entrypoint}") {
-        extern = {
+        extern = extraExtern // {
           inherit deps;
         };
         config =
