@@ -6,7 +6,7 @@ root: lockstr:
 }:
 let
   unknownErr = "unknown atom type encountered";
-  toml = builtins.fromTOML lockstr;
+  lock_toml = builtins.fromTOML lockstr;
   f =
     root: lock:
     let
@@ -167,9 +167,13 @@ let
         extern = {
           inherit deps;
         };
-        config = extraConfig;
+        config =
+          let
+            manifest_str = builtins.readFile (root + "/atom.toml");
+          in
+          extraConfig // { inherit (builtins.fromTOML manifest_str) package; };
       }
     else
       abort "unsupported format version";
 in
-f root toml
+f root lock_toml
