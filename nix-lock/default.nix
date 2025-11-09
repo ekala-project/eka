@@ -32,7 +32,7 @@ let
                 ) toml.set.packages
               );
             in
-            if path == /. then
+            if path == /. || path == "/" then
               { }
             else if hasSet then
               locals
