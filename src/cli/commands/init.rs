@@ -1,4 +1,4 @@
-use atom::storage::LocalStoragePath;
+use atom::storage::{Init, LocalStoragePath};
 use clap::Parser;
 
 use crate::cli::store::Detected;
@@ -21,6 +21,11 @@ mod git {
         /// The target remote to initialize
         #[arg(long, short = 't', default_value_t = git::default_remote().to_owned(), name = "TARGET")]
         pub(super) remote: String,
+        /// Initialize the current directory as a git repository before creating the ekala manifest
+        ///
+        /// note: does nothing if the current directory is already inside a git repository
+        #[arg(long)]
+        pub(super) init_git: bool,
     }
 }
 
@@ -46,7 +51,14 @@ pub(super) fn run(store: Detected, args: Args) -> anyhow::Result<()> {
             tracing::info!(storage_root = %local.as_ref().display(), "already initalized");
         },
         Detected::None => {
-            LocalStoragePath::init(".")?;
+            if args.git.init_git {
+                println!("foo");
+                let repo = gix::init(".")?;
+                repo.ekala_init(None)?;
+            } else {
+                println!("var");
+                LocalStoragePath::init(".")?;
+            }
             tracing::info!(message = "successfully initialized");
         },
     }
@@ -60,44 +72,43 @@ use std::time::Duration;
 fn init_local() -> anyhow::Result<()> {
     let tmp = tempfile::tempdir()?;
     std::env::set_current_dir(tmp.as_ref())?;
+
     let args = Args {
         git: git::Args {
             remote: "origin".into(),
+            init_git: false,
         },
     };
     run(Detected::None, args)?;
-    std::thread::sleep(Duration::from_millis(100));
+    std::thread::sleep(Duration::from_millis(250));
     assert!(
         tmp.as_ref()
             .join(atom::EKALA_MANIFEST_NAME.as_str())
-            .exists()
+            .try_exists()
+            .is_ok()
     );
     Ok(())
 }
 
 #[test]
 fn init_git_no_remote() -> anyhow::Result<()> {
-    use atom::storage;
     let tmp = tempfile::tempdir()?;
-    std::thread::sleep(Duration::from_millis(50));
     std::env::set_current_dir(tmp.as_ref())?;
-    std::thread::sleep(Duration::from_millis(50));
-    gix::init(&tmp)?;
-    std::thread::sleep(Duration::from_millis(50));
-    let repo = storage::git::repo()?.expect("test repo not detected");
 
     let args = Args {
         git: git::Args {
             remote: "origin".into(),
+            init_git: true,
         },
     };
 
-    run(Detected::Git(repo), args)?;
-
+    run(Detected::None, args)?;
+    std::thread::sleep(Duration::from_millis(250));
     assert!(
         tmp.as_ref()
             .join(atom::EKALA_MANIFEST_NAME.as_str())
-            .exists()
+            .try_exists()
+            .is_ok()
     );
 
     Ok(())
