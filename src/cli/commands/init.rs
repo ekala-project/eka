@@ -33,7 +33,13 @@ pub(super) fn run(store: Detected, args: Args) -> anyhow::Result<()> {
             let remote = repo.find_remote(args.git.remote.as_str())?;
 
             repo.ekala_init(None)?;
-            remote.ekala_init(None)?;
+            if remote.ekala_init(None).is_err() {
+                tracing::warn!(
+                    remote = %args.git.remote,
+                    suggestion = "if you would like to publish your atoms, you can attempt initalization again later with a functional remote",
+                    "initializing repo did not suceed"
+                );
+            };
         },
         _ => {
             LocalStoragePath::init(".")?;
