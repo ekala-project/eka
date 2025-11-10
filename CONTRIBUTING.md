@@ -16,7 +16,7 @@ While everyone has the right to contribute, this does not guarantee that your co
 
 ### Development Environment
 
-The project uses a Nix-based development environment to ensure consistency. The `nix-shell` command will set up all the necessary tools, including the correct Rust toolchain (as specified in `rust-toolchain.toml`) and a fully configured `rust-analyzer`.
+The project uses a Nix-based development environment to ensure consistency. `nix-shell dev` will set up all the necessary tools, including the correct Rust toolchain (as specified in `rust-toolchain.toml`) and a fully configured `rust-analyzer`.
 
 For a smoother workflow, we recommend using `direnv`, which can automatically load the Nix shell whenever you enter the project directory.
 

@@ -84,7 +84,7 @@ Building Eka requires specific dependencies. The easiest way to set everything u
 ```bash
 git clone https://github.com/ekala-project/eka.git
 cd eka
-nix-shell # or `direnv allow`, if you prefer
+nix-shell dev # or `direnv allow`, if you prefer
 # Inside the shell:
 cargo build --release
 # Binary will be at target/release/eka
@@ -99,7 +99,7 @@ The Nix shell provides all necessary dependencies including:
 - All required build tools
 
 ```bash
-nix-shell
+nix-shell dev
 # or with direnv: direnv allow
 ```
 
