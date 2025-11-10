@@ -1154,6 +1154,7 @@ name = "eka-root-macro"
 version = "0.1.0"
 dependencies = [
  "gix 0.73.0",
+ "hex",
  "quote",
  "syn 2.0.104",
 ]

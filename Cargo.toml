@@ -53,6 +53,7 @@ clap = { version = "^4", features = [
   "unstable-markdown",
 ] }
 either = { version = "1.15.0", features = ["serde"] }
+hex = { version = "^0.4", features = ["serde"] }
 insta = { version = "^1", features = ["yaml"] }
 semver = { version = "^1", features = ["serde"] }
 serde = { version = "^1", features = ["derive"] }

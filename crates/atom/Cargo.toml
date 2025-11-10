@@ -13,6 +13,7 @@ path-clean = "^1"
 
 bimap.workspace                 = true
 either.workspace                = true
+hex.workspace                   = true
 lazy-regex.workspace            = true
 pathdiff.workspace              = true
 prodash.workspace               = true
@@ -31,7 +32,6 @@ url.workspace                   = true
 config = { path = "../config" }
 eka-root-macro = { path = "../eka-root-macro" }
 gix = { workspace = true, default-features = false, features = ["serde"] }
-hex = { version = "^0.4", features = ["serde"] }
 nix-compat = { git = "https://github.com/nrdxp/snix", branch = "canon", features = [
   "serde",
 ] }
