@@ -29,14 +29,16 @@ pub(super) fn run(store: Detected, args: Args) -> anyhow::Result<()> {
         Detected::Git(repo) => {
             use atom::storage::Init;
             let repo = repo.to_thread_local();
-            let remote = repo.find_remote(args.git.remote.as_str())?;
+            let remote = repo.find_remote(args.git.remote.as_str());
 
             repo.ekala_init(None)?;
-            if remote.ekala_init(None).is_err() {
+            if let Ok(remote) = remote {
+                remote.ekala_init(None)?;
+            } else {
                 tracing::warn!(
                     remote = %args.git.remote,
                     suggestion = "if you would like to publish your atoms, you can attempt initalization again later with a functional remote",
-                    "initializing repo did not suceed"
+                    "initializing remote did not suceed"
                 );
             };
         },
@@ -51,6 +53,9 @@ pub(super) fn run(store: Detected, args: Args) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
+use std::time::Duration;
+
 #[test]
 fn init_local() -> anyhow::Result<()> {
     let tmp = tempfile::tempdir()?;
@@ -61,10 +66,39 @@ fn init_local() -> anyhow::Result<()> {
         },
     };
     run(Detected::None, args)?;
+    std::thread::sleep(Duration::from_millis(100));
     assert!(
         tmp.as_ref()
             .join(atom::EKALA_MANIFEST_NAME.as_str())
             .exists()
     );
+    Ok(())
+}
+
+#[test]
+fn init_git_no_remote() -> anyhow::Result<()> {
+    use atom::storage;
+    let tmp = tempfile::tempdir()?;
+    std::thread::sleep(Duration::from_millis(50));
+    std::env::set_current_dir(tmp.as_ref())?;
+    std::thread::sleep(Duration::from_millis(50));
+    gix::init(&tmp)?;
+    std::thread::sleep(Duration::from_millis(50));
+    let repo = storage::git::repo()?.expect("test repo not detected");
+
+    let args = Args {
+        git: git::Args {
+            remote: "origin".into(),
+        },
+    };
+
+    run(Detected::Git(repo), args)?;
+
+    assert!(
+        tmp.as_ref()
+            .join(atom::EKALA_MANIFEST_NAME.as_str())
+            .exists()
+    );
+
     Ok(())
 }
