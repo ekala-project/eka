@@ -94,6 +94,12 @@ fn init_local() -> anyhow::Result<()> {
 fn init_git_no_remote() -> anyhow::Result<()> {
     let tmp = tempfile::tempdir()?;
     std::env::set_current_dir(tmp.as_ref())?;
+    unsafe {
+        std::env::set_var("GIT_AUTHOR_NAME", "eka");
+        std::env::set_var("GIT_AUTHOR_EMAIL", "eka@is-cool.com");
+        std::env::set_var("GIT_COMMITTER_NAME", "eka");
+        std::env::set_var("GIT_COMMITTER_EMAIL", "eka@is-cool.com");
+    }
 
     let args = Args {
         git: git::Args {
