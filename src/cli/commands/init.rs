@@ -50,3 +50,21 @@ pub(super) fn run(store: Detected, args: Args) -> anyhow::Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn init_local() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    std::env::set_current_dir(tmp.as_ref())?;
+    let args = Args {
+        git: git::Args {
+            remote: "origin".into(),
+        },
+    };
+    run(Detected::None, args)?;
+    assert!(
+        tmp.as_ref()
+            .join(atom::EKALA_MANIFEST_NAME.as_str())
+            .exists()
+    );
+    Ok(())
+}
