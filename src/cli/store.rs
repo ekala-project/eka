@@ -16,6 +16,7 @@ pub(super) enum Detected {
     /// A Git repository was detected.
     Git(&'static ThreadSafeRepository),
     FileStorage(atom::storage::LocalStoragePath),
+    None,
 }
 
 //================================================================================================
@@ -35,9 +36,9 @@ pub(super) fn detect() -> anyhow::Result<Detected> {
 
         tracing::debug!(message = "Detected Git repository", git_dir, work_dir);
         Ok(Detected::Git(repo))
+    } else if let Ok(local) = LocalStoragePath::new(std::env::current_dir()?) {
+        Ok(Detected::FileStorage(local))
     } else {
-        Ok(Detected::FileStorage(LocalStoragePath::new(
-            std::env::current_dir()?,
-        )?))
+        Ok(Detected::None)
     }
 }

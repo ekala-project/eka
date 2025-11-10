@@ -25,7 +25,6 @@ mod git {
 }
 
 pub(super) fn run(store: Detected, args: Args) -> anyhow::Result<()> {
-    #[allow(clippy::single_match)]
     match store {
         Detected::Git(repo) => {
             use atom::storage::Init;
@@ -41,7 +40,10 @@ pub(super) fn run(store: Detected, args: Args) -> anyhow::Result<()> {
                 );
             };
         },
-        _ => {
+        Detected::FileStorage(local) => {
+            tracing::info!(storage_root = %local.as_ref().display(), "already initalized");
+        },
+        Detected::None => {
             LocalStoragePath::init(".")?;
             tracing::info!(message = "successfully initialized");
         },
