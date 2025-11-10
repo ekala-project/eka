@@ -1,0 +1,17 @@
+[package]
+label   = "build"
+version = "0.3.0"
+
+[package.sets]
+atom = "https://github.com/ekala-project/atom"
+eka  = ["::", "https://github.com/ekala-project/eka.git"]
+
+[compose.with.atom-nix]
+entry = "eka"
+from  = "atom"
+
+[deps.direct.nix]
+eka.git = "https://github.com/ekala-project/eka.git"
+
+[deps.from.eka]
+dev = "^0.1.0"

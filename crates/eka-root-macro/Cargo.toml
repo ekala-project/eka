@@ -8,6 +8,7 @@ proc-macro = true
 
 [dependencies]
 gix.workspace = true
+hex.workspace = true
 
 quote = "1.0"
 syn   = "2.0"

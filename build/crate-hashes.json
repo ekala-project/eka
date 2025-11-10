@@ -1,0 +1,20 @@
+{
+  "git+https://github.com/nrdxp/snix?branch=canon#nix-compat-derive@0.1.0": "0v8b989zbqj9vmfmknm9hinjrgrifd3w19fv9q148c21bfgy8w00",
+  "git+https://github.com/nrdxp/snix?branch=canon#nix-compat@0.1.0": "0v8b989zbqj9vmfmknm9hinjrgrifd3w19fv9q148c21bfgy8w00",
+  "git+https://github.com/nrdxp/snix?branch=canon#snix-build@0.1.0": "0v8b989zbqj9vmfmknm9hinjrgrifd3w19fv9q148c21bfgy8w00",
+  "git+https://github.com/nrdxp/snix?branch=canon#snix-castore@0.1.0": "0v8b989zbqj9vmfmknm9hinjrgrifd3w19fv9q148c21bfgy8w00",
+  "git+https://github.com/nrdxp/snix?branch=canon#snix-eval-builtin-macros@0.0.1": "0v8b989zbqj9vmfmknm9hinjrgrifd3w19fv9q148c21bfgy8w00",
+  "git+https://github.com/nrdxp/snix?branch=canon#snix-eval@0.1.0": "0v8b989zbqj9vmfmknm9hinjrgrifd3w19fv9q148c21bfgy8w00",
+  "git+https://github.com/nrdxp/snix?branch=canon#snix-glue@0.1.0": "0v8b989zbqj9vmfmknm9hinjrgrifd3w19fv9q148c21bfgy8w00",
+  "git+https://github.com/nrdxp/snix?branch=canon#snix-store@0.1.0": "0v8b989zbqj9vmfmknm9hinjrgrifd3w19fv9q148c21bfgy8w00",
+  "git+https://github.com/nrdxp/snix?branch=canon#snix-tracing@0.1.0": "0v8b989zbqj9vmfmknm9hinjrgrifd3w19fv9q148c21bfgy8w00",
+  "git+https://github.com/nrdxp/tracing?branch=hierarchical#0.1.41": "0ak6yp9hq81cddvk6pw91a2saqbh3x8f8j5a56pfm2zajlbsdwlf",
+  "git+https://github.com/nrdxp/tracing?branch=hierarchical#tracing-appender@0.2.3": "0ak6yp9hq81cddvk6pw91a2saqbh3x8f8j5a56pfm2zajlbsdwlf",
+  "git+https://github.com/nrdxp/tracing?branch=hierarchical#tracing-attributes@0.1.30": "0ak6yp9hq81cddvk6pw91a2saqbh3x8f8j5a56pfm2zajlbsdwlf",
+  "git+https://github.com/nrdxp/tracing?branch=hierarchical#tracing-core@0.1.34": "0ak6yp9hq81cddvk6pw91a2saqbh3x8f8j5a56pfm2zajlbsdwlf",
+  "git+https://github.com/nrdxp/tracing?branch=hierarchical#tracing-futures@0.2.5": "0ak6yp9hq81cddvk6pw91a2saqbh3x8f8j5a56pfm2zajlbsdwlf",
+  "git+https://github.com/nrdxp/tracing?branch=hierarchical#tracing-log@0.2.0": "0ak6yp9hq81cddvk6pw91a2saqbh3x8f8j5a56pfm2zajlbsdwlf",
+  "git+https://github.com/nrdxp/tracing?branch=hierarchical#tracing-serde@0.2.0": "0ak6yp9hq81cddvk6pw91a2saqbh3x8f8j5a56pfm2zajlbsdwlf",
+  "git+https://github.com/nrdxp/tracing?branch=hierarchical#tracing-subscriber@0.3.20": "0ak6yp9hq81cddvk6pw91a2saqbh3x8f8j5a56pfm2zajlbsdwlf",
+  "git+https://github.com/tvlfyi/wu-manber.git#wu-manber@0.1.0": "1zhk83lbq99xzyjwphv2qrb8f8qgfqwa5bbbvyzm0z0bljsjv0pd"
+}

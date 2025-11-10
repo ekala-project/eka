@@ -14,17 +14,35 @@ const LOCK_PATCH: u64 = 6;
 /// Computes Eka's repository root commit hash at compile time
 #[proc_macro]
 pub fn eka_origin_info(_input: TokenStream) -> TokenStream {
-    let root_hash = match compute_eka_root_hash() {
-        Ok(hash) => hash,
-        Err(e) => panic!("Failed to compute Eka root hash: {}", e),
+    let root_hash = if let Ok(var) = std::env::var("EKA_ROOT_COMMIT_HASH") {
+        hex::decode(var)
+            .ok()
+            .and_then(|v| v.try_into().ok())
+            .expect("set `EKA_ROOT_COMMIT_HASH` is not a valid sha")
+    } else {
+        match compute_eka_root_hash() {
+            Ok(hash) => hash,
+            Err(e) => panic!("Failed to compute Eka root hash: {}", e),
+        }
     };
 
-    let origin_url = eka_origin().to_string();
+    let origin_url = if let Ok(var) = std::env::var("EKA_ORIGIN_URL") {
+        var
+    } else {
+        eka_origin().to_string()
+    };
     let url = origin_url.as_str();
 
     // Convert [u8; 20] to token streams for each byte
     let root_tokens = root_hash.iter().map(|&byte| quote! { #byte });
-    let rev = lock_rev();
+    let rev = if let Ok(var) = std::env::var("EKA_LOCK_REV") {
+        hex::decode(var)
+            .ok()
+            .and_then(|v| v.try_into().ok())
+            .expect("set `EKA_LOCK_REV` is not a valid sha")
+    } else {
+        lock_rev()
+    };
     let rev_tokens = rev.iter().map(|&byte| quote! { #byte });
 
     quote! {

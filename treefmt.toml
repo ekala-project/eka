@@ -1,6 +1,6 @@
 [formatter.nixfmt]
 command  = "nixfmt"
-excludes = []
+excludes = ["build/Cargo.nix"]
 includes = ["*.nix"]
 options  = []
 
