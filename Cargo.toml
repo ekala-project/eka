@@ -36,15 +36,15 @@ atom.path = "crates/atom"
 
 [workspace.dependencies]
 anyhow                = "^1"
-lazy-regex            = "3.4.1"
+lazy-regex            = "3.4.2"
 pathdiff              = "0.2.3"
-tempfile              = "^3.13"
-thiserror             = "^1"
+tempfile              = "^3.23"
+thiserror             = "^2"
 tracing               = "^0.1"
 tracing-appender      = "^0.2"
 tracing-indicatif     = "^0.3"
-unicode-ident         = "1.0.19"
-unicode-normalization = "0.1.24"
+unicode-ident         = "1.0.22"
+unicode-normalization = "0.1.25"
 
 bimap = { version = "0.6.3", features = ["serde"] }
 clap = { version = "^4", features = [

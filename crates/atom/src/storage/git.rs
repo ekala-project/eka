@@ -337,7 +337,7 @@ impl Init for gix::Repository {
         let blob = self
             .write_blob(content)
             .map_err(|e| Error::Generic(Box::new(e)))?;
-        let tree = self.head_tree().map_err(|e| Error::Generic(Box::new(e)))?;
+        let tree = self.head_tree().unwrap_or(self.empty_tree());
         let mut tree = tree.decode().map_err(|e| Error::Generic(Box::new(e)))?;
         let entry = tree::Entry {
             mode: tree::EntryKind::Blob.into(),
@@ -367,13 +367,13 @@ impl Init for gix::Repository {
             .write(gix::index::write::Options::default())
             .map_err(|e| Error::Generic(Box::new(e)))?;
 
-        self.commit(
-            "HEAD",
-            "init: ekala project",
-            id,
-            vec![self.head_id().map_err(|e| Error::Generic(Box::new(e)))?],
-        )
-        .map_err(|e| Error::Generic(Box::new(e)))?;
+        let parent = if let Ok(id) = self.head_id() {
+            vec![id]
+        } else {
+            vec![]
+        };
+        self.commit("HEAD", "init: ekala project", id, parent)
+            .map_err(|e| Error::Generic(Box::new(e)))?;
 
         Ok(())
     }
