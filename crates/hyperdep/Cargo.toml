@@ -1,0 +1,11 @@
+[package]
+edition = "2024"
+name    = "hyperdep"
+version = "0.1.0"
+
+[dependencies]
+petgraph = { version = "0.8", optional = true }
+
+[features]
+default  = []
+petgraph = ["dep:petgraph"]

@@ -3,6 +3,7 @@ workspace.members = [
   "crates/atom",
   "crates/config",
   "crates/nixec",
+  "crates/hyperdep",
 ]
 
 [package]
