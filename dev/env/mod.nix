@@ -3,7 +3,8 @@ let
   system = cfg.platform;
 in
 {
-  Shell = mod.shell;
+  Shell = mod.shell mod.pkgs;
+  Static = mod.shell mod.pkgs.pkgsStatic;
   Pkgs = mod.pkgs;
   pkgs = pins.nixpkgs.import "" { inherit system; };
   fenix = pins.fenix.import "" {

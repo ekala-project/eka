@@ -485,7 +485,6 @@ impl NixGit {
 /// and reference paths into structured version objects for comparison and matching.
 fn extract_and_parse_semver(input: &str) -> Option<Version> {
     let re = SEMVER_REGEX.to_owned();
-    println!("{}", input);
     let captures = re.captures(input)?;
 
     // Construct the SemVer string from captured groups

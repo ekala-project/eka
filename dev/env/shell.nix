@@ -1,5 +1,6 @@
+pkgs:
 let
-  inherit (mod) pkgs toolchain;
+  inherit (mod) toolchain;
 
 in
 pkgs.mkShell.override { stdenv = pkgs.clangStdenv; } {
@@ -14,6 +15,8 @@ pkgs.mkShell.override { stdenv = pkgs.clangStdenv; } {
       nixfmt-rfc-style
       shfmt
       taplo
+      zstd
+      pkg-config
       nodePackages.prettier
       mod.fenix.default.rustfmt
       nil
