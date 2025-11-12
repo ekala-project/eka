@@ -5,7 +5,9 @@ version = "0.1.0"
 
 [dependencies]
 petgraph = { version = "0.8", optional = true }
+semver   = { workspace = true, optional = true }
 
 [features]
-default  = []
+default  = ["petgraph", "semver"]
 petgraph = ["dep:petgraph"]
+semver   = ["dep:semver"]

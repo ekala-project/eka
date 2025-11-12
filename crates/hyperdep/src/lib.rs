@@ -25,9 +25,13 @@
 #![no_std]
 extern crate alloc;
 
+pub mod version;
+
 use alloc::collections::btree_map::Entry;
 use alloc::collections::{BTreeMap, BTreeSet};
 use core::fmt;
+
+pub use version::*;
 
 /// A node in the hypergraph that can be connected by edges.
 pub trait Node: Ord + Clone + fmt::Debug {}
@@ -83,7 +87,7 @@ impl<N: Node, E: Edge> HyperGraph<N, E> {
                 .insert(edge.clone());
             node_set.insert(n);
         }
-        self.edge_to_nodes.insert(edge.clone(), node_set).is_none()
+        self.edge_to_nodes.insert(edge, node_set).is_none()
     }
 
     /// Removes an edge and returns the nodes it was connecting.
@@ -135,11 +139,11 @@ impl<N: Node, E: Edge> HyperGraph<N, E> {
         let mut edge_idx: BTreeMap<E, _> = BTreeMap::new();
 
         // Assign indices in sorted order (deterministic!)
-        for (n, _) in &self.node_to_edges {
+        for n in self.node_to_edges.keys() {
             let idx = g.add_node(BipartiteNode::Node(n.clone()));
             node_idx.insert(n.clone(), idx);
         }
-        for (e, _) in &self.edge_to_nodes {
+        for e in self.edge_to_nodes.keys() {
             let idx = g.add_node(BipartiteNode::Edge(e.clone()));
             edge_idx.insert(e.clone(), idx);
         }
