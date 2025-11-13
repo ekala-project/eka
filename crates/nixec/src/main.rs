@@ -84,9 +84,13 @@ fn setup_paths() -> Result<NixecConfig, NixecError> {
     )?
     .trim()
     .lines()
-    .chain(std::iter::once(
+    .chain([
         format!("ssl-cert-file = {}", SSL_CERT_PATH).as_str(),
-    ))
+        "pure-eval = false",
+        "restrict-eval = true",
+        // FIXME: hardcoded for now, should allow setting externally
+        "allowed-uris = git+https: https: ssh: git+ssh:",
+    ])
     .collect::<Vec<&str>>()
     .join("\n");
 
@@ -104,15 +108,14 @@ fn configure_sandbox(config: &NixecConfig) -> Result<Birdcage, NixecError> {
     let cwd = env::current_dir()?;
     let mut sandbox = Birdcage::new();
 
-    sandbox.add_exception(Exception::Read(cwd))?;
-
     if let Ok(home) = std::env::var("HOME") {
         let cache = std::env::var("XDG_CACHE_HOME")
             .map(PathBuf::from)
             .unwrap_or(PathBuf::from(home).join(".cache"));
         unsafe { env::set_var("XDG_CACHE_HOME", &cache) };
-        sandbox.add_exception(Exception::Environment("XDG_CACHE_HOME".into()))?;
-        sandbox.add_exception(Exception::WriteAndRead(cache.join("nix")))?;
+        sandbox
+            .add_exception(Exception::Environment("XDG_CACHE_HOME".into()))?
+            .add_exception(Exception::WriteAndRead(cache.join("nix")))?;
     };
 
     let nix_root = config
@@ -121,7 +124,6 @@ fn configure_sandbox(config: &NixecConfig) -> Result<Birdcage, NixecError> {
         .map(Path::to_path_buf)
         .ok_or(NixecError::StorePath)?;
 
-    sandbox.add_exception(Exception::ExecuteAndRead(nix_root))?;
     unsafe { env::set_var("NIX_CONFIG", &config.nix_config) };
     unsafe {
         env::set_var(
@@ -135,15 +137,21 @@ fn configure_sandbox(config: &NixecConfig) -> Result<Birdcage, NixecError> {
         )
     };
     unsafe { env::set_var("GIT_SSL_CAINFO", SSL_CERT_PATH) };
-    sandbox.add_exception(Exception::Environment("HOME".into()))?;
-    sandbox.add_exception(Exception::Environment("NIX_CONFIG".into()))?;
-    sandbox.add_exception(Exception::Environment("PATH".into()))?;
-    sandbox.add_exception(Exception::Environment("GIT_SSL_CAINFO".into()))?;
-    sandbox.add_exception(Exception::ExecuteAndRead(config.nix_dir.clone()))?;
-    sandbox.add_exception(Exception::ExecuteAndRead(config.git_dir.clone()))?;
-    sandbox.add_exception(Exception::Read(RESOLV_CONF_PATH.into()))?;
-    sandbox.add_exception(Exception::WriteAndRead(DEV_NULL_PATH.into()))?;
-    sandbox.add_exception(Exception::Networking)?;
+    unsafe { env::set_var("NIX_PATH", format!("eval={}", cwd.display())) };
+    sandbox
+        .add_exception(Exception::Environment("HOME".into()))?
+        .add_exception(Exception::Environment("NIX_CONFIG".into()))?
+        .add_exception(Exception::Environment("NIX_PATH".into()))?
+        .add_exception(Exception::Environment("PATH".into()))?
+        .add_exception(Exception::Environment("GIT_SSL_CAINFO".into()))?
+        .add_exception(Exception::Read(cwd))?
+        .add_exception(Exception::Read(RESOLV_CONF_PATH.into()))?
+        .add_exception(Exception::ExecuteAndRead(nix_root))?
+        .add_exception(Exception::ExecuteAndRead(config.nix_dir.clone()))?
+        .add_exception(Exception::ExecuteAndRead(config.git_dir.clone()))?
+        .add_exception(Exception::ExecuteAndRead(config.utils_dir.clone()))?
+        .add_exception(Exception::WriteAndRead(DEV_NULL_PATH.into()))?
+        .add_exception(Exception::Networking)?;
 
     Ok(sandbox)
 }
