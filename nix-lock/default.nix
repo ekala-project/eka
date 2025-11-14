@@ -7,6 +7,24 @@ root: lockstr:
 let
   unknownErr = "unknown atom type encountered";
   lock_toml = builtins.fromTOML lockstr;
+  pureScope = {
+    __getEnv = "";
+    __nixPath = [ ];
+    __currentTime = 0;
+    __currentSystem =
+      extraConfig.platform or abort
+        "Accessing the current system is impure. Set the platform in the config instead";
+    __storePath = abort "Making explicit dependencies on store paths is illegal.";
+    builtins = builtins.removeAttrs builtins [
+      "nixPath"
+      "storePath"
+      "currentSystem"
+      "currentTime"
+      "getEnv"
+    ];
+  };
+  Import = scopedImport pureScope;
+
   f =
     root: lock:
     let
@@ -52,10 +70,13 @@ let
             if builtins.pathExists tomlPath then builtins.fromTOML (builtins.readFile tomlPath) else { };
           trvialComposer =
             root: args:
-            scopedImport {
-              atoms = args.extern or { };
-              cfg = args.config or { };
-            } root;
+            scopedImport (
+              pureScope
+              // {
+                atoms = args.extern or { };
+                cfg = args.config or { };
+              }
+            ) root;
         in
         let
           composeKind = lock.compose.use or null;
@@ -96,7 +117,7 @@ let
             };
           in
           {
-            import = path: import (fetch + "/${path}");
+            import = path: Import (fetch + "/${path}");
             src = fetch;
           };
         "nix+tar" =
@@ -108,7 +129,7 @@ let
             };
           in
           {
-            import = path: import (fetch + "/${path}");
+            import = path: Import (fetch + "/${path}");
             src = fetch;
           };
         "nix" =
@@ -120,7 +141,7 @@ let
             };
           in
           {
-            import = path: import (fetch + "/${path}");
+            import = path: Import (fetch + "/${path}");
             src = fetch;
           };
         "nix+src" =
