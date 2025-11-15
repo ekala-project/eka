@@ -774,7 +774,10 @@ impl super::QueryStore for gix::Url {
         let name = target.as_ref().to_string();
         self.get_refs(Some(target), transport).and_then(|r| {
             r.into_iter()
-                .next()
+                .find(|r| {
+                    let (n, ..) = r.unpack();
+                    name.contains(n.to_string().as_str())
+                })
                 .ok_or(Error::NoRef(name, self.to_string()))
         })
     }
@@ -893,7 +896,10 @@ impl<'repo> super::QueryStore for gix::Remote<'repo> {
         let name = target.as_ref().to_string();
         self.get_refs(Some(target), transport).and_then(|r| {
             r.into_iter()
-                .next()
+                .find(|r| {
+                    let (n, ..) = r.unpack();
+                    name.contains(n.to_string().as_str())
+                })
                 .ok_or(Error::NoRef(name, self.symbol().to_owned()))
         })
     }
