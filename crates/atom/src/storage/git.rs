@@ -41,7 +41,7 @@ use std::sync::OnceLock;
 use std::{fs, io};
 
 use bstr::BStr;
-pub use cache::{get_atom as cache_atom, repo as cache_repo};
+pub use cache::repo as cache_repo;
 use gix::discover::upwards::Options;
 use gix::protocol::handshake::Ref;
 use gix::protocol::transport::client::Transport;

@@ -1,4 +1,4 @@
-use atom::storage::{LocalStorage, QueryStore, QueryVersion, git};
+use atom::storage::{LocalStorage, QueryStore, QueryVersion, RemoteAtomCache, git};
 use atom::uri::Uri;
 use clap::Parser;
 use semver::VersionReq;
@@ -9,12 +9,11 @@ use tempfile::TempDir;
 #[group(id = "plan_args")]
 pub struct Args {
     /// The atom uris to generate a plan for.
-    ///
-    /// note: this argument is ignored if the current directory is already inside a git repository
     uri: Vec<Uri>,
 }
 
 pub async fn run(_storage: Option<&impl LocalStorage>, args: Args) -> anyhow::Result<()> {
+    let cache = &git::cache_repo()?.to_thread_local();
     let mut atom_dirs: Vec<TempDir> = Vec::with_capacity(args.uri.len());
     for uri in args.uri {
         if let Some(url) = uri.url() {
@@ -23,7 +22,8 @@ pub async fn run(_storage: Option<&impl LocalStorage>, args: Args) -> anyhow::Re
             let req = uri.version().unwrap_or(&star);
             if let Some((version, _)) =
                 url.get_highest_match(uri.label(), req, Some(&mut transport))
-                && let Ok(dir) = git::cache_atom(url, uri.label(), &version, &mut transport)
+                && let Ok(dir) = cache
+                    .retrieve_atom(url, uri.label(), &version, &mut transport)
                     .inspect_err(|e| tracing::error!("{}", e))
             {
                 atom_dirs.push(dir);
