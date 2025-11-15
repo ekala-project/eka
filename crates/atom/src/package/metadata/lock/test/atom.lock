@@ -2,9 +2,9 @@ version = 1
 
 [locker]
 label = "nix-lock"
-version = "0.1.6"
+version = "0.2.0"
 set = "4abbd2644bc3585e9be95deb277ccf48f6ed26ac"
-rev = "e711aa1f48d877652dd2ba724d4af752be7b5371"
+rev = "c526c47a5d51feb2b6f86b3c2b9c90752903f51c"
 mirror = "https://github.com/ekala-project/eka"
 id = "r3rlam6bd31t9i04ggug7avs8vf8981q7a3b6gobemk1gfs50qm0"
 
