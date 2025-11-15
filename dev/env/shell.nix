@@ -19,6 +19,7 @@ pkgs.mkShell.override { stdenv = pkgs.clangStdenv; } {
       pkg-config
       nodePackages.prettier
       mod.fenix.default.rustfmt
+      crate2nix
       nil
       toolchain
       mold

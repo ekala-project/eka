@@ -41,6 +41,7 @@ use std::sync::OnceLock;
 use std::{fs, io};
 
 use bstr::BStr;
+pub use cache::{get_atom as cache_atom, repo as cache_repo};
 use gix::discover::upwards::Options;
 use gix::protocol::handshake::Ref;
 use gix::protocol::transport::client::Transport;
@@ -56,6 +57,8 @@ use crate::id::Genesis;
 use crate::package::AtomError;
 use crate::package::metadata::{DocError, EkalaManifest, GitDigest};
 use crate::{AtomId, Label};
+
+pub(crate) mod cache;
 
 #[cfg(test)]
 pub(crate) mod test;
@@ -690,35 +693,48 @@ impl super::QueryStore for gix::Url {
         };
 
         let config = gix::config::File::from_globals()?;
-        let (mut cascade, _, prompt_opts) = gix::config::credential_helpers(
-            self.to_owned(),
-            &config,
-            true,
-            gix::config::section::is_trusted,
-            Environment {
-                xdg_config_home: Permission::Allow,
-                home: Permission::Allow,
-                http_transport: Permission::Allow,
-                identity: Permission::Allow,
-                objects: Permission::Allow,
-                git_prefix: Permission::Allow,
-                ssh_prefix: Permission::Allow,
-            },
-            false,
-        )?;
 
-        let authenticate = Box::new(move |action| cascade.invoke(action, prompt_opts.clone()));
+        let shake_hands = |transport: &mut Box<dyn Transport + Send>| {
+            let (mut cascade, _, prompt_opts) = gix::config::credential_helpers(
+                self.to_owned(),
+                &config,
+                true,
+                gix::config::section::is_trusted,
+                Environment {
+                    xdg_config_home: Permission::Allow,
+                    home: Permission::Allow,
+                    http_transport: Permission::Allow,
+                    identity: Permission::Allow,
+                    objects: Permission::Allow,
+                    git_prefix: Permission::Allow,
+                    ssh_prefix: Permission::Allow,
+                },
+                false,
+            )?;
+            let authenticate = Box::new(move |action| cascade.invoke(action, prompt_opts.clone()));
 
-        let mut handshake = gix::protocol::fetch::handshake(
-            &mut *transport,
-            authenticate,
-            Vec::new(),
-            &mut prodash::progress::Discard,
-        )
-        .map_err(|e| {
-            tracing::error!(url = %self, "couldn't establish a handshake with the remote");
-            Box::new(e)
-        })?;
+            gix::protocol::fetch::handshake(
+                &mut *transport,
+                authenticate,
+                Vec::new(),
+                &mut prodash::progress::Discard,
+            )
+            .map_err(Box::new)
+            .map_err(Error::Handshake)
+        };
+
+        let mut handshake = shake_hands(transport)
+            .or_else(|e| {
+                if !transport.connection_persists_across_multiple_requests() {
+                    let mut transport = self.get_transport()?;
+                    shake_hands(&mut transport)
+                } else {
+                    Err(e)
+                }
+            })
+            .inspect_err(|_| {
+                tracing::error!(url = %self, "couldn't establish a handshake with the remote");
+            })?;
 
         tracing::debug!(?targets, url = %self, "checking remote for refs");
         use gix::refspec::parse::Operation;
@@ -761,7 +777,10 @@ impl super::QueryStore for gix::Url {
         let name = target.as_ref().to_string();
         self.get_refs(Some(target), transport).and_then(|r| {
             r.into_iter()
-                .next()
+                .find(|r| {
+                    let (n, ..) = r.unpack();
+                    name.contains(n.to_string().as_str())
+                })
                 .ok_or(Error::NoRef(name, self.to_string()))
         })
     }
@@ -820,8 +839,6 @@ impl<'repo> super::QueryStore for gix::Remote<'repo> {
         use tracing::level_filters::LevelFilter;
 
         let tree = Root::new();
-        let sync_progress = tree.add_child("sync");
-        let init_progress = tree.add_child("init");
         let _ = if LevelFilter::current() > LevelFilter::WARN {
             Some(setup_line_renderer(&tree))
         } else {
@@ -834,22 +851,39 @@ impl<'repo> super::QueryStore for gix::Remote<'repo> {
             .replace_refspecs(references, Direction::Fetch)
             .map_err(Box::new)?;
 
-        let transport = if let Some(transport) = transport {
-            transport
-        } else {
-            &mut remote.get_transport()?
+        let fetch = |transport: Option<&mut Self::Transport>| {
+            let sync_progress = tree.add_child("sync");
+            let init_progress = tree.add_child("init");
+
+            let transport = if let Some(transport) = transport {
+                transport
+            } else {
+                &mut remote.get_transport()?
+            };
+
+            remote
+                .to_connection_with_transport(transport)
+                .prepare_fetch(sync_progress, Options::default())
+                .map_err(Box::new)
+                .map_err(Error::Refs)
+                .and_then(|p| {
+                    Ok(p.with_write_packed_refs_only(true)
+                        .receive(init_progress, &AtomicBool::new(false))
+                        .map_err(Box::new)?)
+                })
         };
 
-        let client = remote.to_connection_with_transport(transport);
+        let supports_multiple = transport
+            .as_ref()
+            .is_some_and(|t| t.connection_persists_across_multiple_requests());
 
-        let query = client
-            .prepare_fetch(sync_progress, Options::default())
-            .map_err(Box::new)?;
-
-        let outcome = query
-            .with_write_packed_refs_only(true)
-            .receive(init_progress, &AtomicBool::new(false))
-            .map_err(Box::new)?;
+        let outcome = fetch(transport).or_else(|e| {
+            if !supports_multiple {
+                fetch(None)
+            } else {
+                Err(e)
+            }
+        })?;
 
         Ok(outcome.ref_map.remote_refs)
     }
@@ -865,7 +899,10 @@ impl<'repo> super::QueryStore for gix::Remote<'repo> {
         let name = target.as_ref().to_string();
         self.get_refs(Some(target), transport).and_then(|r| {
             r.into_iter()
-                .next()
+                .find(|r| {
+                    let (n, ..) = r.unpack();
+                    name.contains(n.to_string().as_str())
+                })
                 .ok_or(Error::NoRef(name, self.symbol().to_owned()))
         })
     }

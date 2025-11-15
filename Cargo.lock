@@ -198,6 +198,7 @@ dependencies = [
  "addr",
  "anyhow",
  "base32",
+ "base58",
  "bimap",
  "blake3",
  "bstr",
@@ -316,6 +317,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "022dfe9eb35f19ebbcb51e0b40a5ab759f46ad60cadf7297e0bd085afb50e076"
 
 [[package]]
+name = "base58"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6107fe1be6682a68940da878d9e9f5e90ca5745b3dec9fd1bb393c8777d4f581"
+
+[[package]]
 name = "base64"
 version = "0.21.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -380,8 +387,7 @@ dependencies = [
 [[package]]
 name = "birdcage"
 version = "0.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "848df95320021558dd6bb4c26de3fe66724cdcbdbbf3fa720150b52b086ae568"
+source = "git+https://github.com/nrdxp/birdcage?branch=clone_fs#7d294c333b1d515dd6d175c1477bc3ee4d44bdfe"
 dependencies = [
  "bitflags 2.10.0",
  "libc",
@@ -4642,6 +4648,7 @@ dependencies = [
 name = "nixec"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "birdcage",
  "thiserror 2.0.17",
 ]
@@ -5644,7 +5651,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.4.15",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -7708,15 +7715,6 @@ name = "windows-sys"
 version = "0.52.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "282be5f36a8ce781fad8c8ae18fa3f9beff57ec1b52cb3de0789201425d9a33d"
-dependencies = [
- "windows-targets 0.52.6",
-]
-
-[[package]]
-name = "windows-sys"
-version = "0.59.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e38bc4d79ed67fd075bcc251a1c39b32a1776bbe92e5bef1f0bf1f8c531853b"
 dependencies = [
  "windows-targets 0.52.6",
 ]

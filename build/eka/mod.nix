@@ -20,9 +20,10 @@ in
           # split up the atom crate and use some of its functionality in the proc macro
           # to compute these from the local repository without having to contact the
           # network.
-          EKA_ROOT_COMMIT_HASH = "4abbd2644bc3585e9be95deb277ccf48f6ed26ac";
-          EKA_ORIGIN_URL = "https://github.com/ekala-project/eka";
-          EKA_LOCK_REV = "e711aa1f48d877652dd2ba724d4af752be7b5371";
+          EKA_ROOT_COMMIT_HASH = ext.locker.set;
+          EKA_ORIGIN_URL = ext.locker.mirror;
+          EKA_LOCK_REV = ext.locker.rev;
+          EKA_LOCK_IMPORT = ext.fetch + "/import.nix";
         };
       }
       // builtins.listToAttrs (

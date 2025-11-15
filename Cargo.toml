@@ -13,7 +13,7 @@ version = "0.3.0"
 [profile.release]
 codegen-units = 1
 lto           = true
-opt-level     = 3
+opt-level     = "z"
 strip         = true
 
 [dependencies]
@@ -83,6 +83,7 @@ prodash = { version = "30.0.1", features = [
 ] }
 
 [patch.crates-io]
+birdcage           = { git = "https://github.com/nrdxp/birdcage", branch = "clone_fs" }
 tracing            = { git = "https://github.com/nrdxp/tracing", branch = "hierarchical" }
 tracing-appender   = { git = "https://github.com/nrdxp/tracing", branch = "hierarchical" }
 tracing-core       = { git = "https://github.com/nrdxp/tracing", branch = "hierarchical" }
