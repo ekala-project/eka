@@ -387,7 +387,7 @@ dependencies = [
 [[package]]
 name = "birdcage"
 version = "0.8.1"
-source = "git+https://github.com/nrdxp/birdcage?branch=clone_fs#7d294c333b1d515dd6d175c1477bc3ee4d44bdfe"
+source = "git+https://github.com/nrdxp/birdcage?branch=clone_fs#fdcbe8b344bc2ae4d98fedec706644c967d00d35"
 dependencies = [
  "bitflags 2.10.0",
  "libc",
@@ -1131,6 +1131,7 @@ dependencies = [
  "clap",
  "either",
  "gix 0.73.0",
+ "nixec",
  "semver",
  "tempfile",
  "thiserror 2.0.17",

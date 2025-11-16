@@ -13,7 +13,7 @@ pub struct Args {
     uri: Vec<Uri>,
 }
 
-pub async fn run(_storage: Option<&impl LocalStorage>, args: Args) -> anyhow::Result<()> {
+pub async fn run(storage: Option<&impl LocalStorage>, args: Args) -> anyhow::Result<()> {
     let mut tasks = JoinSet::new();
     let cache = git::cache_repo()?;
     let mut atom_dirs: Vec<TempDir> = Vec::with_capacity(args.uri.len());
@@ -44,8 +44,15 @@ pub async fn run(_storage: Option<&impl LocalStorage>, args: Args) -> anyhow::Re
                 .await
             };
             tasks.spawn(task);
-        } else {
+        } else if let Some(storage) = storage {
+            let _ekala = storage.ekala_manifest()?;
+
             // TODO: handle local atoms
+        } else {
+            tracing::warn!(
+                label = %uri.label(),
+                "There is no local set established, can't resolve local atom request"
+            );
         }
     }
     while let Some(dir) = tasks.join_next().await {

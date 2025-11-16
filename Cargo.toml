@@ -32,7 +32,8 @@ tracing-appender.workspace   = true
 tracing-indicatif.workspace  = true
 tracing-subscriber.workspace = true
 
-atom.path = "crates/atom"
+atom.path  = "crates/atom"
+nixec.path = "crates/nixec"
 
 [workspace.dependencies]
 anyhow                = "^1"
