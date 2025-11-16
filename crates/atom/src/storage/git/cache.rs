@@ -51,7 +51,6 @@ impl<'a> RemoteAtomCache for &'a Repository {
         transport: &mut Self::Transport,
     ) -> Result<Self::RemoteHandle, Self::Error> {
         use base58::ToBase58;
-        use gix::config::Source;
 
         let query = format!("{}:{}", super::V1_ROOT, super::V1_ROOT);
         let root = url
@@ -60,22 +59,12 @@ impl<'a> RemoteAtomCache for &'a Repository {
         let gix::ObjectId::Sha1(id) = super::to_id(root);
         let name: String = id.to_base58();
 
-        let mut remote = self
+        let remote = self
             .find_remote(bstr::BString::from(name.to_owned()).as_bstr())
             .unwrap_or(
                 self.find_remote(url.to_bstring().as_bstr())
                     .unwrap_or(self.remote_at(url.to_owned())?),
             );
-        if remote.url(gix::remote::Direction::Fetch) != Some(url) || remote.name().is_none() {
-            let config_file = self.git_dir().join("config");
-            let mut config =
-                gix::config::File::from_path_no_includes(config_file.clone(), Source::Local)?;
-            remote
-                .save_as_to(name.to_owned(), &mut config)
-                .map_err(Box::new)?;
-            let mut file = std::fs::File::create(config_file)?;
-            config.write_to(&mut file)?;
-        }
 
         Ok((name, remote))
     }
