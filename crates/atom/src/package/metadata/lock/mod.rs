@@ -243,7 +243,7 @@ pub struct Lockfile {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) sets: BTreeMap<GitDigest, SetDetails>,
 
-    locker: AtomDep,
+    pub(crate) locker: AtomDep,
 
     pub(in crate::package) compose: Using,
     /// The list of locked dependencies (absent or empty if none).
@@ -301,6 +301,10 @@ impl AtomDep {
 
     pub(crate) fn set(&self) -> GitDigest {
         self.set
+    }
+
+    pub(crate) fn mirror(&self) -> Option<&gix::Url> {
+        self.mirror.as_ref()
     }
 
     pub(crate) fn rev(&self) -> Option<GitDigest> {

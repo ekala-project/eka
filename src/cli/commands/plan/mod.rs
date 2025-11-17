@@ -16,9 +16,11 @@ pub struct Args {
 pub async fn run(storage: Option<&impl LocalStorage>, args: Args) -> anyhow::Result<()> {
     let mut tasks = JoinSet::new();
     let cache = git::cache_repo()?;
+    let eval_tmp = tempfile::TempDir::with_prefix(".eval-atoms-")?;
     let mut atom_dirs: Vec<TempDir> = Vec::with_capacity(args.uri.len());
     for uri in args.uri {
         if let Some(url) = uri.url().map(ToOwned::to_owned) {
+            let dir = eval_tmp.as_ref().to_owned();
             let mut transport = url.get_transport()?;
             let task = async move {
                 tokio::task::spawn_blocking(move || {
@@ -28,8 +30,15 @@ pub async fn run(storage: Option<&impl LocalStorage>, args: Args) -> anyhow::Res
                         .get_highest_match(uri.label(), req, Some(&mut transport))
                         .map(|(version, _)| {
                             let repo = &cache.to_thread_local();
-                            repo.retrieve_atom(&url, uri.label(), &version, &mut transport)
-                                .inspect_err(|e| tracing::error!("{}", e))
+                            repo.cache_and_materialize_atom(
+                                &url,
+                                uri.label(),
+                                &version,
+                                &mut transport,
+                                true,
+                                dir,
+                            )
+                            .inspect_err(|e| tracing::error!("{}", e))
                         });
                     if res.is_none() {
                         tracing::warn!(

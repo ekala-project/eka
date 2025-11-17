@@ -1,29 +1,38 @@
-root: lockstr:
 {
+  root ? ./., # assume we are called in the atom directory by default
   # FIXME: strictly for compatibility until eka has a calling interface
   extraExtern ? { },
   extraConfig ? { },
 }:
 let
   unknownErr = "unknown atom type encountered";
+  lockstr = builtins.readFile (root + "/atom.lock");
   lock_toml = builtins.fromTOML lockstr;
-  pureScope = {
-    __getEnv = "";
-    __nixPath = [ ];
-    __currentTime = 0;
-    __currentSystem =
-      extraConfig.platform or abort
-        "Accessing the current system is impure. Set the platform in the config instead";
-    __storePath = abort "Making explicit dependencies on store paths is illegal.";
-    builtins = builtins.removeAttrs builtins [
-      "nixPath"
-      "storePath"
-      "currentSystem"
-      "currentTime"
-      "getEnv"
-    ];
-  };
+  pureScope =
+    let
+      _builtins = builtins;
+    in
+    rec {
+      import = Import;
+      scopedImport = Scoped;
+      __getEnv = _: "";
+      __nixPath = [ ];
+      __currentTime = 0;
+      __currentSystem =
+        extraConfig.platforms.build or abort
+          "Accessing the current system is impure. Set the platform in the config instead";
+      __storePath = abort "Making explicit dependencies on store paths is illegal.";
+      builtins = _builtins // {
+        inherit import scopedImport;
+        getEnv = __getEnv;
+        nixPath = __nixPath;
+        currentTime = __currentTime;
+        currentSystem = __currentSystem;
+        builtins = builtins;
+      };
+    };
   Import = scopedImport pureScope;
+  Scoped = args: scopedImport (args // pureScope);
 
   f =
     root: lock:
@@ -70,13 +79,10 @@ let
             if builtins.pathExists tomlPath then builtins.fromTOML (builtins.readFile tomlPath) else { };
           trvialComposer =
             root: args:
-            scopedImport (
-              pureScope
-              // {
-                atoms = args.extern or { };
-                cfg = args.config or { };
-              }
-            ) root;
+            Scoped {
+              atoms = args.extern or { };
+              cfg = args.config or { };
+            } root;
         in
         let
           composeKind = lock.compose.use or null;
