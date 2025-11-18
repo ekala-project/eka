@@ -1,4 +1,3 @@
-use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -10,7 +9,12 @@ use gix::{ObjectId, Remote, Repository, ThreadSafeRepository};
 use semver::Version;
 
 use crate::storage::{QueryStore, RemoteAtomCache};
-use crate::{Label, Lockfile, ValidManifest};
+use crate::{Label, Lockfile};
+
+/// The filename of the file used to run nix import logic
+pub const NIX_IMPORT_FILE: &str = "atom.nix";
+/// The entrypoint attribute to evaluate inside the atom
+pub const NIX_ENTRY_KEY: &str = "main";
 
 static CACHE_REPO: OnceLock<Option<ThreadSafeRepository>> = OnceLock::new();
 
@@ -49,8 +53,6 @@ pub struct CacheIds {
 }
 
 type RemoteName = String;
-
-const NIX_IMPORT_FILE: &str = "atom.nix";
 
 impl<'a> RemoteAtomCache for &'a Repository {
     type Atom = CacheIds;

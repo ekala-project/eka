@@ -15,7 +15,7 @@ lockexpr ./. lockstr {
   # FIXME: this is the only way to get the repository source into the atom for now
   # The long-term solution to this problem is specified in ../adrs/0010-electron-sources.md
   extraExtern.ext = rec {
-    inherit locker fetch;
+    inherit locker;
     cargo-lock = import (src + "/build/Cargo.nix");
     src =
       if builtins.pathExists ../. then

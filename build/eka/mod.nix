@@ -23,7 +23,6 @@ in
           EKA_ROOT_COMMIT_HASH = ext.locker.set;
           EKA_ORIGIN_URL = ext.locker.mirror;
           EKA_LOCK_REV = ext.locker.rev;
-          EKA_LOCK_IMPORT = ext.fetch + "/import.nix";
         };
       }
       // builtins.listToAttrs (

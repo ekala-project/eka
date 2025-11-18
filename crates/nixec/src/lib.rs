@@ -16,6 +16,7 @@ use thiserror::Error;
 // Constants
 //================================================================================================
 
+pub const WORKDIR: &str = "/work";
 const SSL_CERT_PATH: &str = "/nix/var/nix/profiles/default/etc/ssl/certs/ca-bundle.crt";
 const RESOLV_CONF_PATH: &str = "/etc/resolv.conf";
 const DEV_NULL_PATH: &str = "/dev/null";
@@ -137,7 +138,8 @@ fn configure_sandbox(config: &NixecConfig) -> Result<Birdcage, NixecError> {
         )
     };
     unsafe { env::set_var("GIT_SSL_CAINFO", SSL_CERT_PATH) };
-    unsafe { env::set_var("NIX_PATH", "/work") };
+    unsafe { env::set_var("NIX_PATH", WORKDIR) };
+    unsafe { env::set_var("HOME", "/homeless-shelter") };
     sandbox
         .add_exception(Exception::Environment("HOME".into()))?
         .add_exception(Exception::Environment("NIX_CONFIG".into()))?

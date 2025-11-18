@@ -1,8 +1,8 @@
 {
   root ? ./., # assume we are called in the atom directory by default
+  config ? { },
   # FIXME: strictly for compatibility until eka has a calling interface
   extraExtern ? { },
-  extraConfig ? { },
 }:
 let
   unknownErr = "unknown atom type encountered";
@@ -19,7 +19,7 @@ let
       __nixPath = [ ];
       __currentTime = 0;
       __currentSystem =
-        extraConfig.platforms.build or abort
+        config.platforms.build or abort
           "Accessing the current system is impure. Set the platform in the config instead";
       __storePath = abort "Making explicit dependencies on store paths is illegal.";
       builtins = _builtins // {
@@ -43,7 +43,8 @@ let
             path:
             let
               ekala = path + "/ekala.toml";
-              hasSet = builtins.readFileType path == "directory" && builtins.pathExists ekala;
+              hasSet =
+                builtins.readFileType path == "directory" && builtins.isPath ekala && builtins.pathExists ekala;
               toml = builtins.fromTOML (builtins.readFile ekala);
               locals = builtins.listToAttrs (
                 map (
@@ -196,9 +197,20 @@ let
         };
         config =
           let
+            err = "passed configuration must be a json object";
             manifest_str = builtins.readFile (root + "/atom.toml");
+            set =
+              if builtins.isAttrs config then
+                config
+              else if builtins.isString config then
+                let
+                  json = builtins.fromJSON config;
+                in
+                if builtins.isAttrs json then json else abort err
+              else
+                abort err;
           in
-          extraConfig // { inherit (builtins.fromTOML manifest_str) package; };
+          set // { inherit (builtins.fromTOML manifest_str) package; };
       }
     else
       abort "unsupported format version";

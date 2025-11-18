@@ -1,6 +1,6 @@
 [package]
 label   = "nix-lock"
-version = "0.3.0"
+version = "0.3.1"
 
 [locker.eka]
 root_hash = "4abbd2644bc3585e9be95deb277ccf48f6ed26ac"

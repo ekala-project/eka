@@ -8,7 +8,7 @@ use quote::quote;
 
 const LOCK_LABEL: &str = "nix-lock";
 const LOCK_MAJOR: u64 = 0;
-const LOCK_MINOR: u64 = 2;
+const LOCK_MINOR: u64 = 3;
 const LOCK_PATCH: u64 = 0;
 
 /// Computes Eka's repository root commit hash at compile time
@@ -43,26 +43,10 @@ pub fn eka_origin_info(_input: TokenStream) -> TokenStream {
     } else {
         lock_rev()
     };
-    let lock_import = if let Ok(file) = std::env::var("EKA_LOCK_IMPORT") {
-        std::fs::read_to_string(file).expect("could not read lock import from evironment")
-    } else {
-        get_repo()
-            .to_thread_local()
-            .find_commit(rev)
-            .ok()
-            .and_then(|c| c.tree().ok())
-            .and_then(|t| t.find_entry("import.nix").and_then(|e| e.object().ok()))
-            .and_then(|o| String::from_utf8(o.data.clone()).ok())
-            .expect("could not read lock import expression")
-    };
 
     let rev_tokens = rev.iter().map(|&byte| quote! { #byte });
 
     quote! {
-        /// the expression used to import the lockfile parser, pulled directly from the locker atom itself
-        /// TODO: in the future, we will want to pull this at runtime
-        pub const LOCK_IMPORT: &str = #lock_import;
-
         pub(crate) const LOCK_LABEL: &str = #LOCK_LABEL;
         pub(crate) const LOCK_REV: [u8; 20] = [#(#rev_tokens),*];
         pub(crate) const EKA_ORIGIN_URL: &str = #url;
