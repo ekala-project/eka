@@ -40,7 +40,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::{fs, io};
 
-use bstr::BStr;
+use bstr::{BStr, ByteSlice};
 pub use cache::{NIX_ENTRY_KEY, NIX_IMPORT_FILE, repo as cache_repo};
 use gix::discover::upwards::Options;
 use gix::protocol::handshake::Ref;
@@ -775,13 +775,20 @@ impl super::QueryStore for gix::Url {
         Spec: AsRef<BStr> + std::fmt::Debug,
     {
         let name = target.as_ref().to_string();
+        let (name, _) = name.split_once(':').unwrap_or(("", ""));
         self.get_refs(Some(target), transport).and_then(|r| {
-            r.into_iter()
+            let orig = r.clone();
+            let names = r.iter().map(|r| {
+                let (n, ..) = r.unpack();
+                n
+            });
+            let res = resolve_partial_name(name, names);
+            orig.into_iter()
                 .find(|r| {
                     let (n, ..) = r.unpack();
-                    name.contains(n.to_string().as_str())
+                    Some(n) == res
                 })
-                .ok_or(Error::NoRef(name, self.to_string()))
+                .ok_or(Error::NoRef(name.into(), self.to_string()))
         })
     }
 
@@ -790,6 +797,47 @@ impl super::QueryStore for gix::Url {
         let transport = gix::protocol::transport::connect(self.to_owned(), Options::default())?;
         Ok(Box::new(transport))
     }
+}
+
+/// Resolves a partial ref name to a full ref name using the same precedence as gix.
+/// Returns the first matching ref from available_refs, or None.
+fn resolve_partial_name<'a>(
+    partial_name: &str,
+    available_refs: impl IntoIterator<Item = &'a BStr>,
+) -> Option<&'a BStr> {
+    use bstr::{BStr, BString};
+    let available: std::collections::HashSet<_> = available_refs.into_iter().collect();
+    let partial_name = BStr::new(partial_name);
+
+    // If it already looks like a full ref name, check for exact match
+    if partial_name.starts_with(b"refs/") {
+        return available.get(partial_name).copied();
+    }
+
+    // Use the exact same expansion order as gix-refspec/src/spec.rs:236
+    let expansions = [
+        ("", false),              // 0: <name>
+        ("refs/", false),         // 1: refs/<name>
+        ("refs/tags/", false),    // 2: refs/tags/<name>
+        ("refs/heads/", false),   // 3: refs/heads/<name>
+        ("refs/remotes/", false), // 4: refs/remotes/<name>
+        ("refs/remotes/", true),  // 5: refs/remotes/<name>/HEAD
+    ];
+
+    for (base, append_head) in expansions {
+        let mut candidate = BString::from(base);
+        candidate.extend_from_slice(partial_name);
+        if append_head {
+            candidate.extend_from_slice("/HEAD".as_bytes());
+        }
+
+        if available.contains(candidate.as_bstr()) {
+            // Return the original ref name from available_refs
+            return available.into_iter().find(|&r| r == candidate.as_bstr());
+        }
+    }
+
+    None
 }
 
 impl<'repo> super::QueryStore for gix::Remote<'repo> {
