@@ -8,7 +8,7 @@ use gix::protocol::transport::client::Transport;
 use gix::{ObjectId, Remote, Repository, ThreadSafeRepository};
 use semver::Version;
 
-use crate::storage::{QueryStore, RemoteAtomCache};
+use crate::storage::{self, QueryStore, RemoteAtomCache, WriteLocker};
 use crate::{Label, Lockfile};
 
 /// The filename of the file used to run nix import logic
@@ -48,7 +48,8 @@ pub enum Error {
 
 #[derive(Copy, Clone)]
 pub struct CacheIds {
-    atom: ObjectId,
+    /// The atoms object id
+    pub atom: ObjectId,
     locker: Option<ObjectId>,
 }
 
@@ -90,17 +91,15 @@ impl<'a> RemoteAtomCache for &'a Repository {
         label: &Label,
         version: &Version,
         transport: &mut Self::Transport,
-        resolve_lock: bool,
     ) -> Result<Self::Atom, Self::Error> {
-        let (name, remote) = remote;
+        let (remote_name, remote) = remote;
+        let cache_ref = format!("refs/{}/{}/{}", remote_name, label, version);
         let query = format!(
-            "{}/{}/{}:refs/{}/{}/{}",
+            "{}/{}/{}:{}",
             crate::ATOM_REFS.as_str(),
             label,
             version,
-            name,
-            label,
-            version
+            cache_ref
         );
         let r = remote
             .get_ref(query.as_str(), Some(transport))
@@ -111,10 +110,9 @@ impl<'a> RemoteAtomCache for &'a Repository {
             .map_err(Box::new)
             .map_err(super::Error::NoCommit)
             .map_err(Box::new)?;
-        let locker = if resolve_lock
-            && let Ok(Some(entry)) = commit
-                .tree()?
-                .lookup_entry_by_path(crate::LOCK_NAME.as_str())
+        let locker = if let Ok(Some(entry)) = commit
+            .tree()?
+            .lookup_entry_by_path(crate::LOCK_NAME.as_str())
             && entry.mode().kind() == EntryKind::Blob
             && let Ok(entry) = entry.object()
             && let Ok(lock) = toml_edit::de::from_slice::<Lockfile>(&entry.detach().data)
@@ -127,7 +125,6 @@ impl<'a> RemoteAtomCache for &'a Repository {
                 lock.locker.label(),
                 lock.locker.version(),
                 &mut transport,
-                false,
             )
             .map_err(|e| tracing::warn!(error = %e, "couldn't resolve locker atom"))
             .map(|r| r.atom)
@@ -158,6 +155,7 @@ impl<'a> RemoteAtomCache for &'a Repository {
         let mut record = Recorder::default();
         tree.traverse().depthfirst(&mut record)?;
         let tmp = tempfile::TempDir::with_prefix_in("atom-", to_dir)?;
+
         for entry in record.records {
             let full_path = tmp.as_ref().join(entry.filepath.to_string());
             match entry.mode.kind() {
@@ -200,25 +198,40 @@ impl<'a> RemoteAtomCache for &'a Repository {
                 },
             }
         }
-        if let Some(id) = cache_ids.locker
-            && !tmp
+
+        cache_ids.write_locker(self, &tmp)?;
+        Ok(tmp)
+    }
+}
+
+impl<'a> storage::WriteLocker<'a> for CacheIds {
+    type Cache = &'a Repository;
+    type Error = Error;
+
+    fn write_locker(
+        &self,
+        cache: &'a Self::Cache,
+        to_dir: impl AsRef<Path>,
+    ) -> Result<(), Self::Error> {
+        if let Some(id) = self.locker
+            && !to_dir
                 .as_ref()
                 .join(NIX_IMPORT_FILE)
                 .try_exists()
                 .is_ok_and(|p| p)
-            && let Some(entry) = self
+            && let Some(entry) = cache
                 .find_commit(id)
                 .map_err(|e| super::Error::NoCommit(Box::new(e)))
                 .map_err(Box::new)?
                 .tree()?
                 .lookup_entry_by_path(NIX_IMPORT_FILE)?
         {
-            fs::write(
-                tmp.as_ref().join(NIX_IMPORT_FILE),
+            std::fs::write(
+                to_dir.as_ref().join(NIX_IMPORT_FILE),
                 entry.object()?.detach().data,
             )?;
         }
-        Ok(tmp)
+        Ok(())
     }
 }
 

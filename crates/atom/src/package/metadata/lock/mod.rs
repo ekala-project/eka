@@ -125,7 +125,7 @@ static LOCK_ATOM: LazyLock<AtomDep> = LazyLock::new(|| {
 /// fetch a specific version of an atom from a Git repository.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, PartialOrd, Ord)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct AtomDep {
+pub struct AtomDep {
     /// The unique identifier of the atom.
     label: Label,
     /// The semantic version of the atom.
@@ -291,11 +291,13 @@ impl AtomDep {
         }
     }
 
-    pub(crate) fn version(&self) -> &Version {
+    /// retrieve the version this atom is locked to
+    pub fn version(&self) -> &Version {
         &self.version
     }
 
-    pub(crate) fn label(&self) -> &Label {
+    /// retrieve the label for this atom
+    pub fn label(&self) -> &Label {
         &self.label
     }
 
@@ -303,7 +305,8 @@ impl AtomDep {
         self.set
     }
 
-    pub(crate) fn mirror(&self) -> Option<&gix::Url> {
+    /// retrieve the mirror this atom is locked from
+    pub fn mirror(&self) -> Option<&gix::Url> {
         self.mirror.as_ref()
     }
 
@@ -469,6 +472,13 @@ impl std::fmt::Display for GitDigest {
                 GitDigest::Sha256(o) => write!(f, "{}", o.encode_hex::<String>()),
             }
         }
+    }
+}
+
+impl Lockfile {
+    /// retrieve the lock dependency
+    pub fn locker(&self) -> &AtomDep {
+        &self.locker
     }
 }
 

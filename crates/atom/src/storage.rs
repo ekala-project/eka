@@ -621,7 +621,6 @@ pub trait RemoteAtomCache {
         label: &Label,
         version: &Version,
         transport: &mut Self::Transport,
-        resolve_lock: bool,
     ) -> Result<Self::Atom, Self::Error>;
 
     /// Materialize a cached atom into a temporary working directory.
@@ -659,14 +658,26 @@ pub trait RemoteAtomCache {
         label: &Label,
         version: &Version,
         transport: &mut Self::Transport,
-        resolve_lock: bool,
         material_base: impl AsRef<Path>,
     ) -> Result<tempfile::TempDir, Self::Error> {
         let mut remote = self.ensure_remote(url, transport)?;
-        let commit =
-            self.resolve_atom_to_cache(&mut remote, label, version, transport, resolve_lock)?;
+        let commit = self.resolve_atom_to_cache(&mut remote, label, version, transport)?;
         self.materialize_from_cache(commit, material_base)
     }
+}
+
+/// fuck
+pub trait WriteLocker<'a>: Copy {
+    /// you
+    type Error;
+    /// so
+    type Cache: RemoteAtomCache<Atom = Self>;
+    /// fucking much
+    fn write_locker(
+        &self,
+        cache: &'a Self::Cache,
+        to_dir: impl AsRef<Path>,
+    ) -> Result<(), Self::Error>;
 }
 
 //================================================================================================

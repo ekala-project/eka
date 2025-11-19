@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 
 use anyhow::anyhow;
+use atom::Lockfile;
+use atom::storage::git::NIX_IMPORT_FILE;
 use atom::storage::{LocalStorage, QueryStore, QueryVersion, RemoteAtomCache, git};
 use atom::uri::Uri;
 use clap::Parser;
@@ -47,6 +49,7 @@ pub async fn run(storage: Option<&impl LocalStorage>, args: Args) -> anyhow::Res
     let cache = git::cache_repo()?;
     let eval_tmp = tempfile::TempDir::with_prefix(".eval-atoms-")?;
     let mut atom_dirs: Vec<TempDir> = Vec::with_capacity(args.uri.len());
+    let mut local_atom_dirs: Vec<PathBuf> = Vec::with_capacity(args.uri.len());
     let context = args.share_context;
 
     let platforms = config::Platforms {
@@ -55,6 +58,8 @@ pub async fn run(storage: Option<&impl LocalStorage>, args: Args) -> anyhow::Res
         legacy_target: Cow::Owned(args.legacy_target),
     };
 
+    let local = eval_tmp.as_ref().join("local");
+    let ekala = storage.map(|s| s.ekala_manifest());
     for uri in args.uri {
         if let Some(url) = uri.url().map(ToOwned::to_owned) {
             let dir = eval_tmp.as_ref().to_owned();
@@ -70,7 +75,6 @@ pub async fn run(storage: Option<&impl LocalStorage>, args: Args) -> anyhow::Res
                             uri.label(),
                             &version,
                             &mut transport,
-                            true,
                             dir,
                         ) {
                             Ok(dir) => Some(dir),
@@ -91,11 +95,58 @@ pub async fn run(storage: Option<&impl LocalStorage>, args: Args) -> anyhow::Res
                     },
                 }
             });
-        } else if let Some(storage) = storage {
-            let _ekala = storage.ekala_manifest()?;
+        } else if let Some(storage) = storage
+            && let Some(ekala) = &ekala
+        {
+            let ekala = match ekala {
+                Ok(e) => e,
+                Err(e) => return Err(anyhow!(e.to_string())),
+            };
+            let root = storage.ekala_root_dir()?;
 
-            // TODO: handle local atoms
+            if !local.is_symlink() {
+                #[cfg(unix)]
+                std::os::unix::fs::symlink(root, &local)?;
+            }
+
+            if let Some(path) = ekala.set().packages().as_ref().get_by_left(uri.label()) {
+                // FIXME: this entire block should probably be abstracted in library code
+                // but the current implementation does not import into the cache, which we
+                // will need to do for evaluatoin caching later.
+                let full_path = local.join(path);
+                let atom_nix = full_path.join(NIX_IMPORT_FILE);
+
+                if !atom_nix.exists()
+                    && let Ok(c) = std::fs::read(full_path.join(atom::LOCK_NAME.as_str()))
+                    && let Ok::<Lockfile, _>(lock) = toml_edit::de::from_slice(c.as_slice())
+                        .map_err(|e| tracing::error!("{}", e))
+                    && let Some(url) = lock.locker().mirror()
+                {
+                    let repo = &cache.to_thread_local();
+                    let mut transport = url.get_transport()?;
+                    let mut remote = repo.ensure_remote(url, &mut transport)?;
+                    let lock_atom = repo.resolve_atom_to_cache(
+                        &mut remote,
+                        lock.locker().label(),
+                        lock.locker().version(),
+                        &mut transport,
+                    )?;
+                    if let Some(entry) = repo
+                        .find_commit(lock_atom.atom)?
+                        .tree()?
+                        .lookup_entry_by_path(NIX_IMPORT_FILE)?
+                    {
+                        std::fs::write(&atom_nix, entry.object()?.detach().data)?;
+                    }
+                }
+                if atom_nix.exists() {
+                    local_atom_dirs.push(full_path.to_path_buf());
+                } else {
+                    tracing::warn!("couldn't resolve lock expression; skipping local atom");
+                }
+            };
         } else {
+            // TODO: implement setless execution
             tracing::warn!(
                 label = %uri.label(),
                 "There is no local set established, can't resolve local atom request"
@@ -116,13 +167,18 @@ pub async fn run(storage: Option<&impl LocalStorage>, args: Args) -> anyhow::Res
             }
         } => {}
     }
-    plan_atoms(atom_dirs, context, eval_tmp, platforms).await
+    let eval_dirs = atom_dirs
+        .iter()
+        .map(|d| d.as_ref().to_path_buf())
+        .chain(local_atom_dirs)
+        .collect::<Vec<_>>();
+    plan_atoms(eval_dirs, context, eval_tmp, platforms).await
 }
 
 async fn plan_atoms_with_shared_context(
     bin: PathBuf,
     workdir: impl AsRef<Path>,
-    atom_dirs: Vec<TempDir>,
+    atom_dirs: Vec<PathBuf>,
     env: HashMap<String, String>,
     args: impl IntoIterator<Item = String>,
 ) -> io::Result<ExitStatus> {
@@ -136,8 +192,7 @@ async fn plan_atoms_with_shared_context(
             atom_dirs
                 .iter()
                 .map(|p| {
-                    p.as_ref()
-                        .strip_prefix(workdir.as_ref())
+                    p.strip_prefix(workdir.as_ref())
                         .unwrap_or(p.as_ref())
                         .join(git::NIX_IMPORT_FILE)
                         .to_string_lossy()
@@ -151,14 +206,17 @@ async fn plan_atoms_with_shared_context(
 }
 
 async fn plan_atoms(
-    atom_dirs: Vec<TempDir>,
+    atom_dirs: Vec<PathBuf>,
     shared_context: bool,
     workdir: TempDir,
     platforms: config::Platforms<'static>,
 ) -> anyhow::Result<()> {
     let bin = std::env::current_exe()?;
     if crate::is_same_exe(bin.as_ref())? {
-        let config = json_digest::canonical_json(&serde_json::to_value(platforms)?)?;
+        let value = serde_json::json!({
+            "platforms": platforms
+        });
+        let config = json_digest::canonical_json(&value)?;
 
         let args = [
             "-A",
@@ -179,13 +237,19 @@ async fn plan_atoms(
             });
         } else {
             for dir in &atom_dirs {
+                let local = &workdir.as_ref().join("local");
+                let local = dir.starts_with(local).then_some(&local);
                 let mut child = tokio::process::Command::new(&bin)
                     .arg0(crate::NIXEC)
                     .env_clear()
                     .envs(&filtered_env)
-                    .current_dir(dir.as_ref())
+                    .current_dir(local.unwrap_or(&dir))
                     .kill_on_drop(true)
-                    .arg(git::NIX_IMPORT_FILE)
+                    .arg(if let Some(local) = local {
+                        dir.strip_prefix(local)?.join(git::NIX_IMPORT_FILE)
+                    } else {
+                        git::NIX_IMPORT_FILE.into()
+                    })
                     .args(args.iter().map(|p| p.as_str()))
                     .spawn()?;
                 tasks.spawn(async move { child.wait().await });
