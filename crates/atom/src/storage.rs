@@ -582,7 +582,7 @@ pub trait RemoteAtomCache {
     /// The type repesenting the transport to utilize for the connection.
     type Transport: Send;
     /// The type repesenting the atom in the storage backend.
-    type Atom: Copy;
+    type Atom;
 
     /// Ensure the cache backend knows how to reach the given remote URL.
     ///
@@ -664,20 +664,6 @@ pub trait RemoteAtomCache {
         let commit = self.resolve_atom_to_cache(&mut remote, label, version, transport)?;
         self.materialize_from_cache(commit, material_base)
     }
-}
-
-/// fuck
-pub trait WriteLocker<'a>: Copy {
-    /// you
-    type Error;
-    /// so
-    type Cache: RemoteAtomCache<Atom = Self>;
-    /// fucking much
-    fn write_locker(
-        &self,
-        cache: &'a Self::Cache,
-        to_dir: impl AsRef<Path>,
-    ) -> Result<(), Self::Error>;
 }
 
 //================================================================================================

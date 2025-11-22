@@ -15,7 +15,7 @@ let
       lock = rootLock.toml;
     in
     {
-      inherit lock;
+      inherit (lock) deps;
       node = { inherit root; };
       key = "root";
       type = "atom";
@@ -26,28 +26,21 @@ builtins.genericClosure {
   startSet = [ top-level ];
   operator =
     item:
-    map
-      (
-        dep:
+    map (
+      dep:
+      let
+        node = fetchers.${dep.type} dep;
+      in
+      {
+        inherit node;
+        inherit (dep) type;
+        key = dep-key dep;
+      }
+      // (
         let
-          node = fetchers.${dep.type} dep;
+          lock = locker node.root;
         in
-        {
-          inherit node;
-          inherit (dep) type;
-          key = if dep.type == "atom" && node.root == root then "root" else dep-key dep;
-        }
-        // (
-          let
-            lock = locker node.root;
-          in
-          if dep.type == "atom" && lock.lockstr != "" then { lock = lock.toml; } else { }
-        )
+        if dep.type == "atom" && lock.toml ? deps then { inherit (lock.toml) deps; } else { }
       )
-      (
-        (
-          if item.lock.compose.use or "" == "atom" then [ (item.lock.compose // { type = "atom"; }) ] else [ ]
-        )
-        ++ item.lock.deps or [ ]
-      );
+    ) item.deps or [ ];
 }

@@ -19,13 +19,14 @@ let
     } root;
 in
 let
-  composeKind = lock.compose.use or (if lock.static then "static" else null);
+  kind = lock.compose.use or (if lock.static or false then "static" else "");
+  key = builtins.hashString "sha256" (kind + lock.compose.at or "");
 in
-if composeKind == "atom" then
-  deps.${dep-key (lock.compose // { type = "atom"; })}
-else if composeKind == "nix" then
+if kind == "nix" then
   trvialComposer
-else if composeKind == "static" then
+else if kind == "static" then
   staticComposer
+else if kind != "" && lock.compose ? at && deps ? "${key}" then
+  deps.${key}
 else
   abort errors.unknownErr

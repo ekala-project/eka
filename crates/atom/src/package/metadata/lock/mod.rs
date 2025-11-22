@@ -73,7 +73,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Deref;
 use std::path::PathBuf;
-use std::sync::LazyLock;
 
 use direct::{BuildSrc, NixDep, NixGitDep, NixTarDep};
 use gix::ObjectId;
@@ -91,29 +90,6 @@ use super::{GitDigest, manifest};
 use crate::{AtomId, BoxError, id, package, storage, uri};
 
 pub(in crate::package) mod direct;
-
-static LOCK_ATOM: LazyLock<AtomDep> = LazyLock::new(|| {
-    let label: Label = id::LOCK_LABEL.to_owned();
-    let id = AtomId::from((storage::git::LOCK_ROOT, label));
-    let hash = id.compute_hash();
-    let version = Version {
-        major: crate::LOCK_MAJOR,
-        minor: crate::LOCK_MINOR,
-        patch: crate::LOCK_PATCH,
-        pre: Default::default(),
-        build: Default::default(),
-    };
-
-    let mirror = gix::url::parse(crate::EKA_ORIGIN_URL.into()).ok();
-    AtomDep {
-        label: id.label().to_owned(),
-        version,
-        set: GitDigest::Sha1(crate::EKA_ROOT_COMMIT_HASH),
-        rev: Some(GitDigest::Sha1(crate::LOCK_REV)),
-        mirror,
-        id: hash,
-    }
-});
 
 //================================================================================================
 // Types
@@ -212,17 +188,17 @@ pub(in crate::package) enum Using {
     /// an atom containing a nix expression that is just evaluated by calling `import`
     #[serde(rename = "nix")]
     NixTrivial { entry: PathBuf },
-    /// an atom containing a nix expression that is evaluated with the contained `NixComposer` atom
-    #[serde(rename = "atom")]
-    Atom {
-        #[serde(flatten)]
-        atom: AtomDep,
-        entry: PathBuf,
-    },
     /// an atom that contains only static configuration for use at evaluation time to other atoms
     #[serde(rename = "static")]
     #[default]
     Config,
+    /// an atom containing a nix expression that is evaluated with the contained `NixComposer` atom
+    #[serde(untagged)]
+    Atom {
+        at: Version,
+        entry: PathBuf,
+        r#use: AtomDigest,
+    },
 }
 
 /// The root structure for the lockfile, containing resolved dependencies and sources.
@@ -233,17 +209,16 @@ pub(in crate::package) enum Using {
 /// across different environments.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
+#[derive(Default)]
 pub struct Lockfile {
     /// The version of the lockfile schema.
     ///
     /// This field allows for future evolution of the lockfile format while
     /// maintaining backward compatibility.
-    pub version: u8,
+    pub version: u16,
 
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) sets: BTreeMap<GitDigest, SetDetails>,
-
-    pub(crate) locker: AtomDep,
 
     pub(in crate::package) compose: Using,
     /// The list of locked dependencies (absent or empty if none).
@@ -294,6 +269,11 @@ impl AtomDep {
     /// retrieve the version this atom is locked to
     pub fn version(&self) -> &Version {
         &self.version
+    }
+
+    /// retrieve the atom id digest
+    pub fn id(&self) -> AtomDigest {
+        self.id
     }
 
     /// retrieve the label for this atom
@@ -471,25 +451,6 @@ impl std::fmt::Display for GitDigest {
                 GitDigest::Sha1(o) => write!(f, "{}", o.encode_hex::<String>()),
                 GitDigest::Sha256(o) => write!(f, "{}", o.encode_hex::<String>()),
             }
-        }
-    }
-}
-
-impl Lockfile {
-    /// retrieve the lock dependency
-    pub fn locker(&self) -> &AtomDep {
-        &self.locker
-    }
-}
-
-impl Default for Lockfile {
-    fn default() -> Self {
-        Self {
-            version: 1,
-            locker: LOCK_ATOM.to_owned(),
-            sets: Default::default(),
-            compose: Using::default(),
-            deps: Default::default(),
         }
     }
 }

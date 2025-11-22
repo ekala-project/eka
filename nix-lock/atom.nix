@@ -31,7 +31,7 @@ let
       entrypoint = lock.compose.entry or "";
       composer = import ./composer.nix { inherit lock errors dep-key; } Scoped all-deps;
     in
-    if lock.version or { } == 1 || lock.static or false then
+    if lock.version or { } == 0 || lock.static or false then
       let
         deps = builtins.foldl' (
           acc: dep:

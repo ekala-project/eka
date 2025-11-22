@@ -217,7 +217,7 @@ pub enum GitDigest {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-struct Singleton<K, V> {
+pub(super) struct Singleton<K, V> {
     key: K,
     value: V,
 }
@@ -773,6 +773,16 @@ where
         } else {
             Err(de::Error::invalid_length(len, &err))
         }
+    }
+}
+
+impl<K, V> Singleton<K, V> {
+    pub(super) fn key(&self) -> &K {
+        &self.key
+    }
+
+    pub(super) fn value(&self) -> &V {
+        &self.value
     }
 }
 

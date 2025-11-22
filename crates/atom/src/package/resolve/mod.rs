@@ -611,12 +611,24 @@ impl<'a, S: LocalStorage> ManifestWriter<'a, S> {
     /// manifest, ensuring the lockfile only contains entries that are still relevant,
     /// then calls into synchronization logic to ensure consistency.
     pub(super) fn sanitize(&mut self, manifest: &ValidManifest) {
+        use metadata::manifest::Compose;
+
         let manifest = manifest.as_ref();
         self.lock.deps.as_mut().retain(|_, dep| match dep {
             lock::Dep::Atom(atom_dep) => {
                 if let Some(SetDetails { tag: name, .. }) = self.lock.sets.get(&atom_dep.set()) {
                     if let Some(set) = manifest.deps().from().get(name) {
-                        return set.contains_key(atom_dep.label())
+                        return (set.contains_key(atom_dep.label())
+                            || if let Compose::With(spec) = manifest.composer() {
+                                atom_dep.label() == spec.key()
+                                    && manifest.deps().from().get(spec.value().from()).is_some()
+                                    && spec
+                                        .value()
+                                        .version()
+                                        .is_none_or(|v| v.matches(atom_dep.version()))
+                            } else {
+                                false
+                            })
                             && (atom_dep.version().pre.is_empty()
                                 || self
                                     .resolved
@@ -649,6 +661,7 @@ impl<'a, S: LocalStorage> ManifestWriter<'a, S> {
     /// It resolves any new dependencies, updates existing ones if their version
     /// requirements have changed, and ensures the lockfile is fully consistent.
     pub(super) async fn synchronize(&mut self, manifest: &ValidManifest) -> Result<(), DocError> {
+        self.set_lock_compose(manifest)?;
         self.synchronize_atoms(manifest)?;
         self.synchronize_direct(manifest).await?;
         Ok(())
