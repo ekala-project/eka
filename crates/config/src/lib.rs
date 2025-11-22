@@ -29,6 +29,12 @@ const DEFAULT_TOML_CONFIG: &str = include_str!("./eka.default.toml");
 /// application's lifecycle.
 pub static CONFIG: LazyLock<Config> = LazyLock::new(load_config);
 
+static DEFAULT_PLATFORM: LazyLock<String> =
+    LazyLock::new(|| match (std::env::consts::ARCH, std::env::consts::OS) {
+        (arch, "macos") => format!("{}-darwin", arch),
+        (arch, os) => format!("{}-{}", arch, os),
+    });
+
 //================================================================================================
 // Types
 //================================================================================================
@@ -73,6 +79,30 @@ pub struct Config {
     pub cache: CacheConfig,
     #[serde(borrow)]
     pub manifest: AtomConfig<'static>,
+    /// settings affecting the `plan` subcommand
+    pub plan: Plan,
+    /// The default platforms to consinder when not passed by the user
+    #[serde(borrow)]
+    pub platforms: Platforms<'static>,
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct Platforms<'a> {
+    /// The default build platform to use when unset
+    #[serde(borrow)]
+    pub build: Cow<'a, str>,
+    /// The default runtime platform to use when unset
+    #[serde(borrow)]
+    pub target: Cow<'a, str>,
+    /// The default legacy "configuration target" used in special cases by legacy tools such as
+    /// GNU autoconf
+    #[serde(borrow)]
+    pub legacy_target: Cow<'a, str>,
+}
+
+#[derive(Deserialize, Serialize, Default)]
+pub struct Plan {
+    pub sharectx: bool,
 }
 
 #[derive(Deserialize, Serialize, Default, Clone)]
@@ -113,6 +143,16 @@ impl Default for CacheConfig {
     }
 }
 
+impl<'a> Default for Platforms<'a> {
+    fn default() -> Self {
+        Self {
+            build: DEFAULT_PLATFORM.as_str().into(),
+            target: DEFAULT_PLATFORM.as_str().into(),
+            legacy_target: DEFAULT_PLATFORM.as_str().into(),
+        }
+    }
+}
+
 impl Config {
     /// Returns a reference to the configured uri aliases.
     pub fn uri_aliases(&self) -> &Aliases<'static> {
@@ -141,7 +181,7 @@ impl Config {
             fig = fig.admerge(Toml::file(repo_config));
         };
 
-        fig.admerge(Env::prefixed("EKA_"))
+        fig.admerge(Env::prefixed("EKA_").split("_"))
     }
 
     /// Creates a `Config` instance from a given provider.

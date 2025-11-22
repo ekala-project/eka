@@ -13,7 +13,7 @@ version = "0.3.0"
 [profile.release]
 codegen-units = 1
 lto           = true
-opt-level     = 3
+opt-level     = "z"
 strip         = true
 
 [dependencies]
@@ -32,7 +32,12 @@ tracing-appender.workspace   = true
 tracing-indicatif.workspace  = true
 tracing-subscriber.workspace = true
 
-atom.path = "crates/atom"
+atom.path   = "crates/atom"
+config.path = "crates/config"
+nixec.path  = "crates/nixec"
+
+json-digest = "0.0.16"
+serde_json  = "1.0.145"
 
 [workspace.dependencies]
 anyhow                = "^1"
@@ -83,6 +88,7 @@ prodash = { version = "30.0.1", features = [
 ] }
 
 [patch.crates-io]
+birdcage           = { git = "https://github.com/nrdxp/birdcage", branch = "clone_fs" }
 tracing            = { git = "https://github.com/nrdxp/tracing", branch = "hierarchical" }
 tracing-appender   = { git = "https://github.com/nrdxp/tracing", branch = "hierarchical" }
 tracing-core       = { git = "https://github.com/nrdxp/tracing", branch = "hierarchical" }

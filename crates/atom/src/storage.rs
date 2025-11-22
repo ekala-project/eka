@@ -555,6 +555,131 @@ pub trait UnpackRef {
     fn find_root_ref(&self) -> Option<Self::Root>;
 }
 
+/// A trait for caching and retrieving atoms from remote sources.
+///
+/// This trait provides a unified interface for different caching backends
+/// (e.g., git, HTTP, S3) to store and retrieve atoms from remote sources.
+/// The cache should handle deduplication, versioning, and efficient retrieval.
+///
+/// ## Key Features
+///
+/// - **Remote Setup**: Ensure the cache knows how to reach a remote source
+/// - **Commit Resolution**: Fetch or locate the commit for a specific atom version
+/// - **Materialization**: Extract cached commits into temporary working directories
+/// - **High-level Convenience**: Combined operations for common use cases
+///
+/// ## Use Cases
+///
+/// - **Atom Evaluation**: Retrieve atoms for evaluation in sandboxes
+/// - **Dependency Caching**: Cache remote atoms to avoid repeated downloads
+/// - **Offline Workflows**: Materialize cached atoms without network access
+/// - **Verification**: Access commit metadata for integrity checks
+pub trait RemoteAtomCache {
+    /// The error type returned by cache operations.
+    type Error: std::fmt::Display + std::error::Error + Send + Sync + 'static;
+    /// The type representing a handle to a configured remote.
+    type RemoteHandle;
+    /// The type repesenting the transport to utilize for the connection.
+    type Transport: Send;
+    /// The type repesenting the atom in the storage backend.
+    type Atom: Copy;
+
+    /// Ensure the cache backend knows how to reach the given remote URL.
+    ///
+    /// This method sets up any necessary configuration or connections for
+    /// subsequent operations on this remote. The returned handle can be reused
+    /// for multiple operations without re-establishing connections.
+    ///
+    /// # Arguments
+    /// * `url` - The remote repository URL
+    /// * `transport` - Mutable reference to the transport for remote operations
+    ///
+    /// # Returns
+    /// A handle for further operations on this remote, or an error if setup fails.
+    fn ensure_remote(
+        &self,
+        url: &gix::Url,
+        transport: &mut Self::Transport,
+    ) -> Result<Self::RemoteHandle, Self::Error>;
+
+    /// Resolve the commit ID for a specific atom version from the remote.
+    ///
+    /// This method fetches or locates the commit corresponding to the given
+    /// atom label and version. The commit should be cached locally if not already present.
+    ///
+    /// # Arguments
+    /// * `remote` - Handle to the configured remote (from `ensure_remote`)
+    /// * `label` - The atom label (e.g., "mylib")
+    /// * `version` - The semantic version to retrieve
+    /// * `transport` - Mutable reference to the transport for remote operations
+    ///
+    /// # Returns
+    /// The ObjectId of the commit, or an error if resolution fails.
+    fn resolve_atom_to_cache(
+        &self,
+        remote: &mut Self::RemoteHandle,
+        label: &Label,
+        version: &Version,
+        transport: &mut Self::Transport,
+    ) -> Result<Self::Atom, Self::Error>;
+
+    /// Materialize a cached atom into a temporary working directory.
+    ///
+    /// This method extracts the tree contents of the given commit into a
+    /// temporary directory, preserving file permissions, symlinks, and structure.
+    ///
+    /// # Arguments
+    /// * `atom` - The atom to materialize
+    ///
+    /// # Returns
+    /// A TempDir containing the extracted files, or an error if materialization fails.
+    fn materialize_from_cache(
+        &self,
+        atom: Self::Atom,
+        to_dir: impl AsRef<Path>,
+    ) -> Result<tempfile::TempDir, Self::Error>;
+
+    /// High-level convenience method to retrieve an atom as a temporary directory.
+    ///
+    /// This method combines `ensure_remote`, `resolve_atom_to_cache`, and `materialize_from_cache`
+    /// into a single operation for common use cases.
+    ///
+    /// # Arguments
+    /// * `url` - The remote repository URL
+    /// * `label` - The atom label (e.g., "mylib")
+    /// * `version` - The semantic version to retrieve
+    /// * `transport` - Mutable reference to the transport for remote operations
+    ///
+    /// # Returns
+    /// A TempDir containing the atom's files, or an error if retrieval fails.
+    fn cache_and_materialize_atom(
+        &self,
+        url: &gix::Url,
+        label: &Label,
+        version: &Version,
+        transport: &mut Self::Transport,
+        material_base: impl AsRef<Path>,
+    ) -> Result<tempfile::TempDir, Self::Error> {
+        let mut remote = self.ensure_remote(url, transport)?;
+        let commit = self.resolve_atom_to_cache(&mut remote, label, version, transport)?;
+        self.materialize_from_cache(commit, material_base)
+    }
+}
+
+/// fuck
+pub trait WriteLocker<'a>: Copy {
+    /// you
+    type Error;
+    /// so
+    type Cache: RemoteAtomCache<Atom = Self>;
+    /// fucking much
+    fn write_locker(
+        &self,
+        cache: &'a Self::Cache,
+        to_dir: impl AsRef<Path>,
+    ) -> Result<(), Self::Error>;
+}
+
 //================================================================================================
 // Impls
 //================================================================================================

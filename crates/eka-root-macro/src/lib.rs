@@ -8,8 +8,8 @@ use quote::quote;
 
 const LOCK_LABEL: &str = "nix-lock";
 const LOCK_MAJOR: u64 = 0;
-const LOCK_MINOR: u64 = 1;
-const LOCK_PATCH: u64 = 6;
+const LOCK_MINOR: u64 = 3;
+const LOCK_PATCH: u64 = 1;
 
 /// Computes Eka's repository root commit hash at compile time
 #[proc_macro]
@@ -43,16 +43,18 @@ pub fn eka_origin_info(_input: TokenStream) -> TokenStream {
     } else {
         lock_rev()
     };
+
     let rev_tokens = rev.iter().map(|&byte| quote! { #byte });
 
     quote! {
-        const LOCK_MAJOR: u64 = #LOCK_MAJOR;
-        const LOCK_MINOR: u64 = #LOCK_MINOR;
-        const LOCK_PATCH: u64 = #LOCK_PATCH;
         pub(crate) const LOCK_LABEL: &str = #LOCK_LABEL;
         pub(crate) const LOCK_REV: [u8; 20] = [#(#rev_tokens),*];
         pub(crate) const EKA_ORIGIN_URL: &str = #url;
         pub(crate) const EKA_ROOT_COMMIT_HASH: [u8; 20] = [#(#root_tokens),*];
+
+        const LOCK_MAJOR: u64 = #LOCK_MAJOR;
+        const LOCK_MINOR: u64 = #LOCK_MINOR;
+        const LOCK_PATCH: u64 = #LOCK_PATCH;
     }
     .into()
 }

@@ -1,14 +1,16 @@
 let
   inherit (deps) pins;
-  system = cfg.platform;
 in
-{
+rec {
+  Main = Shell;
   Shell = mod.shell mod.pkgs;
   Static = mod.shell mod.pkgs.pkgsStatic;
   Pkgs = mod.pkgs;
-  pkgs = pins.nixpkgs.import "" { inherit system; };
+  pkgs = pins.nixpkgs.import "" {
+    system = cfg.platforms.build;
+    crossSystem = cfg.platforms.target or cfg.platforms.build;
+  };
   fenix = pins.fenix.import "" {
-    inherit system;
     inherit (mod) pkgs;
   };
   Toolchain = mod.fenix.fromToolchainFile { file = "${mod}/rust-toolchain.toml"; };

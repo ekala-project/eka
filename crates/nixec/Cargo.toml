@@ -6,4 +6,5 @@ version = "0.1.0"
 [dependencies]
 birdcage = "^0.8"
 
+anyhow.workspace    = true
 thiserror.workspace = true
