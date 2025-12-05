@@ -48,6 +48,7 @@ use std::path::{Path, PathBuf};
 use gix::diff::object::Commit as AtomCommit;
 use gix::protocol::transport::client::Transport;
 use gix::{Commit, ObjectId, Reference, Remote, Repository, Tree};
+pub(crate) use inner::write_atom_commit_inner as write_atom_commit_to_repo;
 use semver::Version;
 use tokio::task::JoinSet;
 

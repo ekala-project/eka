@@ -8,6 +8,7 @@ addr       = "^0.15"
 base32     = "^0.5"
 blake3     = "^1.8"
 bstr       = "^1"
+ignore     = "^0.4"
 nom        = "^7"
 path-clean = "^1"
 

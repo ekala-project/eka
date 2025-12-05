@@ -1,15 +1,21 @@
-use std::path::{Path, PathBuf};
+use std::collections::HashMap;
+use std::os::unix::fs::MetadataExt;
+use std::path::{Path, PathBuf, StripPrefixError};
 use std::sync::OnceLock;
 
 use bstr::ByteSlice;
 use gix::create::{Kind, Options};
 use gix::objs::tree::EntryKind;
 use gix::protocol::transport::client::Transport;
-use gix::{Commit, Remote, Repository, ThreadSafeRepository};
-use semver::Version;
+use gix::{Commit, ObjectId, Remote, Repository, ThreadSafeRepository};
+use package::publish::git;
+use semver::{BuildMetadata, Prerelease, Version};
+use storage::git::NULLROOT;
+use storage::{QueryStore, RemoteAtomCache};
 
-use crate::Label;
-use crate::storage::{QueryStore, RemoteAtomCache};
+use crate::package::AtomError;
+use crate::storage::git::Root;
+use crate::{AtomId, Compute, DocError, Genesis, Label, ValidManifest, package, storage};
 
 /// The filename of the file used to run nix import logic
 pub const NIX_IMPORT_FILE: &str = "atom.nix";
@@ -22,6 +28,8 @@ static CACHE_REPO: OnceLock<Option<ThreadSafeRepository>> = OnceLock::new();
 pub enum Error {
     #[error("couldn't open cache repository: {0}")]
     Repo(PathBuf),
+    #[error("the path passed is not an atom: {0}")]
+    NotAnAtom(PathBuf),
     #[error(transparent)]
     Init(#[from] Box<gix::init::Error>),
     #[error(transparent)]
@@ -44,14 +52,32 @@ pub enum Error {
     TryObject(#[from] gix::object::try_into::Error),
     #[error(transparent)]
     Utf8(#[from] std::str::Utf8Error),
+    #[error(transparent)]
+    RepoWrite(#[from] gix::object::write::Error),
+    #[error(transparent)]
+    Ignore(#[from] ignore::Error),
+    #[error(transparent)]
+    WriteAtom(#[from] Box<package::publish::error::git::Error>),
+    #[error("couldn't determine filemode: {0}")]
+    Mode(u32),
+    #[error(transparent)]
+    Atom(#[from] AtomError),
+    #[error(transparent)]
+    Doc(#[from] DocError),
+    #[error(transparent)]
+    SemverParse(#[from] semver::Error),
+    #[error(transparent)]
+    Prefix(#[from] StripPrefixError),
+    #[error("Directory depth exceeds maximum of {MAX_DEPTH}")]
+    RecursionLimit,
+    #[error("Invalid filename")]
+    InvalidFile,
 }
-
-type RemoteName = String;
 
 impl<'a> RemoteAtomCache for &'a Repository {
     type Atom = Commit<'a>;
     type Error = Error;
-    type RemoteHandle = (RemoteName, Remote<'a>);
+    type RemoteHandle = (Root, Remote<'a>);
     type Transport = Box<dyn Transport + Send>;
 
     fn ensure_remote(
@@ -65,8 +91,10 @@ impl<'a> RemoteAtomCache for &'a Repository {
         let root = url
             .get_ref(query.as_str(), Some(transport))
             .map_err(Box::new)?;
-        let gix::ObjectId::Sha1(id) = super::to_id(root);
-        let name: String = id.to_base58();
+        let id = super::to_id(root);
+        let gix::ObjectId::Sha1(oid) = id;
+        let name: String = oid.to_base58();
+        let root = Root(id);
 
         let remote = self
             .find_remote(bstr::BString::from(name.to_owned()).as_bstr())
@@ -75,7 +103,7 @@ impl<'a> RemoteAtomCache for &'a Repository {
                     .unwrap_or(self.remote_at(url.to_owned())?),
             );
 
-        Ok((name, remote))
+        Ok((root, remote))
     }
 
     fn resolve_atom_to_cache(
@@ -85,8 +113,9 @@ impl<'a> RemoteAtomCache for &'a Repository {
         version: &Version,
         transport: &mut Self::Transport,
     ) -> Result<Self::Atom, Self::Error> {
-        let (remote_name, remote) = remote;
-        let cache_ref = format!("refs/{}/{}/{}", remote_name, label, version);
+        let (root, remote) = remote;
+        let id = AtomId::from((*root, label.to_owned()));
+        let cache_ref = format!("refs/{}/{}", id.compute_hash(), version);
         let query = format!(
             "{}/{}/{}:{}",
             crate::ATOM_REFS.as_str(),
@@ -165,6 +194,67 @@ impl<'a> RemoteAtomCache for &'a Repository {
 
         Ok(tmp)
     }
+
+    fn path_to_cache(&self, path: impl AsRef<Path>) -> Result<Self::Atom, Self::Error> {
+        let manifest_path = path.as_ref().join(crate::ATOM_MANIFEST_NAME.as_str());
+        if manifest_path.try_exists().is_ok_and(|b| b) {
+            return Err(Error::NotAnAtom(manifest_path));
+        }
+
+        let atom = ValidManifest::get_atom(
+            std::fs::read(&manifest_path)?
+                .to_str()
+                .map_err(DocError::Utf8)?,
+        )?;
+
+        let root = if let Some(g) = gix::discover(path.as_ref()).ok().and_then(|r| {
+            r.head_commit()
+                .ok()
+                .and_then(|c| c.calculate_genesis().ok())
+        }) {
+            g
+        } else {
+            NULLROOT
+        };
+
+        let (label, mut version) = atom.take();
+
+        let id = AtomId::from((root, label));
+        let entry_map = collect_entries(path.as_ref())?;
+        let tree =
+            build_tree_recursive(self, PathBuf::new().as_path(), &entry_map, path.as_ref(), 0)?;
+
+        version.pre = Prerelease::new(format!("dev.{}", tree.to_hex_with_len(10)).as_str())?;
+        version.build = BuildMetadata::EMPTY;
+
+        let obj = *git::write_atom_commit_to_repo(
+            self,
+            tree,
+            id.label(),
+            &version,
+            root.to_hex().to_string(),
+        )
+        .map_err(Box::new)?
+        .tip();
+
+        let digest = id.compute_hash();
+
+        self.reference(
+            format!("refs/{}/{}", digest, version),
+            obj,
+            gix::refs::transaction::PreviousValue::ExistingMustMatch(gix::refs::Target::Object(
+                obj,
+            )),
+            format!("atom({}): {}", digest, version),
+        )
+        .map_err(package::publish::error::git::Error::RefUpdateFailed)
+        .map_err(Box::new)?;
+
+        Ok(self
+            .find_commit(obj)
+            .map_err(package::publish::error::git::Error::NoCommit)
+            .map_err(Box::new)?)
+    }
 }
 
 fn get_cache() -> Result<ThreadSafeRepository, Error> {
@@ -201,4 +291,94 @@ pub fn repo() -> Result<&'static ThreadSafeRepository, Error> {
         let cache_dir = config::CONFIG.cache.root.join("git");
         Err(Error::Repo(cache_dir))
     }
+}
+
+// Structure to hold our collected entries
+#[derive(Debug)]
+struct FsEntry {
+    path: PathBuf,
+    is_dir: bool,
+}
+
+// 1. Traverse directory with ignore crate
+fn collect_entries(root: &Path) -> Result<HashMap<PathBuf, Vec<FsEntry>>, Error> {
+    use ignore::Walk;
+    let mut entries_by_dir: HashMap<PathBuf, Vec<FsEntry>> = HashMap::new();
+
+    for result in Walk::new(root) {
+        let entry = result?;
+        let path = entry.path().strip_prefix(root)?.to_path_buf();
+        let parent = path.parent().unwrap_or(Path::new("")).to_path_buf();
+
+        let fs_entry = if path.is_dir() {
+            FsEntry { path, is_dir: true }
+        } else {
+            FsEntry {
+                path,
+                is_dir: false,
+            }
+        };
+
+        entries_by_dir.entry(parent).or_default().push(fs_entry);
+    }
+
+    Ok(entries_by_dir)
+}
+
+const MAX_DEPTH: usize = 100;
+
+fn build_tree_recursive(
+    repo: &Repository,
+    current_dir: &Path,
+    entries_by_dir: &HashMap<PathBuf, Vec<FsEntry>>,
+    root_path: &Path,
+    depth: usize,
+) -> Result<ObjectId, Error> {
+    use gix::objs::tree;
+    if depth > MAX_DEPTH {
+        return Err(Error::RecursionLimit);
+    }
+
+    let mut tree_entries = Vec::new();
+
+    if let Some(entries) = entries_by_dir.get(current_dir) {
+        for entry in entries {
+            let filename = entry
+                .path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .ok_or(Error::InvalidFile)?;
+
+            if entry.is_dir {
+                let subtree_id =
+                    build_tree_recursive(repo, &entry.path, entries_by_dir, root_path, depth + 1)?;
+
+                tree_entries.push(tree::Entry {
+                    mode: gix::object::tree::EntryKind::Tree.into(),
+                    oid: subtree_id,
+                    filename: filename.into(),
+                });
+            } else {
+                let full_path = root_path.join(&entry.path);
+                let content = std::fs::read(&full_path)?;
+                let blob_id = repo.write_blob(&content)?;
+
+                let metadata = full_path.metadata()?;
+                let mode = metadata.mode();
+
+                tree_entries.push(tree::Entry {
+                    mode: mode.try_into().map_err(Error::Mode)?,
+                    oid: blob_id.detach(),
+                    filename: filename.into(),
+                });
+            }
+        }
+    }
+
+    tree_entries.sort_by(|a, b| a.filename.cmp(&b.filename));
+
+    let tree = gix::objs::Tree {
+        entries: tree_entries,
+    };
+    Ok(repo.write_object(&tree)?.detach())
 }

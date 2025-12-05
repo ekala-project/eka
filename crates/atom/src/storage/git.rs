@@ -73,8 +73,6 @@ pub(super) const V1_ROOT: &str = "refs/ekala/init";
 // Statics
 //================================================================================================
 
-pub(crate) static LOCK_ROOT: Root = Root(ObjectId::Sha1(crate::EKA_ROOT_COMMIT_HASH));
-
 static DEFAULT_REMOTE: OnceLock<Cow<str>> = OnceLock::new();
 /// Provide a lazily instantiated static reference to the git repository.
 static REPO: OnceLock<Option<ThreadSafeRepository>> = OnceLock::new();

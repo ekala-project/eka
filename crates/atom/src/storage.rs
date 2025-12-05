@@ -664,6 +664,10 @@ pub trait RemoteAtomCache {
         let commit = self.resolve_atom_to_cache(&mut remote, label, version, transport)?;
         self.materialize_from_cache(commit, material_base)
     }
+
+    /// Take's an arbitrary filepath, determines if it points at a valid atom, and if so, imports it
+    /// into the global atom store.
+    fn path_to_cache(&self, path: impl AsRef<Path>) -> Result<Self::Atom, Self::Error>;
 }
 
 //================================================================================================

@@ -39,9 +39,8 @@ use error::git::Error;
 use gix::actor::Signature;
 use gix::diff::object::Commit as AtomCommit;
 use gix::object::tree::Entry;
-use gix::objs::WriteTo;
 use gix::protocol::transport::client::Transport;
-use gix::{Object, ObjectId, Reference};
+use gix::{Object, ObjectId, Reference, Repository};
 use package::metadata::AtomPaths;
 use package::metadata::manifest::Manifest;
 use semver::Version;
@@ -55,7 +54,7 @@ use super::{
     AtomContext, AtomRef, AtomReferences, CommittedAtom, FoundAtom, GitContent, GitContext,
     GitResult, RefKind,
 };
-use crate::{Atom, AtomId, package, storage};
+use crate::{Atom, AtomId, Label, package, storage};
 
 //================================================================================================
 // Impls
@@ -76,34 +75,13 @@ impl<'a> AtomContext<'a> {
     /// This commit is self-contained and does not have any parents. It captures the state of the
     /// Atom's content tree and includes metadata such as the original source commit and path.
     pub(super) fn write_atom_commit(&self, tree: ObjectId) -> GitResult<CommittedAtom> {
-        let sig = Signature {
-            email: EMPTY_SIG.into(),
-            name: EMPTY_SIG.into(),
-            time: gix::date::Time {
-                seconds: 0,
-                offset: 0,
-            },
-        };
-        let commit = AtomCommit {
+        write_atom_commit_inner(
+            self.git.repo,
             tree,
-            parents: vec![].into(),
-            author: sig.clone(),
-            committer: sig,
-            encoding: None,
-            message: format!(
-                "publish({}): {}",
-                self.atom.spec.label(),
-                self.atom.spec.version()
-            )
-            .into(),
-            extra_headers: [
-                (ATOM_ORIGIN.into(), self.git.commit.id.to_string().into()),
-                ("format".into(), ATOM_FORMAT_VERSION.into()),
-            ]
-            .into(),
-        };
-        let id = self.git.write_object(commit.clone())?;
-        Ok(CommittedAtom { commit, id })
+            self.atom.spec.label(),
+            self.atom.spec.version(),
+            self.git.commit.id.to_string(),
+        )
     }
 }
 
@@ -298,11 +276,6 @@ impl<'a> GitContext<'a> {
 
         Manifest::get_atom(&content).map_err(|e| Error::Invalid(e, Box::new(path.into())))
     }
-
-    /// Writes a Git object to the repository's object database.
-    fn write_object(&self, obj: impl WriteTo) -> GitResult<gix::ObjectId> {
-        Ok(self.repo.write_object(obj).map(gix::Id::detach)?)
-    }
 }
 
 //================================================================================================
@@ -341,4 +314,36 @@ fn write_ref<'a>(
             atom_ref
         ),
     )?)
+}
+
+pub(crate) fn write_atom_commit_inner(
+    repo: &Repository,
+    tree: ObjectId,
+    label: &Label,
+    version: &Version,
+    origin: String,
+) -> GitResult<CommittedAtom> {
+    let sig = Signature {
+        email: EMPTY_SIG.into(),
+        name: EMPTY_SIG.into(),
+        time: gix::date::Time {
+            seconds: 0,
+            offset: 0,
+        },
+    };
+    let commit = AtomCommit {
+        tree,
+        parents: vec![].into(),
+        author: sig.clone(),
+        committer: sig,
+        encoding: None,
+        message: format!("publish({}): {}", label, version).into(),
+        extra_headers: [
+            (ATOM_ORIGIN.into(), origin.into()),
+            ("format".into(), ATOM_FORMAT_VERSION.into()),
+        ]
+        .into(),
+    };
+    let id = repo.write_object(commit.clone())?.detach();
+    Ok(CommittedAtom { commit, id })
 }

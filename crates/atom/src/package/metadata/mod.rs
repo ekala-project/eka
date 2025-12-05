@@ -314,6 +314,11 @@ impl Atom {
         self.label
     }
 
+    /// take both the label and version discarding self
+    pub fn take(self) -> (Label, Version) {
+        (self.label, self.version)
+    }
+
     /// return a reference to the atom's version
     pub fn version(&self) -> &Version {
         &self.version
