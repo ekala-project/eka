@@ -108,11 +108,8 @@ pub struct AtomDep {
     version: Version,
     /// The location of the atom, whether local or remote.
     set: GitDigest,
-    /// The resolved Git revision (commit hash) for verification. If it is `None`, it applies a
-    /// local only dependency which must be looked up by path. Atom's without revsions for all
-    /// other atoms in their lock cannot themsevles be published.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    rev: Option<GitDigest>,
+    /// The resolved or calculated (if local) Git revision (commit hash) for verification.
+    rev: GitDigest,
     /// The the primary url the atom was first resolved from. Needed for legacy tools which can't
     /// resolve mirrors (e.g. nix).
     #[serde(
@@ -252,7 +249,7 @@ impl AtomDep {
         label: Label,
         version: Version,
         set: GitDigest,
-        rev: Option<GitDigest>,
+        rev: GitDigest,
         mirror: Option<gix::Url>,
         id: AtomDigest,
     ) -> Self {
@@ -290,7 +287,7 @@ impl AtomDep {
         self.mirror.as_ref()
     }
 
-    pub(crate) fn rev(&self) -> Option<GitDigest> {
+    pub fn rev(&self) -> GitDigest {
         self.rev
     }
 }
@@ -379,29 +376,17 @@ impl<R, T: Ord> AsRef<BTreeMap<DepKey<R>, T>> for DepMap<R, T> {
     }
 }
 
-impl From<ResolvedAtom<Option<ObjectId>, Root>> for AtomDep {
-    fn from(atom: ResolvedAtom<Option<ObjectId>, Root>) -> Self {
+impl From<ResolvedAtom<ObjectId, Root>> for AtomDep {
+    fn from(atom: ResolvedAtom<ObjectId, Root>) -> Self {
         let UnpackedRef { id, version, rev } = atom.unpack();
         AtomDep {
             label: id.label().to_owned(),
             version: version.to_owned(),
-            rev: rev.map(GitDigest::from),
+            rev: (*rev).into(),
             set: GitDigest::from(id.root().deref().to_owned()),
             id: id.compute_hash(),
             mirror: atom.remotes().first().map(ToOwned::to_owned),
         }
-    }
-}
-impl From<ResolvedAtom<ObjectId, Root>> for AtomDep {
-    fn from(value: ResolvedAtom<ObjectId, Root>) -> Self {
-        let ResolvedAtom {
-            unpacked: UnpackedRef { id, version, rev },
-            remotes,
-        } = value;
-        AtomDep::from(ResolvedAtom::new(
-            UnpackedRef::new(id, version, Some(rev)),
-            remotes,
-        ))
     }
 }
 

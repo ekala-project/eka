@@ -186,6 +186,9 @@ pub enum Error {
     /// A transparent wrapper for a [`DocError`]
     #[error(transparent)]
     Doc(#[from] DocError),
+    #[error(transparent)]
+    /// A transparent wrapper for a [`cache::Error`]
+    AtomStore(#[from] cache::Error),
     /// A generic boxed error variant
     #[error(transparent)]
     Generic(Box<dyn std::error::Error + Send + Sync>),

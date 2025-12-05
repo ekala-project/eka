@@ -195,7 +195,7 @@ impl<'a> RemoteAtomCache for &'a Repository {
         Ok(tmp)
     }
 
-    fn path_to_cache(&self, path: impl AsRef<Path>) -> Result<Self::Atom, Self::Error> {
+    fn path_to_cache(&self, path: impl AsRef<Path>) -> Result<(Version, Self::Atom), Self::Error> {
         let manifest_path = path.as_ref().join(crate::ATOM_MANIFEST_NAME.as_str());
         if manifest_path.try_exists().is_ok_and(|b| b) {
             return Err(Error::NotAnAtom(manifest_path));
@@ -250,10 +250,12 @@ impl<'a> RemoteAtomCache for &'a Repository {
         .map_err(package::publish::error::git::Error::RefUpdateFailed)
         .map_err(Box::new)?;
 
-        Ok(self
-            .find_commit(obj)
-            .map_err(package::publish::error::git::Error::NoCommit)
-            .map_err(Box::new)?)
+        Ok((
+            version,
+            self.find_commit(obj)
+                .map_err(package::publish::error::git::Error::NoCommit)
+                .map_err(Box::new)?,
+        ))
     }
 }
 

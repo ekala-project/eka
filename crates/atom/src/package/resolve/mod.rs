@@ -44,14 +44,15 @@ use lock::direct::NixUrls;
 use lock::{AtomDep, SetDetails};
 use metadata::manifest::{AtomReq, AtomWriter, SetMirror, WriteDeps};
 use metadata::{DocError, GitDigest, lock};
-use semver::{Prerelease, VersionReq};
+use semver::VersionReq;
 use sets::{MirrorResult, ResolvedAtom, ResolvedSets, SetResolver};
 use storage::UnpackedRef;
 use storage::git::{AtomQuery, Root};
 use uri::Uri;
 
 use super::{ValidManifest, metadata, sets};
-use crate::storage::{LocalStorage, QueryVersion};
+use crate::storage::git::cache_repo;
+use crate::storage::{LocalStorage, QueryVersion, RemoteAtomCache};
 use crate::{ATOM_MANIFEST_NAME, AtomId, BoxError, ManifestWriter, id, storage, uri};
 
 mod direct;
@@ -527,7 +528,7 @@ impl Uri {
                     version,
                     GitDigest::Sha1(root),
                     match oid {
-                        ObjectId::Sha1(bytes) => Some(GitDigest::Sha1(bytes)),
+                        ObjectId::Sha1(bytes) => GitDigest::Sha1(bytes),
                     },
                     Some(url.to_owned()),
                     id.into(),
@@ -766,7 +767,6 @@ impl<'a, S: LocalStorage> ManifestWriter<'a, S> {
             .deps
             .as_ref()
             .get(&either::Either::Left(id.to_owned()))
-            && dep.rev().is_some()
             && !req.matches(dep.version())
         {
             self.lock_atom(req, id, set_tag)?;
@@ -805,7 +805,8 @@ impl<'a, S: LocalStorage> ManifestWriter<'a, S> {
     ///
     /// - **No Remote Match**: Falls back to local resolution
     /// - **No Local Repo**: Returns error if both remote and local resolution fail
-    /// - **Local Resolution Success**: Uses local version with "local" prerelease tag
+    /// - **Local Resolution Success**: Uses local version with prerelease tag calculated after
+    ///   building atom commit
     /// - **Version Conflicts**: Prefers remote resolution, only uses local as fallback
     ///
     /// # Assumptions
@@ -901,7 +902,8 @@ impl<'a, S: LocalStorage> ManifestWriter<'a, S> {
     ///    - Construct atom ID from root and URI label
     ///    - Find the atom's manifest file in the local package directory
     ///    - Parse the manifest and validate it matches the requested atom
-    ///    - Create a dependency with a "local" prerelease version tag
+    ///    - Import into local atom store as a dependency with a prerelease version tag based on
+    ///      atom commit
     ///
     /// # Edge Cases
     ///
@@ -958,13 +960,12 @@ impl<'a, S: LocalStorage> ManifestWriter<'a, S> {
                     .to_owned(),
             );
             let id = AtomId::from((root, uri.label().to_owned()));
-            let mut version = atom.version().clone();
-            version.pre = Prerelease::new("local")?;
-            let unpacked = UnpackedRef {
-                id,
-                version,
-                rev: None,
-            };
+
+            let cache = &cache_repo()?.to_thread_local();
+
+            let (version, local_atom) = cache.path_to_cache(path)?;
+
+            let unpacked = UnpackedRef::new(id, version, local_atom.id);
             let dep = AtomDep::from(ResolvedAtom {
                 unpacked,
                 remotes: BTreeSet::new(),

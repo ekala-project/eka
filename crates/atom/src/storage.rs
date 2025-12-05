@@ -667,7 +667,7 @@ pub trait RemoteAtomCache {
 
     /// Take's an arbitrary filepath, determines if it points at a valid atom, and if so, imports it
     /// into the global atom store.
-    fn path_to_cache(&self, path: impl AsRef<Path>) -> Result<Self::Atom, Self::Error>;
+    fn path_to_cache(&self, path: impl AsRef<Path>) -> Result<(Version, Self::Atom), Self::Error>;
 }
 
 //================================================================================================
