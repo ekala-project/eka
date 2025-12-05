@@ -197,7 +197,7 @@ impl<'a> RemoteAtomCache for &'a Repository {
 
     fn path_to_cache(&self, path: impl AsRef<Path>) -> Result<(Version, Self::Atom), Self::Error> {
         let manifest_path = path.as_ref().join(crate::ATOM_MANIFEST_NAME.as_str());
-        if manifest_path.try_exists().is_ok_and(|b| b) {
+        if !manifest_path.try_exists().is_ok_and(|b| b) {
             return Err(Error::NotAnAtom(manifest_path));
         }
 
@@ -310,9 +310,9 @@ fn collect_entries(root: &Path) -> Result<HashMap<PathBuf, Vec<FsEntry>>, Error>
     for result in Walk::new(root) {
         let entry = result?;
         let path = entry.path().strip_prefix(root)?.to_path_buf();
-        let parent = path.parent().unwrap_or(Path::new("")).to_path_buf();
+        let parent = path.parent().unwrap_or(Path::new(".")).to_path_buf();
 
-        let fs_entry = if path.is_dir() {
+        let fs_entry = if root.join(&path).is_dir() {
             FsEntry { path, is_dir: true }
         } else {
             FsEntry {
