@@ -207,11 +207,14 @@ impl<'a> RemoteAtomCache for &'a Repository {
                 .map_err(DocError::Utf8)?,
         )?;
 
-        let root = if let Some(g) = gix::discover(path.as_ref()).ok().and_then(|r| {
-            r.head_commit()
+        let root = if let Some(g) =
+            gix::discover(path.as_ref().canonicalize()?)
                 .ok()
-                .and_then(|c| c.calculate_genesis().ok())
-        }) {
+                .and_then(|r| {
+                    r.head_commit()
+                        .ok()
+                        .and_then(|c| c.calculate_genesis().ok())
+                }) {
             g
         } else {
             NULLROOT
