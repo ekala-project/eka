@@ -475,7 +475,9 @@ impl<'a, S: LocalStorage> DependencyProvider for AtomResolver<'a, S> {
         match self.fetch_and_parse_manifest(package_name, version).await {
             Ok(deps) => {
                 // Cache for future use
-                self.manifest_cache.borrow_mut().insert(cache_key, deps.clone());
+                self.manifest_cache
+                    .borrow_mut()
+                    .insert(cache_key, deps.clone());
                 self.convert_deps_to_resolvo(&deps)
             },
             Err(e) => {
@@ -663,12 +665,21 @@ impl<'a, S: LocalStorage> AtomResolver<'a, S> {
         let cache_repo = crate::storage::git::cache::repo()?;
         let local_repo = &cache_repo.to_thread_local();
 
-        // Get or create transport, handling the RefCell borrow properly
+        // Get or create transport on-demand
         let commit = {
+            use std::collections::hash_map::Entry;
+
+            use crate::storage::QueryStore;
+
             let mut transports = self.transports.borrow_mut();
-            let transport = transports
-                .get_mut(&mirror_url)
-                .ok_or_else(|| format!("No transport for mirror: {}", mirror_url))?;
+            // If transport doesn't exist, create one via get_transport()
+            let transport = match transports.entry(mirror_url.clone()) {
+                Entry::Occupied(entry) => entry.into_mut(),
+                Entry::Vacant(entry) => {
+                    let new_transport = mirror_url.get_transport()?;
+                    entry.insert(new_transport)
+                },
+            };
 
             let (root, remote) = local_repo.ensure_remote(&mirror_url, transport)?;
             local_repo.resolve_atom_to_cache(
@@ -738,5 +749,374 @@ impl<'a, S: LocalStorage> AtomResolver<'a, S> {
             requirements,
             constrains: vec![],
         })
+    }
+}
+
+//================================================================================================
+// Unit Tests
+//================================================================================================
+
+#[cfg(test)]
+mod tests {
+    use semver::Version;
+
+    use super::*;
+
+    // ========================================================================================
+    // SemverVersionSet Tests
+    // ========================================================================================
+
+    mod semver_version_set {
+        use super::*;
+
+        #[test]
+        fn parse_valid_requirements() {
+            assert!(SemverVersionSet::parse("^1.0").is_ok());
+            assert!(SemverVersionSet::parse(">=1.0.0, <2.0.0").is_ok());
+            assert!(SemverVersionSet::parse("~1.2.3").is_ok());
+            assert!(SemverVersionSet::parse("=1.0.0").is_ok());
+            assert!(SemverVersionSet::parse("*").is_ok());
+        }
+
+        #[test]
+        fn parse_invalid_requirements() {
+            assert!(SemverVersionSet::parse("invalid").is_err());
+            assert!(SemverVersionSet::parse(">>1.0").is_err());
+            assert!(SemverVersionSet::parse("1.0.0.0").is_err());
+        }
+
+        #[test]
+        fn matches_caret_requirement() {
+            let vs = SemverVersionSet::parse("^1.0.0").unwrap();
+
+            // Should match
+            assert!(vs.matches(&Version::parse("1.0.0").unwrap()));
+            assert!(vs.matches(&Version::parse("1.0.1").unwrap()));
+            assert!(vs.matches(&Version::parse("1.5.0").unwrap()));
+            assert!(vs.matches(&Version::parse("1.99.99").unwrap()));
+
+            // Should not match
+            assert!(!vs.matches(&Version::parse("0.9.9").unwrap()));
+            assert!(!vs.matches(&Version::parse("2.0.0").unwrap()));
+        }
+
+        #[test]
+        fn matches_tilde_requirement() {
+            let vs = SemverVersionSet::parse("~1.2.3").unwrap();
+
+            // Should match (patch-level changes only)
+            assert!(vs.matches(&Version::parse("1.2.3").unwrap()));
+            assert!(vs.matches(&Version::parse("1.2.4").unwrap()));
+            assert!(vs.matches(&Version::parse("1.2.99").unwrap()));
+
+            // Should not match
+            assert!(!vs.matches(&Version::parse("1.3.0").unwrap()));
+            assert!(!vs.matches(&Version::parse("1.1.0").unwrap()));
+        }
+
+        #[test]
+        fn matches_range_requirement() {
+            let vs = SemverVersionSet::parse(">=1.0.0, <2.0.0").unwrap();
+
+            assert!(vs.matches(&Version::parse("1.0.0").unwrap()));
+            assert!(vs.matches(&Version::parse("1.9.9").unwrap()));
+            assert!(!vs.matches(&Version::parse("0.9.9").unwrap()));
+            assert!(!vs.matches(&Version::parse("2.0.0").unwrap()));
+        }
+
+        #[test]
+        fn matches_star_requirement() {
+            let vs = SemverVersionSet::parse("*").unwrap();
+
+            assert!(vs.matches(&Version::parse("0.0.1").unwrap()));
+            assert!(vs.matches(&Version::parse("1.0.0").unwrap()));
+            assert!(vs.matches(&Version::parse("99.99.99").unwrap()));
+        }
+
+        #[test]
+        fn display_formats_correctly() {
+            let vs = SemverVersionSet::parse("^1.0.0").unwrap();
+            assert_eq!(format!("{}", vs), "^1.0.0");
+        }
+
+        #[test]
+        fn from_version_req_works() {
+            let req = VersionReq::parse(">=1.0").unwrap();
+            let vs: SemverVersionSet = req.clone().into();
+            assert_eq!(vs.inner(), &req);
+        }
+
+        #[test]
+        fn equality_and_hashing() {
+            use std::collections::HashSet;
+
+            let vs1 = SemverVersionSet::parse("^1.0").unwrap();
+            let vs2 = SemverVersionSet::parse("^1.0").unwrap();
+            let vs3 = SemverVersionSet::parse("^2.0").unwrap();
+
+            assert_eq!(vs1, vs2);
+            assert_ne!(vs1, vs3);
+
+            let mut set = HashSet::new();
+            set.insert(vs1.clone());
+            assert!(set.contains(&vs2));
+            assert!(!set.contains(&vs3));
+        }
+    }
+
+    // ========================================================================================
+    // AtomSolvableRecord Tests
+    // ========================================================================================
+
+    mod atom_solvable_record {
+        use super::*;
+
+        fn make_test_digest() -> AtomDigest {
+            // AtomDigest uses Rfc4648HexLower base32 (0-9, a-v)
+            // 52 characters encode 32 bytes (52 * 5 bits = 260 bits, truncated to 256)
+            "0000000000000000000000000000000000000000000000000000"
+                .parse()
+                .unwrap()
+        }
+
+        fn make_git_digest() -> GitDigest {
+            GitDigest::Sha1([0u8; 20])
+        }
+
+        #[test]
+        fn new_creates_uncached() {
+            let record = AtomSolvableRecord::new(
+                Version::parse("1.0.0").unwrap(),
+                make_git_digest(),
+                make_test_digest(),
+            );
+            assert!(!record.manifest_cached);
+        }
+
+        #[test]
+        fn with_cached_manifest_sets_flag() {
+            let record = AtomSolvableRecord::with_cached_manifest(
+                Version::parse("1.0.0").unwrap(),
+                make_git_digest(),
+                make_test_digest(),
+            );
+            assert!(record.manifest_cached);
+        }
+
+        #[test]
+        fn display_shows_version() {
+            let record = AtomSolvableRecord::new(
+                Version::parse("1.2.3").unwrap(),
+                make_git_digest(),
+                make_test_digest(),
+            );
+            assert_eq!(format!("{}", record), "1.2.3");
+        }
+
+        #[test]
+        fn ordering_by_version() {
+            let v1 = AtomSolvableRecord::new(
+                Version::parse("1.0.0").unwrap(),
+                make_git_digest(),
+                make_test_digest(),
+            );
+            let v2 = AtomSolvableRecord::new(
+                Version::parse("2.0.0").unwrap(),
+                make_git_digest(),
+                make_test_digest(),
+            );
+            let v1_5 = AtomSolvableRecord::new(
+                Version::parse("1.5.0").unwrap(),
+                make_git_digest(),
+                make_test_digest(),
+            );
+
+            assert!(v1 < v1_5);
+            assert!(v1_5 < v2);
+            assert!(v1 < v2);
+
+            // Sorting test
+            let mut versions = vec![v2.clone(), v1.clone(), v1_5.clone()];
+            versions.sort();
+            assert_eq!(versions[0].version, Version::parse("1.0.0").unwrap());
+            assert_eq!(versions[1].version, Version::parse("1.5.0").unwrap());
+            assert_eq!(versions[2].version, Version::parse("2.0.0").unwrap());
+        }
+
+        #[test]
+        fn ordering_for_descending_sort() {
+            let v1 = AtomSolvableRecord::new(
+                Version::parse("1.0.0").unwrap(),
+                make_git_digest(),
+                make_test_digest(),
+            );
+            let v2 = AtomSolvableRecord::new(
+                Version::parse("2.0.0").unwrap(),
+                make_git_digest(),
+                make_test_digest(),
+            );
+
+            // Simulate what sort_candidates does
+            let mut versions = vec![v1.clone(), v2.clone()];
+            versions.sort_by(|a, b| b.cmp(a)); // Descending
+            assert_eq!(versions[0].version, Version::parse("2.0.0").unwrap());
+            assert_eq!(versions[1].version, Version::parse("1.0.0").unwrap());
+        }
+    }
+
+    // ========================================================================================
+    // DiscoveryState Tests
+    // ========================================================================================
+
+    mod discovery_state {
+        use super::*;
+
+        fn make_test_digest(seed: u8) -> AtomDigest {
+            // AtomDigest uses Rfc4648HexLower base32 (0-9, a-v)
+            // Vary early in string for distinct decoded values
+            let s = match seed {
+                1 => "1000000000000000000000000000000000000000000000000000",
+                2 => "2000000000000000000000000000000000000000000000000000",
+                _ => "0000000000000000000000000000000000000000000000000000",
+            };
+            s.parse().unwrap()
+        }
+
+        #[test]
+        fn new_is_empty() {
+            let state = DiscoveryState::new();
+            assert!(state.discovered.is_empty());
+        }
+
+        #[test]
+        fn mark_pending_tracks_package() {
+            let mut state = DiscoveryState::new();
+            let digest = make_test_digest(1);
+
+            assert!(!state.is_discovered(&digest));
+            state.mark_pending(digest);
+            assert!(state.is_discovered(&digest));
+            assert_eq!(state.status(&digest), Some(&DiscoveryStatus::Pending));
+        }
+
+        #[test]
+        fn mark_completed_updates_status() {
+            let mut state = DiscoveryState::new();
+            let digest = make_test_digest(1);
+
+            state.mark_pending(digest);
+            state.mark_completed(digest, 5);
+
+            assert_eq!(state.status(&digest), Some(&DiscoveryStatus::Completed(5)));
+        }
+
+        #[test]
+        fn mark_failed_updates_status() {
+            let mut state = DiscoveryState::new();
+            let digest = make_test_digest(1);
+
+            state.mark_pending(digest);
+            state.mark_failed(digest, "network error".to_string());
+
+            assert_eq!(
+                state.status(&digest),
+                Some(&DiscoveryStatus::Failed("network error".to_string()))
+            );
+        }
+
+        #[test]
+        fn multiple_packages_tracked_independently() {
+            let mut state = DiscoveryState::new();
+            let digest1 = make_test_digest(1);
+            let digest2 = make_test_digest(2);
+
+            state.mark_pending(digest1);
+            state.mark_completed(digest2, 3);
+
+            assert_eq!(state.status(&digest1), Some(&DiscoveryStatus::Pending));
+            assert_eq!(state.status(&digest2), Some(&DiscoveryStatus::Completed(3)));
+        }
+    }
+
+    // ========================================================================================
+    // ManifestCache Tests
+    // ========================================================================================
+
+    mod manifest_cache {
+        use super::*;
+
+        fn make_test_digest(seed: u8) -> AtomDigest {
+            // AtomDigest uses Rfc4648HexLower base32 (0-9, a-v)
+            // Vary early in string for distinct decoded values
+            let s = match seed {
+                1 => "1000000000000000000000000000000000000000000000000000",
+                2 => "2000000000000000000000000000000000000000000000000000",
+                _ => "0000000000000000000000000000000000000000000000000000",
+            };
+            s.parse().unwrap()
+        }
+
+        #[test]
+        fn new_is_empty() {
+            let cache = ManifestCache::new();
+            let digest = make_test_digest(1);
+            let version = Version::parse("1.0.0").unwrap();
+
+            assert!(!cache.is_cached(&digest, &version));
+            assert!(cache.get(&digest, &version).is_none());
+        }
+
+        #[test]
+        fn insert_and_get() {
+            let mut cache = ManifestCache::new();
+            let digest = make_test_digest(1);
+            let version = Version::parse("1.0.0").unwrap();
+            let deps = vec![(make_test_digest(2), VersionReq::parse("^2.0").unwrap())];
+
+            cache.insert(digest, version.clone(), deps.clone());
+
+            assert!(cache.is_cached(&digest, &version));
+            let entry = cache.get(&digest, &version).unwrap();
+            assert_eq!(entry.dependencies.len(), 1);
+            assert_eq!(entry.dependencies[0].1, VersionReq::parse("^2.0").unwrap());
+        }
+
+        #[test]
+        fn different_versions_cached_separately() {
+            let mut cache = ManifestCache::new();
+            let digest = make_test_digest(1);
+            let v1 = Version::parse("1.0.0").unwrap();
+            let v2 = Version::parse("2.0.0").unwrap();
+
+            cache.insert(digest, v1.clone(), vec![]);
+
+            assert!(cache.is_cached(&digest, &v1));
+            assert!(!cache.is_cached(&digest, &v2));
+        }
+
+        #[test]
+        fn different_atoms_cached_separately() {
+            let mut cache = ManifestCache::new();
+            let digest1 = make_test_digest(1);
+            let digest2 = make_test_digest(2);
+            let version = Version::parse("1.0.0").unwrap();
+
+            cache.insert(digest1, version.clone(), vec![]);
+
+            assert!(cache.is_cached(&digest1, &version));
+            assert!(!cache.is_cached(&digest2, &version));
+        }
+
+        #[test]
+        fn empty_dependencies_is_valid() {
+            let mut cache = ManifestCache::new();
+            let digest = make_test_digest(1);
+            let version = Version::parse("1.0.0").unwrap();
+
+            cache.insert(digest, version.clone(), vec![]);
+
+            let entry = cache.get(&digest, &version).unwrap();
+            assert!(entry.dependencies.is_empty());
+        }
     }
 }
