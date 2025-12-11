@@ -56,6 +56,7 @@ use crate::storage::{LocalStorage, QueryVersion, RemoteAtomCache};
 use crate::{ATOM_MANIFEST_NAME, AtomId, BoxError, ManifestWriter, id, storage, uri};
 
 mod direct;
+mod sat;
 
 //================================================================================================
 // Impls
@@ -530,7 +531,6 @@ impl Uri {
                     match oid {
                         ObjectId::Sha1(bytes) => GitDigest::Sha1(bytes),
                     },
-                    Some(url.to_owned()),
                     id.into(),
                 ),
             ))

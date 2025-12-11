@@ -11,6 +11,7 @@ bstr       = "^1"
 ignore     = "^0.4"
 nom        = "^7"
 path-clean = "^1"
+resolvo    = "0.10"
 
 bimap.workspace                 = true
 either.workspace                = true

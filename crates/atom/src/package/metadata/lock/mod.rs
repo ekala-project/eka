@@ -84,10 +84,9 @@ use semver::Version;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use storage::UnpackedRef;
 use storage::git::Root;
-use uri::serde_gix_url;
 
 use super::{GitDigest, manifest};
-use crate::{AtomId, BoxError, id, package, storage, uri};
+use crate::{AtomId, BoxError, id, package, storage};
 
 pub(in crate::package) mod direct;
 
@@ -110,14 +109,6 @@ pub struct AtomDep {
     set: GitDigest,
     /// The resolved or calculated (if local) Git revision (commit hash) for verification.
     rev: GitDigest,
-    /// The the primary url the atom was first resolved from. Needed for legacy tools which can't
-    /// resolve mirrors (e.g. nix).
-    #[serde(
-        default,
-        with = "serde_gix_url::maybe",
-        skip_serializing_if = "Option::is_none"
-    )]
-    mirror: Option<gix::Url>,
     /// The cryptographic identity of the atom.
     id: AtomDigest,
 }
@@ -250,7 +241,6 @@ impl AtomDep {
         version: Version,
         set: GitDigest,
         rev: GitDigest,
-        mirror: Option<gix::Url>,
         id: AtomDigest,
     ) -> Self {
         Self {
@@ -258,7 +248,6 @@ impl AtomDep {
             version,
             set,
             rev,
-            mirror,
             id,
         }
     }
@@ -280,11 +269,6 @@ impl AtomDep {
 
     pub(crate) fn set(&self) -> GitDigest {
         self.set
-    }
-
-    /// retrieve the mirror this atom is locked from
-    pub fn mirror(&self) -> Option<&gix::Url> {
-        self.mirror.as_ref()
     }
 
     pub fn rev(&self) -> GitDigest {
@@ -385,7 +369,6 @@ impl From<ResolvedAtom<ObjectId, Root>> for AtomDep {
             rev: (*rev).into(),
             set: GitDigest::from(id.root().deref().to_owned()),
             id: id.compute_hash(),
-            mirror: atom.remotes().first().map(ToOwned::to_owned),
         }
     }
 }
