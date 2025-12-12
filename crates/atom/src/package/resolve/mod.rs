@@ -609,52 +609,31 @@ impl<'a, S: LocalStorage> ManifestWriter<'a, S> {
     }
 
     /// Removes any dependencies from the lockfile that are no longer present in the
-    /// manifest, ensuring the lockfile only contains entries that are still relevant,
-    /// then calls into synchronization logic to ensure consistency.
+    /// manifest, ensuring the lockfile only contains entries that are still relevant.
+    ///
+    /// Note: Atom deps are managed entirely by the SAT resolver now - this method
+    /// only handles direct (non-atom) deps like Nix, NixGit, NixTar, etc.
     pub(super) fn sanitize(&mut self, manifest: &ValidManifest) {
-        use metadata::manifest::Compose;
-
         let manifest = manifest.as_ref();
-        self.lock.deps.as_mut().retain(|_, dep| match dep {
-            lock::Dep::Atom(atom_dep) => {
-                if let Some(SetDetails { tag: name, .. }) = self.lock.sets.get(&atom_dep.set()) {
-                    if let Some(set) = manifest.deps().from().get(name) {
-                        return (set.contains_key(atom_dep.label())
-                            || if let Compose::With(spec) = manifest.composer() {
-                                atom_dep.label() == spec.key()
-                                    && manifest.deps().from().get(spec.value().from()).is_some()
-                                    && spec
-                                        .value()
-                                        .version()
-                                        .is_none_or(|v| v.matches(atom_dep.version()))
-                            } else {
-                                false
-                            })
-                            && (atom_dep.version().pre.is_empty()
-                                || self
-                                    .resolved
-                                    .ekala
-                                    .manifest
-                                    .set
-                                    .packages
-                                    .as_ref()
-                                    .contains_left(atom_dep.label()));
-                    } else {
-                        false
-                    };
-                }
-                false
-            },
-            lock::Dep::Nix(nix) => manifest.deps().direct().nix().contains_key(nix.name()),
-            lock::Dep::NixGit(nix_git) => {
-                manifest.deps().direct().nix().contains_key(&nix_git.name)
-            },
-            lock::Dep::NixTar(nix_tar) => {
-                manifest.deps().direct().nix().contains_key(&nix_tar.name)
-            },
-            lock::Dep::NixSrc(build_src) => {
-                manifest.deps().direct().nix().contains_key(&build_src.name)
-            },
+
+        // Clear all atom deps - SAT resolver will rebuild the correct set
+        // This ensures transitive deps are properly managed
+        self.lock.deps.as_mut().retain(|_key, dep| {
+            match dep {
+                // Atom deps are managed by SAT resolver - clear them all
+                lock::Dep::Atom(_) => false,
+                // Direct deps: keep if still in manifest
+                lock::Dep::Nix(nix) => manifest.deps().direct().nix().contains_key(nix.name()),
+                lock::Dep::NixGit(nix_git) => {
+                    manifest.deps().direct().nix().contains_key(&nix_git.name)
+                },
+                lock::Dep::NixTar(nix_tar) => {
+                    manifest.deps().direct().nix().contains_key(&nix_tar.name)
+                },
+                lock::Dep::NixSrc(build_src) => {
+                    manifest.deps().direct().nix().contains_key(&build_src.name)
+                },
+            }
         });
     }
 
@@ -669,40 +648,44 @@ impl<'a, S: LocalStorage> ManifestWriter<'a, S> {
     }
 
     fn synchronize_atoms(&mut self, manifest: &ValidManifest) -> Result<(), DocError> {
-        for (set_tag, set) in manifest.as_ref().deps().from() {
-            let maybe_root = self
-                .resolved
-                .roots()
-                .get(&Either::Left(set_tag.to_owned()))
-                .map(ToOwned::to_owned);
-            if let Some(root) = maybe_root {
-                for (label, req) in set {
-                    tracing::debug!(
-                        atom.label = %label,
-                        atom.specified = %req,
-                        set = %set_tag,
-                        "checking sync status"
-                    );
-                    let id = AtomId::from((root, label.to_owned()));
-                    self.synchronize_atom(req.to_owned(), id.to_owned(), set_tag.to_owned())
-                        .map_err(|error| {
-                            tracing::error!(
-                                atom.label = %label,
-                                atom.requested = %req,
-                                set = %set_tag,
-                                %error, "lock synchronization failed"
-                            );
-                            DocError::SyncFailed
-                        })?;
-                }
-            } else {
-                tracing::warn!(
-                    message = "set was not resolved to an origin id, can't syncrhonize it",
-                    set = %set_tag,
+        use sat::{AtomResolver, ResolutionError};
+
+        // Create a SAT resolver for transitive dependency resolution
+        let resolver = AtomResolver::new(&self.resolved, self.resolved.ekala.storage);
+
+        // Perform SAT-based resolution
+        match resolver.resolve(manifest) {
+            Ok(result) => {
+                tracing::info!(
+                    deps_count = result.deps.len(),
+                    "SAT resolution completed successfully"
                 );
-            }
+
+                // Update lock with all resolved deps (direct + transitive)
+                for dep in result.deps {
+                    let atom_dep: AtomDep = dep.into();
+                    let id = AtomId::from(&atom_dep);
+                    self.insert_or_update_and_log(Either::Left(id), &lock::Dep::Atom(atom_dep));
+                }
+
+                Ok(())
+            },
+            Err(ResolutionError::Unsolvable(msg)) => {
+                tracing::error!(
+                    error = %msg,
+                    "Dependency resolution failed - no valid solution exists"
+                );
+                Err(DocError::SyncFailed)
+            },
+            Err(ResolutionError::Cancelled) => {
+                tracing::warn!("Dependency resolution was cancelled");
+                Err(DocError::SyncFailed)
+            },
+            Err(e) => {
+                tracing::error!(error = %e, "Dependency resolution error");
+                Err(DocError::SyncFailed)
+            },
         }
-        Ok(())
     }
 
     /// Synchronizes a single atom's lockfile entry with the manifest requirements.

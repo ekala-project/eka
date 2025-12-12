@@ -21,12 +21,11 @@
 //! See ADR-0015 for the full implementation plan.
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{self, Display};
 use std::hash::Hash;
 
 use either::Either;
-use gix::hashtable::HashSet;
 use gix::protocol::transport::client::Transport;
 use resolvo::utils::{Pool, VersionSet};
 use resolvo::{
@@ -774,19 +773,21 @@ impl<'a, S: LocalStorage> AtomResolver<'a, S> {
         Ok(deps)
     }
 
-    /// Convert parsed dependencies to resolvo's format
+    /// Convert parsed dependencies to resolvo's format.
+    /// Uses intern_package_name to ensure transitive deps are registered with the solver.
     fn convert_deps_to_resolvo(&self, deps: &[AtomDependency]) -> Dependencies {
         let requirements: Vec<ConditionalRequirement> = deps
             .iter()
-            .filter_map(|dep| {
-                let name_id = self.pool.lookup_package_name(&dep.target)?;
+            .map(|dep| {
+                // Use intern (not lookup) so transitive deps get registered
+                let name_id = self.pool.intern_package_name(dep.target.clone());
                 let version_set = SemverVersionSet(dep.version_req.clone());
                 let vs_id = self.pool.intern_version_set(name_id, version_set);
 
-                Some(ConditionalRequirement {
+                ConditionalRequirement {
                     condition: None,
                     requirement: Requirement::Single(vs_id),
-                })
+                }
             })
             .collect();
 
@@ -840,6 +841,20 @@ pub enum ResolutionError {
     RequirementError(String),
     #[error(transparent)]
     Other(#[from] BoxError),
+}
+
+impl From<ResolvedDep> for crate::package::metadata::lock::AtomDep {
+    fn from(dep: ResolvedDep) -> Self {
+        crate::package::metadata::lock::AtomDep::new(
+            dep.label,
+            dep.version,
+            dep.set,
+            dep.rev,
+            dep.atom_id,
+            dep.requires,
+            dep.direct,
+        )
+    }
 }
 
 impl<'a, S: LocalStorage> AtomResolver<'a, S> {
