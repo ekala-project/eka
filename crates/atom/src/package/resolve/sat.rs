@@ -31,8 +31,8 @@ use gix::protocol::transport::client::Transport;
 use resolvo::utils::{Pool, VersionSet};
 use resolvo::{
     Candidates, Condition, ConditionId, ConditionalRequirement, Dependencies, DependencyProvider,
-    HintDependenciesAvailable, Interner, KnownDependencies, NameId, Requirement, SolvableId,
-    StringId, VersionSetId,
+    HintDependenciesAvailable, Interner, KnownDependencies, NameId, Problem, Requirement,
+    SolvableId, Solver, StringId, UnsolvableOrCancelled, VersionSetId,
 };
 use semver::{Version, VersionReq};
 
@@ -147,11 +147,7 @@ pub struct AtomSolvableRecord {
 
 impl AtomSolvableRecord {
     /// Creates a new solvable record.
-    pub fn new(
-        version: semver::Version,
-        rev: GitDigest,
-        package: AtomId<Root>,
-    ) -> Self {
+    pub fn new(version: semver::Version, rev: GitDigest, package: AtomId<Root>) -> Self {
         Self {
             version,
             rev,
@@ -320,7 +316,8 @@ impl ManifestCache {
 
 /// Resolution context holding all state needed for dependency resolution
 pub struct AtomResolver<'a, S: LocalStorage> {
-    /// The resolvo pool for interning - package names are AtomId<Root>, solvable records are AtomSolvableRecord
+    /// The resolvo pool for interning - package names are AtomId<Root>, solvable records are
+    /// AtomSolvableRecord
     pool: Pool<SemverVersionSet, AtomId<Root>>,
 
     /// Mapping from AtomId to available versions discovered via ref queries
@@ -500,7 +497,10 @@ impl<'a, S: LocalStorage> DependencyProvider for AtomResolver<'a, S> {
 
         // Need to fetch manifest - this is the expensive operation
         // Use the stored package (AtomId<Root>) for fetching
-        match self.fetch_and_parse_manifest(&record.package, version).await {
+        match self
+            .fetch_and_parse_manifest(&record.package, version)
+            .await
+        {
             Ok(deps) => {
                 // Cache for future use
                 self.manifest_cache
@@ -757,7 +757,7 @@ impl<'a, S: LocalStorage> AtomResolver<'a, S> {
                     );
                     // We skip these deps rather than failing, allowing partial resolution
                     // The resolver will fail later if these deps are actually required
-                }
+                },
             }
         }
 
@@ -794,6 +794,202 @@ impl<'a, S: LocalStorage> AtomResolver<'a, S> {
             requirements,
             constrains: vec![],
         })
+    }
+}
+
+//================================================================================================
+// Resolution Entry Point
+//================================================================================================
+
+/// Result of a successful transitive resolution.
+#[derive(Debug)]
+pub struct ResolutionResult {
+    /// All resolved dependencies (direct and transitive).
+    pub deps: Vec<ResolvedDep>,
+    /// Set details for generating lock file.
+    pub sets: std::collections::BTreeMap<GitDigest, crate::package::metadata::lock::SetDetails>,
+}
+
+/// A single resolved dependency with its transitive requirements.
+#[derive(Debug, Clone)]
+pub struct ResolvedDep {
+    /// The atom's label.
+    pub label: Label,
+    /// The resolved semantic version.
+    pub version: Version,
+    /// The set (repository root) this atom belongs to.
+    pub set: GitDigest,
+    /// The Git commit revision.
+    pub rev: GitDigest,
+    /// The computed atom digest.
+    pub atom_id: AtomDigest,
+    /// Dependencies of this atom, by their AtomDigest.
+    pub requires: Vec<AtomDigest>,
+    /// Whether this is a direct dependency (from root manifest).
+    pub direct: bool,
+}
+
+/// Errors that can occur during resolution.
+#[derive(Debug, thiserror::Error)]
+pub enum ResolutionError {
+    #[error("Resolution failed: {0}")]
+    Unsolvable(String),
+    #[error("Resolution cancelled")]
+    Cancelled,
+    #[error("Failed to build requirements: {0}")]
+    RequirementError(String),
+    #[error(transparent)]
+    Other(#[from] BoxError),
+}
+
+impl<'a, S: LocalStorage> AtomResolver<'a, S> {
+    /// Resolve transitive dependencies starting from the given manifest.
+    ///
+    /// This is the main entry point for SAT-based dependency resolution.
+    /// It takes the root manifest, discovers all transitive dependencies,
+    /// and returns a complete resolution with dependency graph information.
+    ///
+    /// # Arguments
+    /// * `manifest` - The root atom's manifest containing direct dependencies
+    ///
+    /// # Returns
+    /// A `ResolutionResult` containing all resolved deps (direct + transitive)
+    /// with their `requires` fields populated for graph reconstruction.
+    pub fn resolve(self, manifest: &ValidManifest) -> Result<ResolutionResult, ResolutionError> {
+        // Build root requirements from manifest's direct deps
+        let requirements = self.build_requirements_from_manifest(manifest)?;
+
+        if requirements.is_empty() {
+            // No dependencies to resolve
+            return Ok(ResolutionResult {
+                deps: Vec::new(),
+                sets: self.collect_set_details(),
+            });
+        }
+
+        // Create solver and problem - Solver takes ownership of the provider
+        let mut solver = Solver::new(self);
+        let problem = Problem::new().requirements(requirements);
+
+        // Run resolution
+        let solvables = match solver.solve(problem) {
+            Ok(solvables) => solvables,
+            Err(UnsolvableOrCancelled::Unsolvable(conflict)) => {
+                let error_msg = conflict.display_user_friendly(&solver).to_string();
+                return Err(ResolutionError::Unsolvable(error_msg));
+            },
+            Err(UnsolvableOrCancelled::Cancelled(_)) => {
+                return Err(ResolutionError::Cancelled);
+            },
+        };
+
+        // Extract results from the solver's provider
+        let provider = solver.provider();
+        let direct_deps = provider.collect_direct_dep_ids(manifest);
+        let deps = provider.extract_resolved_deps(&solvables, &direct_deps);
+        let sets = provider.collect_set_details();
+
+        Ok(ResolutionResult { deps, sets })
+    }
+
+    /// Build ConditionalRequirements from the manifest's direct dependencies.
+    fn build_requirements_from_manifest(
+        &self,
+        manifest: &ValidManifest,
+    ) -> Result<Vec<ConditionalRequirement>, ResolutionError> {
+        let mut requirements = Vec::new();
+
+        for (set_tag, set_deps) in manifest.as_ref().deps().from() {
+            // Resolve set tag to root
+            let Some(set_root) = self.resolve_set_tag_to_root(set_tag) else {
+                tracing::warn!(
+                    set_tag = %set_tag,
+                    "Skipping dependencies from unknown set tag in root manifest"
+                );
+                continue;
+            };
+
+            for (label, version_req) in set_deps {
+                let atom_id = AtomId::from((set_root, label.clone()));
+                let name_id = self.pool.intern_package_name(atom_id);
+                let version_set = SemverVersionSet(version_req.clone());
+                let vs_id = self.pool.intern_version_set(name_id, version_set);
+
+                requirements.push(ConditionalRequirement {
+                    condition: None,
+                    requirement: Requirement::Single(vs_id),
+                });
+            }
+        }
+
+        Ok(requirements)
+    }
+
+    /// Collect the AtomIds of direct dependencies from the manifest.
+    fn collect_direct_dep_ids(&self, manifest: &ValidManifest) -> HashSet<AtomDigest> {
+        let mut direct = HashSet::default();
+
+        for (set_tag, set_deps) in manifest.as_ref().deps().from() {
+            if let Some(set_root) = self.resolve_set_tag_to_root(set_tag) {
+                for (label, _) in set_deps {
+                    let atom_id = AtomId::from((set_root, label.clone()));
+                    direct.insert(atom_id.compute_hash());
+                }
+            }
+        }
+
+        direct
+    }
+
+    /// Extract ResolvedDep structs from the solver's solution.
+    fn extract_resolved_deps(
+        &self,
+        solvables: &[SolvableId],
+        direct_deps: &HashSet<AtomDigest>,
+    ) -> Vec<ResolvedDep> {
+        solvables
+            .iter()
+            .map(|&solvable_id| {
+                let solvable = self.pool.resolve_solvable(solvable_id);
+                let record = &solvable.record;
+
+                // Get the requires from the manifest cache
+                let cache_key = (record.atom_id, record.version.clone());
+                let requires = self
+                    .manifest_cache
+                    .borrow()
+                    .get(&cache_key)
+                    .map(|deps| deps.iter().map(|d| d.target.compute_hash()).collect())
+                    .unwrap_or_default();
+
+                ResolvedDep {
+                    label: record.package.label().clone(),
+                    version: record.version.clone(),
+                    set: GitDigest::from(**record.package.root()),
+                    rev: record.rev,
+                    atom_id: record.atom_id,
+                    requires,
+                    direct: direct_deps.contains(&record.atom_id),
+                }
+            })
+            .collect()
+    }
+
+    /// Collect set details from resolved_sets for use in lock file.
+    fn collect_set_details(
+        &self,
+    ) -> std::collections::BTreeMap<GitDigest, crate::package::metadata::lock::SetDetails> {
+        self.resolved_sets
+            .details()
+            .iter()
+            .map(|(digest, details)| {
+                let lock_details = crate::package::metadata::lock::SetDetails {
+                    tag: details.tag.clone(),
+                    mirrors: details.mirrors.clone(),
+                };
+                ((*digest).into(), lock_details)
+            })
+            .collect()
     }
 }
 

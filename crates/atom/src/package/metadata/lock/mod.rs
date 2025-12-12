@@ -111,6 +111,19 @@ pub struct AtomDep {
     rev: GitDigest,
     /// The cryptographic identity of the atom.
     id: AtomDigest,
+    /// Direct dependencies of this atom, referenced by their AtomDigest.
+    /// This enables reconstruction of the dependency graph from the lock file.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    requires: Vec<AtomDigest>,
+    /// Whether this is a direct dependency (from manifest) or transitive.
+    /// Direct dependencies are those explicitly listed in the root atom.toml.
+    #[serde(default, skip_serializing_if = "is_true")]
+    direct: bool,
+}
+
+/// Helper for serde skip_serializing_if - skips when true (direct deps are default)
+fn is_true(b: &bool) -> bool {
+    *b
 }
 
 /// Enum representing the different types of locked dependencies, serialized as tagged TOML tables.
@@ -236,12 +249,15 @@ impl Using {
 }
 
 impl AtomDep {
+    /// Creates a new locked atom dependency with full resolution information.
     pub(in crate::package) fn new(
         label: Label,
         version: Version,
         set: GitDigest,
         rev: GitDigest,
         id: AtomDigest,
+        requires: Vec<AtomDigest>,
+        direct: bool,
     ) -> Self {
         Self {
             label,
@@ -249,7 +265,20 @@ impl AtomDep {
             set,
             rev,
             id,
+            requires,
+            direct,
         }
+    }
+
+    /// Creates a new direct dependency (for backwards compatibility).
+    pub(in crate::package) fn new_direct(
+        label: Label,
+        version: Version,
+        set: GitDigest,
+        rev: GitDigest,
+        id: AtomDigest,
+    ) -> Self {
+        Self::new(label, version, set, rev, id, Vec::new(), true)
     }
 
     /// retrieve the version this atom is locked to
@@ -273,6 +302,16 @@ impl AtomDep {
 
     pub fn rev(&self) -> GitDigest {
         self.rev
+    }
+
+    /// Returns the direct dependencies of this atom.
+    pub fn requires(&self) -> &[AtomDigest] {
+        &self.requires
+    }
+
+    /// Returns true if this is a direct dependency (explicitly in manifest).
+    pub fn is_direct(&self) -> bool {
+        self.direct
     }
 }
 
@@ -369,6 +408,9 @@ impl From<ResolvedAtom<ObjectId, Root>> for AtomDep {
             rev: (*rev).into(),
             set: GitDigest::from(id.root().deref().to_owned()),
             id: id.compute_hash(),
+            // From<ResolvedAtom> is used for direct deps; requires filled later by resolver
+            requires: Vec::new(),
+            direct: true,
         }
     }
 }

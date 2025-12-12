@@ -524,7 +524,7 @@ impl Uri {
             let id = AtomId::construct(&atoms, label.to_owned())?;
             Ok((
                 atom_req,
-                AtomDep::new(
+                AtomDep::new_direct(
                     label.to_owned(),
                     version,
                     GitDigest::Sha1(root),
