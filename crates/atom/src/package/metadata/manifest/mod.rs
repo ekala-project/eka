@@ -383,7 +383,7 @@ pub struct ManifestWriter<'a, S: LocalStorage> {
     pub(in crate::package) resolved: ResolvedSets<'a, S>,
 }
 
-pub(in crate::package) struct AtomWriter {
+pub(crate) struct AtomWriter {
     set_tag: Tag,
     atom_req: AtomReq,
     mirror: SetMirror,
@@ -397,7 +397,7 @@ pub(in crate::package) struct AtomWriter {
 ///
 /// This trait now works with [`ValidManifest`] to ensure that all dependency
 /// modifications maintain manifest consistency and validation.
-pub(in crate::package) trait WriteDeps<T: Serialize, K: VerifiedName> {
+pub(crate) trait WriteDeps<T: Serialize, K: VerifiedName> {
     /// The error type returned by the methods.
     type Error;
 
@@ -722,7 +722,7 @@ impl WriteDeps<ValidManifest, Label> for AtomWriter {
 }
 
 impl AtomWriter {
-    pub(in crate::package) fn new(set_tag: Tag, atom_req: AtomReq, mirror: SetMirror) -> Self {
+    pub(crate) fn new(set_tag: Tag, atom_req: AtomReq, mirror: SetMirror) -> Self {
         Self {
             set_tag,
             atom_req,

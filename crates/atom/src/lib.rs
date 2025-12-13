@@ -76,6 +76,9 @@ pub mod package;
 pub mod storage;
 pub mod uri;
 
+#[cfg(test)]
+pub mod test;
+
 // Sets compile time constants
 eka_root_macro::eka_origin_info!();
 
