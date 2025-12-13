@@ -21,7 +21,6 @@ async fn publish_atom() -> Result<(), anyhow::Error> {
     init_tracing();
 
     let (repo_dir, _remote) = init_repo_and_remote()?;
-    std::env::set_current_dir(&repo_dir)?;
     let repo = ThreadSafeRepository::open(repo_dir.as_ref())?;
     let repo = repo.to_thread_local();
     let remote = repo.find_remote("origin")?;
@@ -36,10 +35,15 @@ async fn publish_atom() -> Result<(), anyhow::Error> {
     let repo = repo.to_thread_local();
 
     let (paths, publisher) = GitPublisher::new(&repo, "origin", "HEAD", progress)?.build()?;
+
     let path = paths
         .as_ref()
         .get_by_left(&Label::try_from(label)?)
-        .context("path is messed up")?;
+        .context(format!(
+            "Could not find label '{}' in paths: {:?}",
+            label,
+            paths.as_ref()
+        ))?;
     let result = publisher.publish_atom(path, &HashMap::new())?;
     let mut errors = Vec::with_capacity(1);
     publisher.await_pushes(&mut errors).await;

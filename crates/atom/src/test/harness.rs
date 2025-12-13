@@ -183,9 +183,10 @@ impl MockAtom for ThreadSafeRepository {
             oid,
         };
 
-        let tree = Tree {
-            entries: vec![entry, entry_dir],
-        };
+        let mut entries = vec![entry, entry_dir];
+        entries.sort_unstable();
+
+        let tree = Tree { entries };
 
         let oid = repo.write_object(tree)?.detach();
 
@@ -304,9 +305,10 @@ impl MockAtom for ThreadSafeRepository {
             oid,
         };
 
-        let tree = Tree {
-            entries: vec![entry, entry_dir],
-        };
+        let mut entries = vec![entry, entry_dir];
+        entries.sort_unstable();
+
+        let tree = Tree { entries };
 
         let oid = repo.write_object(tree)?.detach();
 
