@@ -313,10 +313,11 @@ impl Init for gix::Repository {
         let manifest_filename = crate::EKALA_MANIFEST_NAME.as_str();
         let manifest_path = workdir.join(manifest_filename);
 
-        let content = if let Ok(content) = fs::read_to_string(&manifest_path) {
-            let _manifest: EkalaManifest =
-                toml_edit::de::from_str(&content).map_err(|e| Error::Generic(Box::new(e)))?;
-            content
+        let content = if manifest_path.exists() {
+            // Validate by opening - this enforces all invariants
+            let _manifest = EkalaManifest::open_filesystem(&manifest_path)
+                .map_err(|e| Error::Generic(Box::new(e)))?;
+            fs::read_to_string(&manifest_path)?
         } else {
             let manifest = EkalaManifest::new();
             let content = toml_edit::ser::to_string_pretty(&manifest)?;
@@ -579,13 +580,10 @@ impl<'repo> Init for gix::Remote<'repo> {
             .to_string();
 
         // FIXME: use gix for push once it supports it
-        run_git_command(&[
-            "-C",
-            repo.git_dir().to_string_lossy().as_ref(),
-            "push",
-            remote,
-            format!("{root_ref}:{root_ref}").as_str(),
-        ])?;
+        run_git_command(
+            repo.git_dir(),
+            &["push", remote, format!("{root_ref}:{root_ref}").as_str()],
+        )?;
         tracing::info!(ekala.remote = %remote, ekala.root = %*root, "Successfully initialized");
         Ok(())
     }
@@ -1054,9 +1052,13 @@ pub fn repo() -> Result<Option<&'static ThreadSafeRepository>, Box<gix::discover
 ///
 /// Note: This function is a temporary workaround for operations not yet implemented in `gix`.
 /// It should be removed once `gix` supports all necessary functionality (e.g., push).
-pub fn run_git_command(args: &[&str]) -> io::Result<Vec<u8>> {
+pub fn run_git_command(git_dir: &Path, args: &[&str]) -> io::Result<Vec<u8>> {
     use std::process::Command;
-    let output = Command::new("git").args(args).output()?;
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(git_dir)
+        .args(args)
+        .output()?;
 
     if output.status.success() {
         Ok(output.stdout)

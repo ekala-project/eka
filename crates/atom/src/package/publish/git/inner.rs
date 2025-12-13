@@ -135,18 +135,23 @@ impl<'a> AtomReferences<'a> {
             atom = %atom.atom.id.label(),
             remote = %remote
         );
+
+        // Capture git directory for the spawned tasks
+        let git_dir = atom.git.repo.git_dir().to_path_buf();
+
         for r in [&self.content, &self.spec, &self.origin] {
             let r = r.name().as_bstr().to_string();
             let remote = remote.clone();
             let parent = tracing::Span::current();
             let progress = atom.git.progress.clone();
+            let git_dir = git_dir.clone();
             let task = async move {
                 let _guard = parent.enter();
                 let span = tracing::info_span!("push", msg = %r, %remote);
                 crate::log::set_sub_task(&span, &format!("🚀 push: {}", r));
                 let _enter = span.enter();
                 let blocking = tokio::task::spawn_blocking(move || {
-                    git::run_git_command(&["push", &remote, format!("{r}:{r}").as_str()])
+                    git::run_git_command(&git_dir, &["push", &remote, format!("{r}:{r}").as_str()])
                 });
                 let result = blocking.await??;
 

@@ -179,6 +179,7 @@ pub trait EkalaStorage {
     type Error: From<std::path::StripPrefixError>
         + From<toml_edit::de::Error>
         + From<std::io::Error>
+        + From<crate::package::metadata::DocError>
         + std::error::Error
         + std::marker::Send
         + std::marker::Sync
@@ -190,11 +191,10 @@ pub trait EkalaStorage {
         let path = self
             .ekala_root_dir()?
             .join(crate::EKALA_MANIFEST_NAME.as_str());
-        let ekala: EkalaManifest =
-            toml_edit::de::from_str(&std::fs::read_to_string(&path).inspect_err(
-                |_| tracing::warn!(path = %path.display(), "could not locate ekala.toml"),
-            )?)?;
-        Ok(ekala)
+        EkalaManifest::open_filesystem(&path).map_err(|e| {
+            tracing::warn!(path = %path.display(), error = %e, "could not open ekala.toml");
+            Self::Error::from(e)
+        })
     }
     /// returns the corrent working directory inside the store, failing if outside
     fn cwd(&self) -> Result<impl AsRef<Path>, Self::Error>;

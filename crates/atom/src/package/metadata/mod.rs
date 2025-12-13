@@ -171,17 +171,48 @@ pub enum DocError {
     SetError(#[from] sets::Error),
 }
 
-/// The section of the manifest describing the Ekala set of atoms.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+/// Internal type for raw deserialization of the set section.
+/// Contains unvalidated paths - labels not yet resolved.
+#[derive(Serialize, Deserialize, Debug)]
 #[serde(deny_unknown_fields)]
-pub struct EkalaSet {
+pub(crate) struct RawEkalaSet {
     #[serde(default)]
+    packages: Vec<PathBuf>,
+}
+
+impl RawEkalaSet {
+    /// Returns the raw package paths.
+    pub(crate) fn packages(&self) -> &[PathBuf] {
+        &self.packages
+    }
+}
+
+/// Internal type for raw deserialization of ekala.toml.
+/// MUST be validated before use via `EkalaManifest::open_*` constructors.
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RawEkalaManifest {
+    pub(crate) set: RawEkalaSet,
+    metadata: Option<MetaData>,
+}
+
+/// The section of the manifest describing the Ekala set of atoms.
+///
+/// Contains a validated `AtomMap` with unique labels.
+/// This type can only be constructed via validated constructors,
+/// ensuring the label uniqueness invariant is maintained.
+#[derive(Serialize, Debug, PartialEq, Eq)]
+pub struct EkalaSet {
     pub(in crate::package) packages: AtomMap,
 }
 
 /// The entrypoint for an ekala manifest describing a set of atoms.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
+///
+/// This type can ONLY be constructed via validated constructors like
+/// `open_filesystem()` or `from_git_tree()`, ensuring that label
+/// uniqueness is validated. This makes invalid state literally
+/// unrepresentable at the type level.
+#[derive(Serialize, Debug, PartialEq, Eq)]
 pub struct EkalaManifest {
     pub(super) set: EkalaSet,
     metadata: Option<MetaData>,
@@ -196,8 +227,10 @@ struct MetaData {
 #[derive(Debug)]
 pub struct EkalaManager<'a, S: LocalStorage> {
     path: PathBuf,
-    doc: TypedDocument<EkalaManifest>,
+    /// The raw document for TOML editing
+    doc: TypedDocument<RawEkalaManifest>,
     pub(super) storage: &'a S,
+    /// The validated manifest with unique labels
     pub(super) manifest: EkalaManifest,
 }
 
@@ -385,143 +418,8 @@ impl AsMut<BiBTreeMap<Label, PathBuf>> for AtomMap {
     }
 }
 
-/// # AtomMap Deserialization: Enforcing Repository Path Invariants
-///
-/// This implementation provides a unique deserialization strategy for `AtomMap` that
-/// conditionally enforces path normalization based on repository availability. This
-/// behavior is crucial for maintaining the integrity of atom paths within the Ekala
-/// ecosystem.
-///
-/// ## Purpose
-///
-/// The primary goal is to prevent atom paths from escaping the repository boundary.
-/// Since `AtomMap` is constructed from the actual on-disk manifest during deserialization,
-/// this provides an opportunity to validate and normalize paths early in the process,
-/// failing fast if any path would violate the repository containment invariant.
-///
-/// ## Behavior
-///
-/// - **When inside a repository**: Paths are normalized using the repository's `normalize()`
-///   method, which ensures all paths are relative to the repository root and contained within the
-///   repository boundaries. If normalization fails (indicating a path outside the repository),
-///   deserialization fails immediately.
-///
-/// - **When outside a repository**: Paths are left as-is, allowing normal operation in
-///   non-repository contexts (e.g., testing, standalone usage).
-///
-/// ## Implementation Details
-///
-/// The implementation uses a global static reference to a lazily initialized repository
-/// instance (`git::repo()`). This ensures:
-/// - Efficient access: The repository is only discovered once per process
-/// - Conditional behavior: Normalization only occurs when a repository is available
-/// - Thread safety: Uses `OnceLock` for safe static initialization
-///
-/// ## Why This Matters
-///
-/// Atom paths must never escape the repository because they represent internal
-/// references that are meaningless outside the repository context. By enforcing
-/// this invariant during deserialization, we prevent invalid states that could
-/// lead to data corruption, security issues, or inconsistent behavior.
-///
-/// ## Error Handling
-///
-/// If path normalization fails when a repository is present, deserialization
-/// returns a custom error, preventing the creation of an invalid `AtomMap` instance.
-/// This early failure ensures problems are caught during manifest loading rather
-/// than later during atom resolution.
-///
-/// ## Additional Invariants
-///
-/// Beyond path containment, this implementation also enforces that no two atoms
-/// share the same label. Since the map is keyed by `Label`, duplicate labels would
-/// overwrite entries, losing atom identity. The implementation detects and rejects
-/// such conflicts during deserialization, ensuring each atom maintains its distinct
-/// identity.
-impl<'de> Deserialize<'de> for AtomMap {
-    /// Deserializes a list of paths into an `AtomMap`, enforcing repository path invariants.
-    ///
-    /// This function transforms a serialized list of paths into a map keyed by atom labels,
-    /// acquired directly from each atom's manifest. This approach enables canonical addressing
-    /// and efficient lookups while enforcing crucial invariants: path containment within the
-    /// repository and uniqueness of atom labels.
-    ///
-    /// The deserialization process:
-    /// 1. Deserializes the input as a `Vec<PathBuf>`
-    /// 2. For each path, normalizes it relative to the repository root (when in a repo)
-    /// 3. Reads the atom manifest to extract the canonical label
-    /// 4. Ensures no duplicate labels exist
-    /// 5. Constructs the final `BTreeMap<Label, PathBuf>`
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// - Path normalization fails (paths outside repository when in repo context)
-    /// - Atom manifest cannot be read or parsed
-    /// - Multiple atoms share the same label
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        use path_clean::PathClean;
-        use serde::de;
-        use storage::{NormalizeStorePath, git};
-        let repo = git::repo().ok().flatten().map(|r| r.to_thread_local());
-        let entries: Vec<PathBuf> = Vec::deserialize(deserializer)?;
-        let mut map = BiBTreeMap::new();
-
-        let rel_to_root = repo
-            .as_ref()
-            .ok_or(storage::git::Error::NoWorkDir)
-            .and_then(|r| r.rel_from_root(r.current_dir()));
-        for path in entries {
-            let normalized = if let Some(repo) = &repo {
-                let rel_to_root = rel_to_root.as_ref().map_err(de::Error::custom)?;
-                let rel_path = rel_to_root.join(&path);
-                let cwd = repo
-                    .normalize(repo.current_dir())
-                    .map_err(de::Error::custom)?;
-                let normal = repo.normalize(&rel_path).map_err(de::Error::custom)?;
-                pathdiff::diff_paths(&normal, cwd)
-                    .unwrap_or(rel_path)
-                    .clean()
-            } else {
-                path.clean()
-            };
-            let label = if let Ok(l) =
-                Manifest::get_atom_label(normalized.join(crate::ATOM_MANIFEST_NAME.as_str()))
-                    .inspect_err(|e| {
-                        tracing::warn!(
-                            error = %e,
-                            path = %normalized.display(),
-                            suggestion = "you likely want to remove it from the set, or perhaps recreate it",
-                            "atom no longer exists"
-                        )
-                    }) {
-                l
-            } else {
-                continue;
-            };
-            if let Overwritten::Both(.., (_, path))
-            | Overwritten::Left(.., path)
-            | Overwritten::Right(.., path)
-            | Overwritten::Pair(.., path) = map.insert(label.to_owned(), normalized.to_owned())
-            {
-                tracing::error!(
-                    atoms.label = %label,
-                    atoms.fst.path = %normalized.display(),
-                    atoms.snd.path = %path.display(),
-                    "two atoms share the same `label`"
-                );
-                return Err(de::Error::custom(
-                    "atoms must have unique labels to retain distinct identities",
-                ));
-            }
-        }
-
-        Ok(AtomMap(map))
-    }
-}
+// AtomMap deserialization is handled by RawEkalaSet::resolve_to_atom_map()
+// which properly validates label uniqueness with the correct context.
 
 impl Serialize for AtomMap {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -543,12 +441,43 @@ impl Serialize for AtomMap {
 }
 
 impl EkalaManifest {
-    /// Constructs a new Ekala manifest with the given set name
+    /// Constructs a new, empty Ekala manifest.
     pub fn new() -> Self {
         EkalaManifest {
             set: EkalaSet::new(),
             metadata: Some(MetaData::new()),
         }
+    }
+
+    /// Opens and validates an ekala.toml from the filesystem.
+    ///
+    /// Reads the manifest, resolves all atom labels by reading each atom.toml,
+    /// and validates that no duplicate labels exist.
+    ///
+    /// # Arguments
+    /// * `path` - Path to the ekala.toml file
+    ///
+    /// # Returns
+    /// A validated `EkalaManifest` where label uniqueness is guaranteed.
+    ///
+    /// # Errors
+    /// Returns error if:
+    /// - The manifest cannot be read or parsed
+    /// - Any atom.toml cannot be read
+    /// - Duplicate labels are found (critical invariant violation)
+    pub fn open_filesystem(path: impl AsRef<Path>) -> Result<Self, DocError> {
+        let path = path.as_ref();
+        let root = path.parent().ok_or(DocError::MissingEkala)?;
+        let content = std::fs::read_to_string(path)?;
+        let raw: RawEkalaManifest = toml_edit::de::from_str(&content)?;
+
+        // Validate and resolve labels - this enforces the uniqueness invariant
+        let atom_map = raw.set.resolve_to_atom_map(root)?;
+
+        Ok(EkalaManifest {
+            set: EkalaSet { packages: atom_map },
+            metadata: raw.metadata,
+        })
     }
 
     /// Return a reference to the EkalaSet struct
@@ -570,14 +499,71 @@ impl EkalaSet {
         }
     }
 
+    /// Returns the validated AtomMap of packages.
     pub fn packages(&self) -> &AtomMap {
         &self.packages
+    }
+}
+
+impl RawEkalaSet {
+    /// Resolves paths to an AtomMap using filesystem access.
+    ///
+    /// `root` should be the directory containing ekala.toml (repo root).
+    /// Each path is joined with root and the atom.toml is read to get the label.
+    /// Returns error if duplicate labels are found.
+    fn resolve_to_atom_map<P: AsRef<Path>>(&self, root: P) -> Result<AtomMap, DocError> {
+        use path_clean::PathClean;
+
+        let root = root.as_ref();
+        let mut map = BiBTreeMap::new();
+
+        for path in &self.packages {
+            let normalized = path.clean();
+            let abs_path = root.join(&normalized);
+            let manifest_path = abs_path.join(crate::ATOM_MANIFEST_NAME.as_str());
+
+            let label = match Manifest::get_atom_label(&manifest_path) {
+                Ok(l) => l,
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        path = %abs_path.display(),
+                        suggestion = "you likely want to remove it from the set, or perhaps recreate it",
+                        "atom no longer exists"
+                    );
+                    continue;
+                },
+            };
+
+            if let bimap::Overwritten::Both(.., (_, old_path))
+            | bimap::Overwritten::Left(.., old_path)
+            | bimap::Overwritten::Right(.., old_path)
+            | bimap::Overwritten::Pair(.., old_path) =
+                map.insert(label.to_owned(), normalized.to_owned())
+            {
+                tracing::error!(
+                    atoms.label = %label,
+                    atoms.fst.path = %normalized.display(),
+                    atoms.snd.path = %old_path.display(),
+                    "two atoms share the same `label`"
+                );
+                return Err(DocError::DuplicateAtoms);
+            }
+        }
+
+        Ok(AtomMap(map))
     }
 }
 
 impl AtomMap {
     fn new() -> Self {
         AtomMap(BiBTreeMap::new())
+    }
+}
+
+impl From<BiBTreeMap<Label, PathBuf>> for AtomMap {
+    fn from(map: BiBTreeMap<Label, PathBuf>) -> Self {
+        AtomMap(map)
     }
 }
 
@@ -592,6 +578,8 @@ impl MetaData {
 impl<'a, S: LocalStorage> EkalaManager<'a, S> {
     /// Create a new manifest writer, traversing upward to locate the nearest ekala.toml if
     /// necessary.
+    ///
+    /// This validates the manifest on open, ensuring label uniqueness.
     pub fn open(storage: &'a S) -> Result<Self, AtomError> {
         let path = storage
             .ekala_root_dir()
@@ -601,15 +589,24 @@ impl<'a, S: LocalStorage> EkalaManager<'a, S> {
             })?
             .join(crate::EKALA_MANIFEST_NAME.as_str());
 
-        let (doc, manifest) = {
-            let content = std::fs::read_to_string(&path).inspect_err(|_| {
-                tracing::error!(
-                    suggestion = "did you run `eka init`?",
-                    "{}",
-                    AtomError::EkalaManifest
-                )
-            })?;
-            TypedDocument::new(&content)?
+        let content = std::fs::read_to_string(&path).inspect_err(|_| {
+            tracing::error!(
+                suggestion = "did you run `eka init`?",
+                "{}",
+                AtomError::EkalaManifest
+            )
+        })?;
+
+        // Parse raw document for editing capability
+        let (doc, raw): (TypedDocument<RawEkalaManifest>, RawEkalaManifest) =
+            TypedDocument::new(&content)?;
+
+        // Validate and resolve labels
+        let root = path.parent().ok_or(AtomError::EkalaManifest)?;
+        let atom_map = raw.set.resolve_to_atom_map(root)?;
+        let manifest = EkalaManifest {
+            set: EkalaSet { packages: atom_map },
+            metadata: raw.metadata,
         };
 
         Ok(EkalaManager {
@@ -620,7 +617,9 @@ impl<'a, S: LocalStorage> EkalaManager<'a, S> {
         })
     }
 
-    /// return `AtomMap` structure from the contained Ekala manifest
+    /// Returns the validated `AtomMap` from the contained Ekala manifest.
+    ///
+    /// Since labels are validated on construction, this is infallible.
     pub fn atoms(&self) -> &AtomMap {
         self.manifest.set().packages()
     }
@@ -695,7 +694,8 @@ impl<'a, S: LocalStorage> EkalaManager<'a, S> {
     ) -> Result<(), storage::StorageError> {
         use toml_edit::{Array, Value};
 
-        if let Some(path) = self.manifest.set.packages.as_ref().get_by_left(&label) {
+        // Check for duplicate labels using the already-validated AtomMap
+        if let Some(path) = self.manifest.set().packages().as_ref().get_by_left(&label) {
             tracing::error!(
                 suggestion = "rename one of them to maintain distinct identities",
                 %label,
