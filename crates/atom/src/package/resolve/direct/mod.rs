@@ -378,6 +378,7 @@ impl NixGit {
             url: self.git.to_owned(),
             rev: GitDigest::Sha1(id),
             version,
+            owner: None,
         })
     }
 

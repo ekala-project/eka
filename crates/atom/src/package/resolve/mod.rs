@@ -642,12 +642,17 @@ impl<'a, S: LocalStorage> ManifestWriter<'a, S> {
     /// requirements have changed, and ensures the lockfile is fully consistent.
     pub(super) async fn synchronize(&mut self, manifest: &ValidManifest) -> Result<(), DocError> {
         self.set_lock_compose(manifest)?;
-        self.synchronize_atoms(manifest)?;
+        let transitive_nix_deps = self.synchronize_atoms(manifest)?;
+        self.synchronize_transitive_nix_deps(transitive_nix_deps)
+            .await?;
         self.synchronize_direct(manifest).await?;
         Ok(())
     }
 
-    fn synchronize_atoms(&mut self, manifest: &ValidManifest) -> Result<(), DocError> {
+    fn synchronize_atoms(
+        &mut self,
+        manifest: &ValidManifest,
+    ) -> Result<Vec<sat::CollectedNixDep>, DocError> {
         use sat::{AtomResolver, ResolutionError};
 
         // Create a SAT resolver for transitive dependency resolution
@@ -658,6 +663,7 @@ impl<'a, S: LocalStorage> ManifestWriter<'a, S> {
             Ok(result) => {
                 tracing::info!(
                     deps_count = result.deps.len(),
+                    nix_deps_count = result.nix_deps.len(),
                     "SAT resolution completed successfully"
                 );
 
@@ -668,7 +674,8 @@ impl<'a, S: LocalStorage> ManifestWriter<'a, S> {
                     self.insert_or_update_and_log(Either::Left(id), &lock::Dep::Atom(atom_dep));
                 }
 
-                Ok(())
+                // Return collected nix deps for async resolution
+                Ok(result.nix_deps)
             },
             Err(ResolutionError::Unsolvable(msg)) => {
                 tracing::error!(
@@ -686,6 +693,55 @@ impl<'a, S: LocalStorage> ManifestWriter<'a, S> {
                 Err(DocError::SyncFailed)
             },
         }
+    }
+
+    /// Resolves and locks nix deps collected from transitive atom manifests.
+    ///
+    /// These are nix deps declared in atoms that our root depends on transitively.
+    /// Each dep is resolved using the same logic as direct nix deps, but with the
+    /// `owner` field set to indicate which atom it belongs to.
+    async fn synchronize_transitive_nix_deps(
+        &mut self,
+        nix_deps: Vec<sat::CollectedNixDep>,
+    ) -> Result<(), DocError> {
+        use metadata::manifest::direct::NixFetch;
+
+        for collected in nix_deps {
+            tracing::debug!(
+                name = %collected.name,
+                owner = %collected.owner,
+                "resolving transitive nix dependency"
+            );
+
+            // Resolve the nix dep using existing infrastructure
+            match self
+                .resolve_nix(collected.fetch.clone(), Some(&collected.name))
+                .await
+            {
+                Ok((key, mut lock_dep)) => {
+                    // Set the owner field on the resolved dep
+                    match &mut lock_dep {
+                        lock::Dep::Nix(dep) => dep.owner = Some(collected.owner),
+                        lock::Dep::NixGit(dep) => dep.owner = Some(collected.owner),
+                        lock::Dep::NixTar(dep) => dep.owner = Some(collected.owner),
+                        lock::Dep::NixSrc(dep) => dep.owner = Some(collected.owner),
+                        lock::Dep::Atom(_) => {}, // shouldn't happen
+                    }
+                    self.insert_or_update_and_log(Either::Right(key), &lock_dep);
+                },
+                Err(e) => {
+                    tracing::error!(
+                        name = %collected.name,
+                        owner = %collected.owner,
+                        error = %e,
+                        "failed to resolve transitive nix dependency"
+                    );
+                    // Continue with other deps rather than failing entirely
+                },
+            }
+        }
+
+        Ok(())
     }
 
     /// Synchronizes a single atom's lockfile entry with the manifest requirements.

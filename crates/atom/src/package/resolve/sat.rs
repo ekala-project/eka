@@ -35,9 +35,10 @@ use resolvo::{
 };
 use semver::{Version, VersionReq};
 
-use crate::id::{AtomDigest, Tag};
+use crate::id::{AtomDigest, Name, Tag};
 use crate::package::metadata::GitDigest;
 use crate::package::metadata::manifest::SetMirror;
+use crate::package::metadata::manifest::direct::NixFetch;
 use crate::package::sets::ResolvedSets;
 use crate::storage::git::{Root, to_id};
 use crate::storage::{LocalStorage, RemoteAtomCache};
@@ -340,6 +341,10 @@ pub struct AtomResolver<'a, S: LocalStorage> {
     /// Transports for remote operations (reusable connections)
     /// Uses RefCell for interior mutability since DependencyProvider trait methods use &self
     transports: RefCell<HashMap<gix::Url, Box<dyn Transport + Send>>>,
+
+    /// Nix deps collected from transitive atom manifests
+    /// Uses RefCell for interior mutability since DependencyProvider trait methods use &self
+    collected_nix_deps: RefCell<Vec<CollectedNixDep>>,
 }
 
 #[derive(Clone, Debug)]
@@ -357,6 +362,17 @@ struct AtomDependency {
     version_req: VersionReq,
 }
 
+/// A nix dep collected from a transitive atom's manifest.
+#[derive(Clone, Debug)]
+pub struct CollectedNixDep {
+    /// Name of the nix dep
+    pub name: Name,
+    /// The nix fetch specification
+    pub fetch: NixFetch,
+    /// The atom that owns this dep (for injection into correct eval context)
+    pub owner: AtomDigest,
+}
+
 impl<'a, S: LocalStorage> AtomResolver<'a, S> {
     /// Creates a new AtomResolver for resolving dependencies.
     ///
@@ -372,6 +388,7 @@ impl<'a, S: LocalStorage> AtomResolver<'a, S> {
             resolved_sets,
             storage,
             transports: RefCell::new(HashMap::new()),
+            collected_nix_deps: RefCell::new(Vec::new()),
         }
     }
 }
@@ -760,6 +777,17 @@ impl<'a, S: LocalStorage> AtomResolver<'a, S> {
             }
         }
 
+        // Collect nix deps from this transitive manifest
+        // The owner is computed from the package AtomId
+        let owner = package.compute_hash();
+        for (name, fetch) in manifest.as_ref().deps().direct().nix() {
+            self.collected_nix_deps.borrow_mut().push(CollectedNixDep {
+                name: name.clone(),
+                fetch: fetch.clone(),
+                owner,
+            });
+        }
+
         // Mark this solvable as now having deps available
         if let Some(versions) = self.discovered_candidates.borrow().get(package) {
             for v in versions {
@@ -809,6 +837,8 @@ pub struct ResolutionResult {
     pub deps: Vec<ResolvedDep>,
     /// Set details for generating lock file.
     pub sets: std::collections::BTreeMap<GitDigest, crate::package::metadata::lock::SetDetails>,
+    /// Nix deps collected from transitive atom manifests.
+    pub nix_deps: Vec<CollectedNixDep>,
 }
 
 /// A single resolved dependency with its transitive requirements.
@@ -879,6 +909,7 @@ impl<'a, S: LocalStorage> AtomResolver<'a, S> {
             return Ok(ResolutionResult {
                 deps: Vec::new(),
                 sets: self.collect_set_details(),
+                nix_deps: Vec::new(),
             });
         }
 
@@ -903,8 +934,13 @@ impl<'a, S: LocalStorage> AtomResolver<'a, S> {
         let direct_deps = provider.collect_direct_dep_ids(manifest);
         let deps = provider.extract_resolved_deps(&solvables, &direct_deps);
         let sets = provider.collect_set_details();
+        let nix_deps = provider.collected_nix_deps.borrow().clone();
 
-        Ok(ResolutionResult { deps, sets })
+        Ok(ResolutionResult {
+            deps,
+            sets,
+            nix_deps,
+        })
     }
 
     /// Build ConditionalRequirements from the manifest's direct dependencies.
