@@ -67,7 +67,7 @@ pub(crate) mod test;
 // Constants
 //================================================================================================
 
-pub(super) const V1_ROOT: &str = "refs/ekala/init";
+pub(crate) const V1_ROOT: &str = "refs/ekala/init";
 
 //================================================================================================
 // Statics
@@ -587,6 +587,12 @@ impl<'repo> Init for gix::Remote<'repo> {
         tracing::info!(ekala.remote = %remote, ekala.root = %*root, "Successfully initialized");
         Ok(())
     }
+}
+
+/// query the root of a gix::Url
+pub fn query_root(url: &gix::Url) -> Result<Root, Error> {
+    let q = format!("{}:{}", V1_ROOT, V1_ROOT);
+    Ok(Root(to_id(url.get_ref(q.as_str(), None)?)))
 }
 
 impl EkalaStorage for Repository {

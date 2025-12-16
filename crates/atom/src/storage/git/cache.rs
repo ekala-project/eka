@@ -298,15 +298,15 @@ pub fn repo() -> Result<&'static ThreadSafeRepository, Error> {
     }
 }
 
-// Structure to hold our collected entries
+/// Structure to hold our collected entries
 #[derive(Debug)]
-struct FsEntry {
-    path: PathBuf,
-    is_dir: bool,
+pub(crate) struct FsEntry {
+    pub path: PathBuf,
+    pub is_dir: bool,
 }
 
-// 1. Traverse directory with ignore crate
-fn collect_entries(root: &Path) -> Result<HashMap<PathBuf, Vec<FsEntry>>, Error> {
+/// Traverse directory with ignore crate, respecting .gitignore
+pub(crate) fn collect_entries(root: &Path) -> Result<HashMap<PathBuf, Vec<FsEntry>>, Error> {
     use ignore::Walk;
     let mut entries_by_dir: HashMap<PathBuf, Vec<FsEntry>> = HashMap::new();
 
@@ -332,7 +332,7 @@ fn collect_entries(root: &Path) -> Result<HashMap<PathBuf, Vec<FsEntry>>, Error>
 
 const MAX_DEPTH: usize = 100;
 
-fn build_tree_recursive(
+pub(crate) fn build_tree_recursive(
     repo: &Repository,
     current_dir: &Path,
     entries_by_dir: &HashMap<PathBuf, Vec<FsEntry>>,

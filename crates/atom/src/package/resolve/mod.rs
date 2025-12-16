@@ -46,13 +46,11 @@ use metadata::manifest::{AtomReq, AtomWriter, SetMirror, WriteDeps};
 use metadata::{DocError, GitDigest, lock};
 use semver::VersionReq;
 use sets::{MirrorResult, ResolvedAtom, ResolvedSets, SetResolver};
-use storage::UnpackedRef;
-use storage::git::{AtomQuery, Root};
+use storage::git::{AtomQuery, Root, cache_repo};
+use storage::{LocalStorage, QueryVersion, RemoteAtomCache, UnpackedRef};
 use uri::Uri;
 
 use super::{ValidManifest, metadata, sets};
-use crate::storage::git::cache_repo;
-use crate::storage::{LocalStorage, QueryVersion, RemoteAtomCache};
 use crate::{ATOM_MANIFEST_NAME, AtomId, BoxError, ManifestWriter, id, storage, uri};
 
 mod direct;
@@ -505,8 +503,7 @@ impl Uri {
     ) -> Result<(AtomReq, AtomDep), crate::storage::git::Error> {
         let url = self.url();
         let label = self.label();
-        if url.is_some_and(|u| u.scheme != gix::url::Scheme::File) {
-            let url = url.unwrap();
+        if let Some(url) = url {
             let atoms = url.get_atoms(transport)?;
             let ObjectId::Sha1(root) = *atoms.calculate_genesis()?;
             let (version, oid) = <gix::url::Url as QueryVersion>::process_highest_match(
@@ -535,7 +532,6 @@ impl Uri {
                 ),
             ))
         } else {
-            // implement path resolution for atoms
             tracing::warn!("specifying atoms by path not implemented");
             todo!()
         }
@@ -550,13 +546,26 @@ impl Uri {
 
 impl<'a, S: LocalStorage> ManifestWriter<'a, S> {
     /// Adds a user-requested atom URI to the manifest and lock files, ensuring they remain in sync.
-    pub fn add_uri(&mut self, uri: Uri, set_tag: Option<Tag>) -> Result<(), storage::git::Error> {
+    ///
+    /// # Parameters
+    /// - `uri`: The atom URI to add
+    /// - `set_tag`: Optional tag for the package set
+    /// - `additional_mirrors`: Additional mirrors to add to the set (must have matching genesis)
+    pub fn add_uri(
+        &mut self,
+        uri: Uri,
+        set_tag: Option<Tag>,
+        additional_mirrors: Vec<SetMirror>,
+    ) -> Result<(), storage::git::Error> {
         let mirror = if let Some(url) = uri.url() {
             SetMirror::Url(url.to_owned())
         } else {
             SetMirror::Local
         };
         let (atom_req, lock_entry) = self.resolve_uri(&uri, &mirror)?;
+
+        // Get the ground truth Root from the initial mirror for validating additional mirrors
+        let expected_root = self.get_mirror_genesis(&mirror)?;
 
         let label = lock_entry.label().to_owned();
         let id = AtomId::from(&lock_entry);
@@ -568,9 +577,50 @@ impl<'a, S: LocalStorage> ManifestWriter<'a, S> {
         atom_writer.write_dep(label, self.doc_mut())?;
         self.insert_or_update_and_log(Either::Left(id.to_owned()), &lock::Dep::Atom(lock_entry));
 
-        self.update_lock_set(set, mirror, set_tag);
+        self.update_lock_set(set.clone(), mirror, set_tag.clone());
+
+        // Validate and add each additional mirror
+        for additional_mirror in additional_mirrors {
+            match self.get_mirror_genesis(&additional_mirror) {
+                Ok(genesis) if genesis == expected_root => {
+                    self.update_lock_set(set.clone(), additional_mirror.clone(), set_tag.clone());
+                    tracing::info!(mirror = %additional_mirror, "added mirror to set");
+                },
+                Ok(genesis) => {
+                    tracing::warn!(
+                        mirror = %additional_mirror,
+                        expected = %*expected_root,
+                        actual = %*genesis,
+                        "mirror genesis mismatch; skipping"
+                    );
+                },
+                Err(e) => {
+                    tracing::warn!(
+                        mirror = %additional_mirror,
+                        error = %e,
+                        "failed to get mirror genesis; skipping"
+                    );
+                },
+            }
+        }
 
         Ok(())
+    }
+
+    /// Gets the genesis Root for a mirror.
+    fn get_mirror_genesis(&self, mirror: &SetMirror) -> Result<Root, storage::git::Error> {
+        match mirror {
+            SetMirror::Local => self
+                .resolved
+                .ekala
+                .storage
+                .ekala_genesis(None)
+                .map_err(|e| {
+                    tracing::error!(message = %e);
+                    storage::git::Error::RootNotFound
+                }),
+            SetMirror::Url(url) => storage::git::query_root(url),
+        }
     }
 
     /// Atomically writes the changes to the manifest and lock files on disk.
@@ -704,8 +754,6 @@ impl<'a, S: LocalStorage> ManifestWriter<'a, S> {
         &mut self,
         nix_deps: Vec<sat::CollectedNixDep>,
     ) -> Result<(), DocError> {
-        use metadata::manifest::direct::NixFetch;
-
         for collected in nix_deps {
             tracing::debug!(
                 name = %collected.name,
@@ -974,7 +1022,7 @@ impl<'a, S: LocalStorage> ManifestWriter<'a, S> {
             /* local store has a mirror which resolved this atom successfully */
             Ok(res)
         } else {
-            let path = self
+            let rel_path = self
                 .resolved
                 .ekala
                 .manifest
@@ -983,6 +1031,14 @@ impl<'a, S: LocalStorage> ManifestWriter<'a, S> {
                 .as_ref()
                 .get_by_left(uri.label())
                 .ok_or(DocError::NoLocal)?;
+
+            // Join relative path with ekala root to get absolute path
+            let root_dir = self.resolved.ekala.storage.ekala_root_dir().map_err(|e| {
+                tracing::error!(message = %e);
+                DocError::MissingEkala
+            })?;
+            let path = root_dir.join(rel_path);
+
             let content = std::fs::read_to_string(path.join(ATOM_MANIFEST_NAME.as_str()))?;
             let atom = ValidManifest::get_atom(&content)?;
             if atom.label() != uri.label() {
@@ -1002,7 +1058,7 @@ impl<'a, S: LocalStorage> ManifestWriter<'a, S> {
 
             let cache = &cache_repo()?.to_thread_local();
 
-            let (version, local_atom) = cache.path_to_cache(path)?;
+            let (version, local_atom) = cache.path_to_cache(&path)?;
 
             let unpacked = UnpackedRef::new(id, version, local_atom.id);
             let dep = AtomDep::from(ResolvedAtom {

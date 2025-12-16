@@ -18,19 +18,15 @@
 //! let (path, oid) = repo.mock("my-atom", "1.0.0").await?;
 //! ```
 
-use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
 use std::str::FromStr;
 
 use anyhow::Context;
-use gix::objs::Tree;
-use gix::objs::tree::Entry;
 use gix::{ObjectId, ThreadSafeRepository};
 use semver::Version;
 use tempfile::TempDir;
 
 use crate::EkalaManager;
-use crate::storage::EkalaStorage;
 
 //================================================================================================
 // Functions
@@ -41,7 +37,8 @@ use crate::storage::EkalaStorage;
 /// The repos are configured with:
 /// - A remote named "origin" pointing to the bare remote
 /// - User email/name for commits
-/// - An initial commit in the remote
+/// - Initial commits in the remote
+/// - Local repo fetches from remote so they share history (same genesis)
 ///
 /// Returns `(local_repo_dir, remote_dir)` - both are `TempDir` that clean up on drop.
 pub fn init_repo_and_remote() -> Result<(TempDir, TempDir), anyhow::Error> {
@@ -54,13 +51,14 @@ pub fn init_repo_and_remote() -> Result<(TempDir, TempDir), anyhow::Error> {
     let repo = gix::init(repo_dir.as_ref())?;
     let remote = gix::init_bare(remote_dir.as_ref())?;
 
+    // Create initial commits in the remote
     let no_parents: Vec<gix::ObjectId> = vec![];
     let init = remote.commit_as(
         sig,
         sig,
         "HEAD",
         "init",
-        repo.empty_tree().id(),
+        remote.empty_tree().id(),
         no_parents.clone(),
     )?;
     remote.commit_as(
@@ -68,10 +66,11 @@ pub fn init_repo_and_remote() -> Result<(TempDir, TempDir), anyhow::Error> {
         sig,
         "HEAD",
         "2nd",
-        repo.empty_tree().id(),
+        remote.empty_tree().id(),
         vec![init.detach()],
     )?;
 
+    // Configure local repo with remote
     let config_file = repo.git_dir().join("config");
     let mut config = File::from_path_no_includes(config_file.clone(), Source::Local)?;
     let mut repo_remote =
@@ -81,6 +80,25 @@ pub fn init_repo_and_remote() -> Result<(TempDir, TempDir), anyhow::Error> {
     config.set_raw_value(&"user.name", "eka")?;
     let mut file = std::fs::File::create(config_file)?;
     config.write_to(&mut file)?;
+
+    // Fetch from remote so local shares history (uses existing storage API)
+    use crate::storage::QueryStore;
+    let repo = gix::ThreadSafeRepository::open(repo_dir.as_ref())?.to_thread_local();
+    let origin = repo.find_remote("origin")?;
+    origin.get_refs(Some("refs/heads/*:refs/heads/*"), None)?;
+
+    // Set local HEAD to point to master branch (symbolic ref, not detached)
+    if let Ok(head_ref) = repo.find_reference("refs/heads/master") {
+        // Create/update refs/heads/master with the fetched commit
+        repo.reference(
+            "refs/heads/master",
+            head_ref.id().detach(),
+            gix::refs::transaction::PreviousValue::Any,
+            "sync from remote",
+        )?;
+        // Make HEAD a symbolic reference to master (not detached)
+        std::fs::write(repo.git_dir().join("HEAD"), "ref: refs/heads/master\n")?;
+    }
 
     Ok((repo_dir, remote_dir))
 }
@@ -109,11 +127,14 @@ pub trait MockAtom {
     /// The set_tag should match a set defined in the ekala.toml.
     ///
     /// Returns `(manifest_path, commit_oid)`.
+    ///
+    /// `remote_url` is the URL to the remote where dependencies are published.
     fn mock_with_deps(
         &self,
         label: &str,
         version: &str,
         deps: &[(&str, &str, &str)], // (set_tag, dep_label, version_req)
+        remote_url: Option<&str>,    // Optional remote URL for the set mirror
     ) -> impl std::future::Future<Output = Result<(PathBuf, ObjectId), anyhow::Error>>;
 }
 
@@ -133,83 +154,22 @@ impl MockAtom for ThreadSafeRepository {
             .new_atom_at_path(label.try_into()?, &atom_dir, Version::from_str(version)?)
             .await?;
 
-        let buf = std::fs::read_to_string(&atom_file)?;
-
-        let mode = atom_file.metadata()?.mode();
-        let filename = atom_file
-            .strip_prefix(&atom_dir)?
-            .display()
-            .to_string()
-            .into();
-        let oid = repo.write_blob(buf.as_bytes())?.detach();
-        let entry = Entry {
-            mode: TryFrom::try_from(mode)
-                .map_err(|m| anyhow::anyhow!("invalid entry mode: {}", m))?,
-            filename,
-            oid,
-        };
-
-        let tree = Tree {
-            entries: vec![entry],
-        };
-
-        let oid = repo.write_object(tree)?.detach();
-
-        let filename = atom_dir
-            .to_path_buf()
-            .strip_prefix(work_dir)?
-            .display()
-            .to_string()
-            .into();
-
-        let entry_dir = Entry {
-            mode: TryFrom::try_from(0o40000)
-                .map_err(|m| anyhow::anyhow!("invalid entry mode: {}", m))?,
-            filename,
-            oid,
-        };
-
-        let filename = crate::EKALA_MANIFEST_NAME.to_string().into();
-        let buf = std::fs::read(
-            repo.ekala_root_dir()?
-                .join(crate::EKALA_MANIFEST_NAME.as_str()),
-        )?;
-        let oid = repo.write_blob(buf)?.detach();
-
-        let entry = Entry {
-            mode: TryFrom::try_from(mode)
-                .map_err(|m| anyhow::anyhow!("invalid entry mode: {}", m))?,
-            filename,
-            oid,
-        };
-
-        let mut entries = vec![entry, entry_dir];
-        entries.sort_unstable();
-
-        let tree = Tree { entries };
-
-        let oid = repo.write_object(tree)?.detach();
-
-        let head = repo.head_id()?;
-        let head_ref = repo.head_ref()?.context("detached HEAD")?;
-
-        let atom_oid = repo
-            .commit(
-                head_ref.name().as_bstr(),
-                format!("init: {}", label),
-                oid,
-                vec![head],
-            )?
-            .detach();
+        // Commit the entire workdir state using build_tree_recursive
+        let atom_oid = commit_workdir(&repo, &format!("init: {}", label))?;
 
         Ok((atom_file, atom_oid))
     }
 
+    /// Creates an atom with dependencies.
+    ///
+    /// `deps` is a slice of (set_tag, dep_label, version_req) tuples.
+    /// `remote_url` is the URL to the remote where dependencies are published.
     async fn mock_with_deps(
         &self,
         label: &str,
         version: &str,
         deps: &[(&str, &str, &str)], // (set_tag, dep_label, version_req)
+        remote_url: Option<&str>,    // Optional remote URL for the set mirror
     ) -> Result<(PathBuf, ObjectId), anyhow::Error> {
         let repo = self.to_thread_local();
         let work_dir = repo.workdir().context("No workdir")?;
@@ -222,110 +182,61 @@ impl MockAtom for ThreadSafeRepository {
             .new_atom_at_path(label.try_into()?, &atom_dir, Version::from_str(version)?)
             .await?;
 
-        // Read and modify manifest to add deps
-        let manifest_content = std::fs::read_to_string(&atom_file)?;
-        let mut doc: toml_edit::DocumentMut = manifest_content.parse()?;
-
-        // Add deps.from.<set_tag>.<label> = "<version_req>" for each dep
+        // Add dependencies using add_uri - the high-level API that simulates `eka add`
         if !deps.is_empty() {
-            let deps_table = doc
-                .entry("deps")
-                .or_insert(toml_edit::Item::Table(toml_edit::Table::new()))
-                .as_table_mut()
-                .context("deps is not a table")?;
+            use crate::id::Tag;
+            use crate::package::metadata::manifest::ManifestWriter;
+            use crate::uri::Uri;
 
-            let from_table = deps_table
-                .entry("from")
-                .or_insert(toml_edit::Item::Table(toml_edit::Table::new()))
-                .as_table_mut()
-                .context("from is not a table")?;
+            // Open the atom with ManifestWriter
+            let mut writer = ManifestWriter::open_and_resolve(self, &atom_dir, true).await?;
 
             for (set_tag, dep_label, version_req) in deps {
-                let set_table = from_table
-                    .entry(*set_tag)
-                    .or_insert(toml_edit::Item::Table(toml_edit::Table::new()))
-                    .as_table_mut()
-                    .context("set is not a table")?;
-                set_table.set_implicit(true);
-                set_table[*dep_label] = toml_edit::value(version_req.to_string());
+                // Construct URI with remote URL: "url::dep-label@^version" or just
+                // "dep-label@version"
+                let uri_str = if let Some(url) = remote_url {
+                    format!("{}::{}@{}", url, dep_label, version_req)
+                } else {
+                    format!("{}@{}", dep_label, version_req)
+                };
+                let uri: Uri = uri_str.parse()?;
+                let tag = Some(Tag::try_from(*set_tag)?);
+
+                // Use add_uri with additional mirrors
+                writer.add_uri(uri, tag, vec![])?;
             }
+
+            // Write the changes
+            writer.write_atomic()?;
         }
 
-        // Write modified manifest
-        std::fs::write(&atom_file, doc.to_string())?;
-
-        // Now create the git objects (same as mock())
-        let buf = std::fs::read_to_string(&atom_file)?;
-
-        let mode = atom_file.metadata()?.mode();
-        let filename = atom_file
-            .strip_prefix(&atom_dir)?
-            .display()
-            .to_string()
-            .into();
-        let oid = repo.write_blob(buf.as_bytes())?.detach();
-        let entry = Entry {
-            mode: TryFrom::try_from(mode)
-                .map_err(|m| anyhow::anyhow!("invalid entry mode: {}", m))?,
-            filename,
-            oid,
-        };
-
-        let tree = Tree {
-            entries: vec![entry],
-        };
-
-        let oid = repo.write_object(tree)?.detach();
-
-        let filename = atom_dir
-            .to_path_buf()
-            .strip_prefix(work_dir)?
-            .display()
-            .to_string()
-            .into();
-
-        let entry_dir = Entry {
-            mode: TryFrom::try_from(0o40000)
-                .map_err(|m| anyhow::anyhow!("invalid entry mode: {}", m))?,
-            filename,
-            oid,
-        };
-
-        let filename = crate::EKALA_MANIFEST_NAME.to_string().into();
-        let buf = std::fs::read(
-            repo.ekala_root_dir()?
-                .join(crate::EKALA_MANIFEST_NAME.as_str()),
-        )?;
-        let oid = repo.write_blob(buf)?.detach();
-
-        let entry = Entry {
-            mode: TryFrom::try_from(mode)
-                .map_err(|m| anyhow::anyhow!("invalid entry mode: {}", m))?,
-            filename,
-            oid,
-        };
-
-        let mut entries = vec![entry, entry_dir];
-        entries.sort_unstable();
-
-        let tree = Tree { entries };
-
-        let oid = repo.write_object(tree)?.detach();
-
-        let head = repo.head_id()?;
-        let head_ref = repo.head_ref()?.context("detached HEAD")?;
-
-        let atom_oid = repo
-            .commit(
-                head_ref.name().as_bstr(),
-                format!("init with deps: {}", label),
-                oid,
-                vec![head],
-            )?
-            .detach();
+        // Commit the entire workdir state using build_tree_recursive
+        let atom_oid = commit_workdir(&repo, &format!("init with deps: {}", label))?;
 
         Ok((atom_file, atom_oid))
     }
+}
+
+/// Helper to commit the entire working directory state.
+pub fn commit_workdir(repo: &gix::Repository, message: &str) -> Result<ObjectId, anyhow::Error> {
+    use std::path::PathBuf;
+
+    use crate::storage::git::cache::{build_tree_recursive, collect_entries};
+
+    let work_dir = repo.workdir().context("No workdir")?;
+
+    // Build tree from entire workdir using proper recursive function
+    let entries = collect_entries(work_dir)?;
+    let tree_oid = build_tree_recursive(repo, PathBuf::new().as_path(), &entries, work_dir, 0)?;
+
+    let head = repo.head_id()?;
+    let head_ref = repo.head_ref()?.context("detached HEAD")?;
+
+    let commit_oid = repo
+        .commit(head_ref.name().as_bstr(), message, tree_oid, vec![head])?
+        .detach();
+
+    Ok(commit_oid)
 }
 
 //================================================================================================
