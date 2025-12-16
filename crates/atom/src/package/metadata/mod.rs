@@ -22,7 +22,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 
-use bimap::{BiBTreeMap, Overwritten};
+use bimap::BiBTreeMap;
 use id::{Label, Tag};
 use manifest::{AtomSet, ComposeError, Manifest, SetMirror};
 use semver::Version;
@@ -91,7 +91,7 @@ pub struct Meta {
 
 /// A newtype wrapper to tie a `DocumentMut` to a specific serializable type `T`.
 #[derive(Debug)]
-pub(super) struct TypedDocument<T> {
+pub(crate) struct TypedDocument<T> {
     /// The underlying `toml_edit` document.
     inner: DocumentMut,
     _marker: PhantomData<T>,
@@ -778,16 +778,6 @@ where
         } else {
             Err(de::Error::invalid_length(len, &err))
         }
-    }
-}
-
-impl<K, V> Singleton<K, V> {
-    pub(super) fn key(&self) -> &K {
-        &self.key
-    }
-
-    pub(super) fn value(&self) -> &V {
-        &self.value
     }
 }
 

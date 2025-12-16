@@ -55,7 +55,6 @@ use tokio::task::JoinSet;
 use super::error::git::Error;
 use super::{Builder, Content, Publish, PublishOutcome, Record, StateValidator};
 use crate::id::Label;
-use crate::package::EkalaManifest;
 use crate::package::metadata::{AtomMap, AtomPaths};
 use crate::storage::git::Root;
 use crate::storage::{NormalizeStorePath, QueryStore};

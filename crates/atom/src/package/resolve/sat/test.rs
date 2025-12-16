@@ -68,7 +68,9 @@ async fn test_linear_chain() -> Result<(), anyhow::Error> {
         let (paths, publisher) = GitPublisher::new(&local, "origin", "HEAD", progress)?.build()?;
         let label = Label::try_from("atom-c")?;
         if let Some(path) = paths.as_ref().get_by_left(&label) {
-            publisher.publish_atom(path, &HashMap::new())?;
+            publisher
+                .publish_atom(path, &HashMap::new())?
+                .expect("atoms failed to publish");
         }
         let mut errors = Vec::new();
         publisher.await_pushes(&mut errors).await;
@@ -97,7 +99,9 @@ async fn test_linear_chain() -> Result<(), anyhow::Error> {
         let (paths, publisher) = GitPublisher::new(&local, "origin", "HEAD", progress)?.build()?;
         let label = Label::try_from("atom-b")?;
         if let Some(path) = paths.as_ref().get_by_left(&label) {
-            publisher.publish_atom(path, &HashMap::new())?;
+            publisher
+                .publish_atom(path, &HashMap::new())?
+                .expect("atoms failed to publish");
         }
         let mut errors = Vec::new();
         publisher.await_pushes(&mut errors).await;
@@ -237,7 +241,9 @@ async fn test_diamond_dependency() -> Result<(), anyhow::Error> {
         let (paths, publisher) = GitPublisher::new(&local, "origin", "HEAD", progress)?.build()?;
         let label = Label::try_from("atom-d")?;
         if let Some(path) = paths.as_ref().get_by_left(&label) {
-            publisher.publish_atom(path, &HashMap::new())?;
+            publisher
+                .publish_atom(path, &HashMap::new())?
+                .expect("atoms failed to publish");
         }
         let mut errors = Vec::new();
         publisher.await_pushes(&mut errors).await;
@@ -277,7 +283,9 @@ async fn test_diamond_dependency() -> Result<(), anyhow::Error> {
         for label_str in ["atom-b", "atom-c"] {
             let label = Label::try_from(label_str)?;
             if let Some(path) = paths.as_ref().get_by_left(&label) {
-                publisher.publish_atom(path, &HashMap::new())?;
+                publisher
+                    .publish_atom(path, &HashMap::new())?
+                    .expect("atoms failed to publish");
             }
         }
         let mut errors = Vec::new();

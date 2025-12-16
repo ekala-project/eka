@@ -82,6 +82,7 @@
 //! that need to be imported explicitly. The `UnpackedRef` fields are not publicly accessible.
 
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::path::{Path, PathBuf};
 
 use bstr::BStr;
@@ -154,7 +155,7 @@ pub struct LocalStoragePath(PathBuf);
 
 /// A trait representing a type which implements the full resonsibilities of a local ekala storage
 /// layer
-pub trait LocalStorage: Init + NormalizeStorePath + Sync + Send {}
+pub trait LocalStorage: Init + NormalizeStorePath + Sync + Send + Debug {}
 
 /// A trait representing the methods required to initialize an Ekala store.
 pub trait Init {
@@ -674,7 +675,7 @@ pub trait RemoteAtomCache {
 // Impls
 //================================================================================================
 
-impl<T: Init + NormalizeStorePath + Send + Sync> LocalStorage for T {}
+impl<T: Init + NormalizeStorePath + Send + Sync + Debug> LocalStorage for T {}
 
 impl LocalStoragePath {
     /// verifies a path is actually contained in an ekala storage layer before allowing construction

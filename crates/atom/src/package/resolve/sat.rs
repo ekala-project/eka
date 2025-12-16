@@ -21,7 +21,7 @@
 //! See ADR-0015 for the full implementation plan.
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Display};
 use std::hash::Hash;
 
@@ -78,6 +78,7 @@ impl SemverVersionSet {
     /// # Errors
     ///
     /// Returns an error if the string cannot be parsed as a valid semver requirement.
+    #[cfg(test)]
     pub fn parse(s: &str) -> Result<Self, semver::Error> {
         semver::VersionReq::parse(s).map(SemverVersionSet)
     }
@@ -88,6 +89,7 @@ impl SemverVersionSet {
     }
 
     /// Returns a reference to the inner `VersionReq`.
+    #[cfg(test)]
     pub fn inner(&self) -> &semver::VersionReq {
         &self.0
     }
@@ -145,34 +147,6 @@ pub struct AtomSolvableRecord {
     pub manifest_cached: bool,
 }
 
-impl AtomSolvableRecord {
-    /// Creates a new solvable record.
-    pub fn new(version: semver::Version, rev: GitDigest, package: AtomId<Root>) -> Self {
-        Self {
-            version,
-            rev,
-            atom_id: package.compute_hash(),
-            package,
-            manifest_cached: false,
-        }
-    }
-
-    /// Creates a new solvable record with manifest already cached.
-    pub fn with_cached_manifest(
-        version: semver::Version,
-        rev: GitDigest,
-        package: AtomId<Root>,
-    ) -> Self {
-        Self {
-            version,
-            rev,
-            atom_id: package.compute_hash(),
-            package,
-            manifest_cached: true,
-        }
-    }
-}
-
 impl Display for AtomSolvableRecord {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.version)
@@ -204,15 +178,20 @@ impl Hash for AtomSolvableRecord {
 // Resolution State Tracking
 //================================================================================================
 
+#[cfg(test)]
+use std::collections::BTreeMap;
+
 /// Tracks which packages have completed candidate discovery.
 ///
 /// Used to avoid redundant ref queries for the same package.
 #[derive(Default, Debug)]
+#[cfg(test)]
 pub struct DiscoveryState {
     /// Packages that have completed discovery.
     pub discovered: BTreeMap<AtomDigest, DiscoveryStatus>,
 }
 
+#[cfg(test)]
 /// Status of candidate discovery for a package.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DiscoveryStatus {
@@ -224,6 +203,7 @@ pub enum DiscoveryStatus {
     Failed(String),
 }
 
+#[cfg(test)]
 impl DiscoveryState {
     /// Creates a new empty discovery state.
     pub fn new() -> Self {
@@ -266,6 +246,7 @@ impl DiscoveryState {
 ///
 /// This is used to avoid redundant manifest fetches during resolution.
 #[derive(Default, Debug)]
+#[cfg(test)]
 pub struct ManifestCache {
     /// Set of atom versions whose manifests have been fetched.
     ///
@@ -274,6 +255,7 @@ pub struct ManifestCache {
 }
 
 /// A cached manifest entry.
+#[cfg(test)]
 #[derive(Clone, Debug)]
 pub struct ManifestCacheEntry {
     /// The parsed dependencies from the manifest.
@@ -282,6 +264,7 @@ pub struct ManifestCacheEntry {
     pub dependencies: Vec<(AtomDigest, semver::VersionReq)>,
 }
 
+#[cfg(test)]
 impl ManifestCache {
     /// Creates a new empty manifest cache.
     pub fn new() -> Self {
@@ -335,9 +318,6 @@ pub struct AtomResolver<'a, S: LocalStorage> {
     /// Reference to resolved sets from manifest processing
     resolved_sets: &'a ResolvedSets<'a, S>,
 
-    /// Storage backend for git operations
-    storage: &'a S,
-
     /// Transports for remote operations (reusable connections)
     /// Uses RefCell for interior mutability since DependencyProvider trait methods use &self
     transports: RefCell<HashMap<gix::Url, Box<dyn Transport + Send>>>,
@@ -350,7 +330,6 @@ pub struct AtomResolver<'a, S: LocalStorage> {
 #[derive(Clone, Debug)]
 struct DiscoveredVersion {
     version: Version,
-    rev: GitDigest,
     solvable_id: SolvableId,
 }
 
@@ -379,14 +358,13 @@ impl<'a, S: LocalStorage> AtomResolver<'a, S> {
     /// # Arguments
     /// * `resolved_sets` - The resolved package sets from manifest processing
     /// * `storage` - The storage backend for git operations
-    pub fn new(resolved_sets: &'a ResolvedSets<'a, S>, storage: &'a S) -> Self {
+    pub fn new(resolved_sets: &'a ResolvedSets<'a, S>) -> Self {
         Self {
             pool: Pool::default(),
             discovered_candidates: RefCell::new(HashMap::new()),
             manifest_cache: RefCell::new(HashMap::new()),
             locally_available: RefCell::new(HashSet::default()),
             resolved_sets,
-            storage,
             transports: RefCell::new(HashMap::new()),
             collected_nix_deps: RefCell::new(Vec::new()),
         }
@@ -546,8 +524,8 @@ impl<'a, S: LocalStorage> AtomResolver<'a, S> {
         // Construct ref query pattern: refs/eka/atoms/<label>/*
         let ref_pattern = format!(
             "{}/*:{}/*",
-            format!("{}/{}", crate::ATOM_REFS.as_str(), package.label()),
-            format!("{}/{}", crate::ATOM_REFS.as_str(), package.label()),
+            format_args!("{}/{}", crate::ATOM_REFS.as_str(), package.label()),
+            format_args!("{}/{}", crate::ATOM_REFS.as_str(), package.label()),
         );
 
         // Get URL for this package's repository from resolved sets
@@ -578,7 +556,6 @@ impl<'a, S: LocalStorage> AtomResolver<'a, S> {
 
                 versions.push(DiscoveredVersion {
                     version,
-                    rev,
                     solvable_id,
                 });
             }
@@ -835,8 +812,6 @@ impl<'a, S: LocalStorage> AtomResolver<'a, S> {
 pub struct ResolutionResult {
     /// All resolved dependencies (direct and transitive).
     pub deps: Vec<ResolvedDep>,
-    /// Set details for generating lock file.
-    pub sets: std::collections::BTreeMap<GitDigest, crate::package::metadata::lock::SetDetails>,
     /// Nix deps collected from transitive atom manifests.
     pub nix_deps: Vec<CollectedNixDep>,
 }
@@ -867,8 +842,6 @@ pub enum ResolutionError {
     Unsolvable(String),
     #[error("Resolution cancelled")]
     Cancelled,
-    #[error("Failed to build requirements: {0}")]
-    RequirementError(String),
     #[error(transparent)]
     Other(#[from] BoxError),
 }
@@ -908,7 +881,6 @@ impl<'a, S: LocalStorage> AtomResolver<'a, S> {
             // No dependencies to resolve
             return Ok(ResolutionResult {
                 deps: Vec::new(),
-                sets: self.collect_set_details(),
                 nix_deps: Vec::new(),
             });
         }
@@ -933,14 +905,9 @@ impl<'a, S: LocalStorage> AtomResolver<'a, S> {
         let provider = solver.provider();
         let direct_deps = provider.collect_direct_dep_ids(manifest);
         let deps = provider.extract_resolved_deps(&solvables, &direct_deps);
-        let sets = provider.collect_set_details();
         let nix_deps = provider.collected_nix_deps.borrow().clone();
 
-        Ok(ResolutionResult {
-            deps,
-            sets,
-            nix_deps,
-        })
+        Ok(ResolutionResult { deps, nix_deps })
     }
 
     /// Build ConditionalRequirements from the manifest's direct dependencies.
@@ -982,7 +949,7 @@ impl<'a, S: LocalStorage> AtomResolver<'a, S> {
 
         for (set_tag, set_deps) in manifest.as_ref().deps().from() {
             if let Some(set_root) = self.resolve_set_tag_to_root(set_tag) {
-                for (label, _) in set_deps {
+                for label in set_deps.keys() {
                     let atom_id = AtomId::from((set_root, label.clone()));
                     direct.insert(atom_id.compute_hash());
                 }
@@ -1022,23 +989,6 @@ impl<'a, S: LocalStorage> AtomResolver<'a, S> {
                     requires,
                     direct: direct_deps.contains(&record.atom_id),
                 }
-            })
-            .collect()
-    }
-
-    /// Collect set details from resolved_sets for use in lock file.
-    fn collect_set_details(
-        &self,
-    ) -> std::collections::BTreeMap<GitDigest, crate::package::metadata::lock::SetDetails> {
-        self.resolved_sets
-            .details()
-            .iter()
-            .map(|(digest, details)| {
-                let lock_details = crate::package::metadata::lock::SetDetails {
-                    tag: details.tag.clone(),
-                    mirrors: details.mirrors.clone(),
-                };
-                ((*digest).into(), lock_details)
             })
             .collect()
     }

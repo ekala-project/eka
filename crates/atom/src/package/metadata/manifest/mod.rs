@@ -209,16 +209,6 @@ impl From<SetMirror> for AtomSet {
     }
 }
 
-impl ComposerSpec {
-    pub(in crate::package) fn version(&self) -> Option<&VersionReq> {
-        self.version.as_ref()
-    }
-
-    pub(in crate::package) fn from(&self) -> &Tag {
-        &self.from
-    }
-}
-
 impl Compose {
     fn user_default() -> Result<Self, ComposeError> {
         config::CONFIG.default_composer().to_owned().try_into()
@@ -260,10 +250,6 @@ impl Manifest {
             deps: Dependency::new(),
             compose: Compose::user_default()?,
         })
-    }
-
-    pub(in crate::package) fn composer(&self) -> &Compose {
-        &self.compose
     }
 
     pub(in crate::package) fn deps(&self) -> &Dependency {

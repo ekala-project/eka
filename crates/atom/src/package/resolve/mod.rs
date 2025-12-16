@@ -577,13 +577,13 @@ impl<'a, S: LocalStorage> ManifestWriter<'a, S> {
         atom_writer.write_dep(label, self.doc_mut())?;
         self.insert_or_update_and_log(Either::Left(id.to_owned()), &lock::Dep::Atom(lock_entry));
 
-        self.update_lock_set(set.clone(), mirror, set_tag.clone());
+        self.update_lock_set(set, mirror, set_tag.clone());
 
         // Validate and add each additional mirror
         for additional_mirror in additional_mirrors {
             match self.get_mirror_genesis(&additional_mirror) {
                 Ok(genesis) if genesis == expected_root => {
-                    self.update_lock_set(set.clone(), additional_mirror.clone(), set_tag.clone());
+                    self.update_lock_set(set, additional_mirror.clone(), set_tag.clone());
                     tracing::info!(mirror = %additional_mirror, "added mirror to set");
                 },
                 Ok(genesis) => {
@@ -706,7 +706,7 @@ impl<'a, S: LocalStorage> ManifestWriter<'a, S> {
         use sat::{AtomResolver, ResolutionError};
 
         // Create a SAT resolver for transitive dependency resolution
-        let resolver = AtomResolver::new(&self.resolved, self.resolved.ekala.storage);
+        let resolver = AtomResolver::new(&self.resolved);
 
         // Perform SAT-based resolution
         match resolver.resolve(manifest) {
@@ -789,75 +789,6 @@ impl<'a, S: LocalStorage> ManifestWriter<'a, S> {
             }
         }
 
-        Ok(())
-    }
-
-    /// Synchronizes a single atom's lockfile entry with the manifest requirements.
-    ///
-    /// This function ensures that the lockfile contains the correct version and metadata
-    /// for an atom specified in the manifest. It handles both new atoms (not yet in lockfile)
-    /// and existing atoms that may need version updates.
-    ///
-    /// # Parameters
-    ///
-    /// - `req`: The version requirement specified in the manifest for this atom
-    /// - `id`: The unique identifier for this atom within its package set
-    /// - `set_tag`: The name of the package set containing this atom
-    ///
-    /// # Returns
-    ///
-    /// Returns `Ok(())` on success, or a `git::Error` if:
-    /// - No matching version can be found in resolved atoms
-    /// - Local resolution fails when remote resolution is unavailable
-    ///
-    /// # Algorithm
-    ///
-    /// 1. **Check Lockfile Presence**: Determine if atom already exists in lockfile
-    /// 2. **New Atom Resolution**: If not present, resolve to highest matching version
-    /// 3. **Existing Atom Validation**: If present, check if current version still matches
-    ///    requirement
-    /// 4. **Version Update**: If requirement no longer matches, resolve to new version
-    ///
-    /// # Edge Cases
-    ///
-    /// - **New Atom**: Not in lockfile - resolves and adds new entry
-    /// - **Version Mismatch**: Existing atom version doesn't satisfy new requirement - updates
-    /// - **Version Match**: Existing atom still valid - no changes needed
-    /// - **Resolution Failure**: No version satisfies requirement - returns error
-    ///
-    /// # Assumptions
-    ///
-    /// - Manifest requirements are valid and parseable
-    /// - Resolved atoms contain all available versions for this atom
-    /// - Lockfile structure is consistent with manifest
-    ///
-    /// # Integration
-    ///
-    /// Called during manifest synchronization for each atom in each package set.
-    /// Part of the broader dependency resolution and locking process that ensures
-    /// reproducible builds by recording exact versions and commit hashes.
-    fn synchronize_atom(
-        &mut self,
-        req: VersionReq,
-        id: AtomId<Root>,
-        set_tag: Tag,
-    ) -> Result<(), crate::storage::git::Error> {
-        if !self
-            .lock
-            .deps
-            .as_ref()
-            .contains_key(&either::Either::Left(id.to_owned()))
-        {
-            self.lock_atom(req, id, set_tag)?;
-        } else if let Some(lock::Dep::Atom(dep)) = self
-            .lock
-            .deps
-            .as_ref()
-            .get(&either::Either::Left(id.to_owned()))
-            && !req.matches(dep.version())
-        {
-            self.lock_atom(req, id, set_tag)?;
-        }
         Ok(())
     }
 
