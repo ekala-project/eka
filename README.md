@@ -1,6 +1,6 @@
 # Eka: A New Foundation for the Software Supply Chain
 
-> ⚠️ **Warning:** Eka is still in early stages. Features are unstable and subject to change.
+> ⚠️ **Warning:** Eka is archived but the work continues. This monolithic proof of concept is being ported to a more modular [architecture](https://github.com/axiosoph/axios).
 
 A command-line tool for decentralized software dependency management using the Atom Protocol.
 
