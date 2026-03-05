@@ -89,15 +89,15 @@ const EKALA: &str = "ekala";
 const LOCK: &str = "lock";
 const TOML: &str = "toml";
 
-/// The conventional filename for an Atom lockfile (e.g., `atom.lock`).
-///
-/// This static variable is lazily initialized to ensure it is constructed only when needed.
-pub static ATOM_MANIFEST_NAME: LazyLock<String> = LazyLock::new(|| format!("{}.{}", ATOM, TOML));
 /// The conventional filename for an Atom manifest (e.g., `atom.toml`).
 ///
 /// This static variable is lazily initialized to ensure it is constructed only when needed.
-pub static EKALA_MANIFEST_NAME: LazyLock<String> = LazyLock::new(|| format!("{}.{}", EKALA, TOML));
+pub static ATOM_MANIFEST_NAME: LazyLock<String> = LazyLock::new(|| format!("{}.{}", ATOM, TOML));
 /// The conventional filename for an Ekala manifest (e.g., `ekala.toml`).
+///
+/// This static variable is lazily initialized to ensure it is constructed only when needed.
+pub static EKALA_MANIFEST_NAME: LazyLock<String> = LazyLock::new(|| format!("{}.{}", EKALA, TOML));
+/// The conventional filename for an Atom lockfile (e.g., `atom.lock`).
 ///
 /// This static variable is lazily initialized to ensure it is constructed only when needed.
 pub static LOCK_NAME: LazyLock<String> = LazyLock::new(|| format!("{}.{}", ATOM, LOCK));

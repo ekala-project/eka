@@ -205,7 +205,7 @@ Key modules include:
 - `atom::uri` - URI parsing and resolution
 - `atom::storage` - Storage backend implementations
 
-See the [atom crate documentation](https://docs.rs/atom) for detailed API information.
+See the [atom crate documentation](https://docs.eka.rs/atom/) for detailed API information.
 
 ### CLI Interface
 
