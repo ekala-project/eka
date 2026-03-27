@@ -72,6 +72,7 @@ use std::str::FromStr;
 
 use config::ComposerSettings;
 use direct::DirectDeps;
+use either::Either;
 use gix::Url;
 use id::{Tag, VerifiedName};
 use lock::{AtomDep, Lockfile, SetDetails};
@@ -104,7 +105,7 @@ pub enum ComposeError {
 
 /// trivial composers are specified with the `ComposeKind::As` variant
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
-pub(super) enum TrivialAtom {
+pub(in crate::package) enum TrivialAtom {
     /// just calls import on the contained nix expression at the provided path inside the atom,
     /// relative its root
     #[serde(rename = "nix")]
@@ -115,14 +116,14 @@ pub(super) enum TrivialAtom {
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
-pub(super) enum StaticAtom {
+pub(in crate::package) enum StaticAtom {
     /// Atom is provided at evaluation tme to consumers as shared configuration
     #[serde(rename = "config")]
     Config,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
-pub(super) enum Compose {
+pub(in crate::package) enum Compose {
     #[serde(rename = "with")]
     With(AtomComposer),
     #[serde(rename = "as")]
@@ -188,7 +189,7 @@ type AtomFrom = HashMap<Tag, HashMap<Label, VersionReq>>;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub(super) struct ComposerSpec {
+pub(in crate::package) struct ComposerSpec {
     from: Tag,
     #[serde(skip_serializing_if = "Option::is_none")]
     version: Option<VersionReq>,
@@ -368,7 +369,7 @@ pub struct ManifestWriter<'a, S: LocalStorage> {
     pub(in crate::package) resolved: ResolvedSets<'a, S>,
 }
 
-pub(in crate::package) struct AtomWriter {
+pub(crate) struct AtomWriter {
     set_tag: Tag,
     atom_req: AtomReq,
     mirror: SetMirror,
@@ -382,7 +383,7 @@ pub(in crate::package) struct AtomWriter {
 ///
 /// This trait now works with [`ValidManifest`] to ensure that all dependency
 /// modifications maintain manifest consistency and validation.
-pub(in crate::package) trait WriteDeps<T: Serialize, K: VerifiedName> {
+pub(crate) trait WriteDeps<T: Serialize, K: VerifiedName> {
     /// The error type returned by the methods.
     type Error;
 
@@ -505,7 +506,10 @@ impl<'a, S: LocalStorage> ManifestWriter<'a, S> {
         Ok(writer)
     }
 
-    pub(super) fn set_lock_compose(&mut self, manifest: &ValidManifest) -> Result<(), DocError> {
+    pub(in crate::package) fn set_lock_compose(
+        &mut self,
+        manifest: &ValidManifest,
+    ) -> Result<(), DocError> {
         use lock::Using;
         let compose = match &manifest.as_ref().compose {
             Compose::With(composer) => {
@@ -522,12 +526,19 @@ impl<'a, S: LocalStorage> ManifestWriter<'a, S> {
                         .as_ref()
                         .unwrap_or(&VersionReq::STAR)
                         .to_owned(),
-                    id,
+                    id.clone(),
                     composer.value.from.to_owned(),
                 )?;
+                let r#use = dep.id();
+                let at = dep.version().to_owned();
+                self.lock
+                    .deps
+                    .as_mut()
+                    .insert(Either::Left(id), lock::Dep::Atom(dep));
                 Using::Atom {
-                    atom: dep,
                     entry: composer.value.entry.to_owned(),
+                    r#use,
+                    at,
                 }
             },
             Compose::As(TrivialAtom::Nix(path)) => Using::NixTrivial {
@@ -544,7 +555,6 @@ impl<'a, S: LocalStorage> ManifestWriter<'a, S> {
     /// to ensure that we are never operating on a stale manifest.
     async fn reconcile(&mut self, manifest: &ValidManifest) -> Result<(), DocError> {
         self.set_lock_sets();
-        self.set_lock_compose(manifest)?;
         self.sanitize(manifest);
         self.synchronize(manifest).await?;
         Ok(())
@@ -698,7 +708,7 @@ impl WriteDeps<ValidManifest, Label> for AtomWriter {
 }
 
 impl AtomWriter {
-    pub(in crate::package) fn new(set_tag: Tag, atom_req: AtomReq, mirror: SetMirror) -> Self {
+    pub(crate) fn new(set_tag: Tag, atom_req: AtomReq, mirror: SetMirror) -> Self {
         Self {
             set_tag,
             atom_req,

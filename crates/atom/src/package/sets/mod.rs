@@ -128,8 +128,4 @@ impl<Id, R> ResolvedAtom<Id, R> {
     pub(super) fn unpack(&self) -> &UnpackedRef<Id, R> {
         &self.unpacked
     }
-
-    pub(super) fn remotes(&self) -> &BTreeSet<gix::Url> {
-        &self.remotes
-    }
 }

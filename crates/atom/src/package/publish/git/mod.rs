@@ -48,13 +48,13 @@ use std::path::{Path, PathBuf};
 use gix::diff::object::Commit as AtomCommit;
 use gix::protocol::transport::client::Transport;
 use gix::{Commit, ObjectId, Reference, Remote, Repository, Tree};
+pub(crate) use inner::write_atom_commit_inner as write_atom_commit_to_repo;
 use semver::Version;
 use tokio::task::JoinSet;
 
 use super::error::git::Error;
 use super::{Builder, Content, Publish, PublishOutcome, Record, StateValidator};
 use crate::id::Label;
-use crate::package::EkalaManifest;
 use crate::package::metadata::{AtomMap, AtomPaths};
 use crate::storage::git::Root;
 use crate::storage::{NormalizeStorePath, QueryStore};
@@ -414,13 +414,52 @@ impl<'a> StateValidator for GitPublisher<'a> {
     type Publisher = GitContext<'a>;
 
     fn validate(publisher: &Self::Publisher) -> Result<AtomMap, Self::Error> {
+        use bimap::BiBTreeMap;
+        use path_clean::PathClean;
+
+        use crate::package::metadata::RawEkalaManifest;
+
         if let Some(ekala_blob) = publisher
             .tree()
             .lookup_entry_by_path(crate::EKALA_MANIFEST_NAME.as_str())?
         {
-            let manifest: EkalaManifest = toml_edit::de::from_slice(&ekala_blob.object()?.data)?;
-            let atoms = manifest.set.packages;
-            Ok(atoms)
+            let raw: RawEkalaManifest = toml_edit::de::from_slice(&ekala_blob.object()?.data)?;
+            let mut map = BiBTreeMap::new();
+
+            // Resolve labels from git tree instead of filesystem
+            for path in raw.set.packages() {
+                let normalized = path.clean();
+                let atom_toml_path = normalized.join(crate::ATOM_MANIFEST_NAME.as_str());
+
+                // Look up atom.toml in the git tree
+                let label = if let Some(atom_blob) =
+                    publisher.tree().lookup_entry_by_path(&atom_toml_path)?
+                {
+                    let atom_data = atom_blob.object()?.data.to_vec();
+                    let atom: crate::package::metadata::manifest::Manifest =
+                        toml_edit::de::from_slice(&atom_data)?;
+                    atom.package().label().to_owned()
+                } else {
+                    tracing::warn!(
+                        path = %normalized.display(),
+                        "atom.toml not found in git tree, skipping"
+                    );
+                    continue;
+                };
+
+                if let bimap::Overwritten::Both(..) | bimap::Overwritten::Left(..) =
+                    map.insert(label.to_owned(), normalized.to_owned())
+                {
+                    tracing::error!(
+                        atoms.label = %label,
+                        atoms.path = %normalized.display(),
+                        "duplicate atom label"
+                    );
+                    return Err(Error::Duplicates);
+                }
+            }
+
+            Ok(AtomMap::from(map))
         } else {
             Err(Error::NotLocallyInitialized)
         }

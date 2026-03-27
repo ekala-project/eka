@@ -1,4 +1,4 @@
-use id::Name;
+use id::{AtomDigest, Name};
 use nix_compat::nixhash::NixHash;
 use package::metadata::GitDigest;
 use package::metadata::manifest::direct::{NixFetch, NixReq};
@@ -27,6 +27,9 @@ pub struct BuildSrc {
     pub url: Url,
     /// The hash for verification.
     hash: WrappedNixHash,
+    /// The atom that owns this dep (None if root's direct dep).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<AtomDigest>,
 }
 
 /// Represents a direct pin to an external source, such as a URL or tarball.
@@ -42,6 +45,9 @@ pub struct NixDep {
     url: Url,
     /// The hash for integrity verification (e.g., sha256).
     hash: WrappedNixHash,
+    /// The atom that owns this dep (None if root's direct dep).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<AtomDigest>,
 }
 
 /// Represents a pinned Git repository with a specific revision.
@@ -57,10 +63,13 @@ pub struct NixGitDep {
     #[serde(with = "serde_gix_url")]
     pub url: gix::Url,
     /// The version which was resolved (if requested).
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<Version>,
     /// The resolved revision (commit hash).
     pub rev: GitDigest,
+    /// The atom that owns this dep (None if root's direct dep).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<AtomDigest>,
 }
 
 /// Represents a pinned tarball or archive source.
@@ -76,6 +85,9 @@ pub struct NixTarDep {
     pub url: Url,
     /// The hash of the tarball.
     hash: WrappedNixHash,
+    /// The atom that owns this dep (None if root's direct dep).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<AtomDigest>,
 }
 
 /// A wrapper around `NixHash` to provide custom serialization behavior for TOML.
@@ -94,7 +106,12 @@ pub(in crate::package) enum NixUrls<'a> {
 
 impl BuildSrc {
     pub(in crate::package) fn new(name: Name, url: Url, hash: WrappedNixHash) -> Self {
-        Self { name, url, hash }
+        Self {
+            name,
+            url,
+            hash,
+            owner: None,
+        }
     }
 
     pub(crate) fn name(&self) -> &Name {
@@ -119,7 +136,12 @@ impl NixFetch {
 
 impl NixDep {
     pub(crate) fn new(name: Name, url: Url, hash: WrappedNixHash) -> Self {
-        Self { name, url, hash }
+        Self {
+            name,
+            url,
+            hash,
+            owner: None,
+        }
     }
 
     pub(crate) fn name(&self) -> &Name {
@@ -143,7 +165,12 @@ impl NixGitDep {
 
 impl NixTarDep {
     pub(in crate::package) fn new(name: Name, url: Url, hash: WrappedNixHash) -> Self {
-        Self { name, url, hash }
+        Self {
+            name,
+            url,
+            hash,
+            owner: None,
+        }
     }
 
     pub(crate) fn name(&self) -> &Name {

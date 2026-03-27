@@ -92,12 +92,12 @@ mod private {
 // Constants
 //================================================================================================
 
+const EMPTY_SIG: &str = "";
 const ATOM_FORMAT_VERSION: &str = "pre1";
 const ATOM_MANIFEST: &str = "manifest";
 const ATOM_META_REF: &str = "meta";
 const ATOM_ORIGIN: &str = "origin";
 const ATOM_REF: &str = "atoms";
-const EMPTY_SIG: &str = "";
 const STORE_ROOT: &str = "eka";
 
 //================================================================================================

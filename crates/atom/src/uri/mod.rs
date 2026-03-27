@@ -760,29 +760,4 @@ pub(crate) mod serde_gix_url {
         let str = url.to_string();
         serializer.serialize_str(&str)
     }
-
-    pub(crate) mod maybe {
-        use serde::{Deserializer, Serializer};
-        pub(crate) fn serialize<S>(
-            url: &Option<gix::url::Url>,
-            serializer: S,
-        ) -> Result<S::Ok, S::Error>
-        where
-            S: Serializer,
-        {
-            if let Some(url) = url {
-                super::serialize(url, serializer)
-            } else {
-                Err(serde::ser::Error::custom("no url to serialize"))
-            }
-        }
-        pub(crate) fn deserialize<'de, D>(
-            deserializer: D,
-        ) -> Result<Option<gix::url::Url>, D::Error>
-        where
-            D: Deserializer<'de>,
-        {
-            super::deserialize(deserializer).map(Some)
-        }
-    }
 }

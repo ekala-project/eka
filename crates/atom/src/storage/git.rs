@@ -40,7 +40,8 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::{fs, io};
 
-use bstr::BStr;
+use bstr::{BStr, ByteSlice};
+pub use cache::{NIX_ENTRY_KEY, NIX_IMPORT_FILE, repo as cache_repo};
 use gix::discover::upwards::Options;
 use gix::protocol::handshake::Ref;
 use gix::protocol::transport::client::Transport;
@@ -57,6 +58,8 @@ use crate::package::AtomError;
 use crate::package::metadata::{DocError, EkalaManifest, GitDigest};
 use crate::{AtomId, Label};
 
+pub(crate) mod cache;
+
 #[cfg(test)]
 pub(crate) mod test;
 
@@ -64,13 +67,11 @@ pub(crate) mod test;
 // Constants
 //================================================================================================
 
-pub(super) const V1_ROOT: &str = "refs/ekala/init";
+pub(crate) const V1_ROOT: &str = "refs/ekala/init";
 
 //================================================================================================
 // Statics
 //================================================================================================
-
-pub(crate) static LOCK_ROOT: Root = Root(ObjectId::Sha1(crate::EKA_ROOT_COMMIT_HASH));
 
 static DEFAULT_REMOTE: OnceLock<Cow<str>> = OnceLock::new();
 /// Provide a lazily instantiated static reference to the git repository.
@@ -185,6 +186,9 @@ pub enum Error {
     /// A transparent wrapper for a [`DocError`]
     #[error(transparent)]
     Doc(#[from] DocError),
+    #[error(transparent)]
+    /// A transparent wrapper for a [`cache::Error`]
+    AtomStore(#[from] cache::Error),
     /// A generic boxed error variant
     #[error(transparent)]
     Generic(Box<dyn std::error::Error + Send + Sync>),
@@ -309,10 +313,11 @@ impl Init for gix::Repository {
         let manifest_filename = crate::EKALA_MANIFEST_NAME.as_str();
         let manifest_path = workdir.join(manifest_filename);
 
-        let content = if let Ok(content) = fs::read_to_string(&manifest_path) {
-            let _manifest: EkalaManifest =
-                toml_edit::de::from_str(&content).map_err(|e| Error::Generic(Box::new(e)))?;
-            content
+        let content = if manifest_path.exists() {
+            // Validate by opening - this enforces all invariants
+            let _manifest = EkalaManifest::open_filesystem(&manifest_path)
+                .map_err(|e| Error::Generic(Box::new(e)))?;
+            fs::read_to_string(&manifest_path)?
         } else {
             let manifest = EkalaManifest::new();
             let content = toml_edit::ser::to_string_pretty(&manifest)?;
@@ -575,16 +580,19 @@ impl<'repo> Init for gix::Remote<'repo> {
             .to_string();
 
         // FIXME: use gix for push once it supports it
-        run_git_command(&[
-            "-C",
-            repo.git_dir().to_string_lossy().as_ref(),
-            "push",
-            remote,
-            format!("{root_ref}:{root_ref}").as_str(),
-        ])?;
+        run_git_command(
+            repo.git_dir(),
+            &["push", remote, format!("{root_ref}:{root_ref}").as_str()],
+        )?;
         tracing::info!(ekala.remote = %remote, ekala.root = %*root, "Successfully initialized");
         Ok(())
     }
+}
+
+/// query the root of a gix::Url
+pub fn query_root(url: &gix::Url) -> Result<Root, Error> {
+    let q = format!("{}:{}", V1_ROOT, V1_ROOT);
+    Ok(Root(to_id(url.get_ref(q.as_str(), None)?)))
 }
 
 impl EkalaStorage for Repository {
@@ -690,35 +698,48 @@ impl super::QueryStore for gix::Url {
         };
 
         let config = gix::config::File::from_globals()?;
-        let (mut cascade, _, prompt_opts) = gix::config::credential_helpers(
-            self.to_owned(),
-            &config,
-            true,
-            gix::config::section::is_trusted,
-            Environment {
-                xdg_config_home: Permission::Allow,
-                home: Permission::Allow,
-                http_transport: Permission::Allow,
-                identity: Permission::Allow,
-                objects: Permission::Allow,
-                git_prefix: Permission::Allow,
-                ssh_prefix: Permission::Allow,
-            },
-            false,
-        )?;
 
-        let authenticate = Box::new(move |action| cascade.invoke(action, prompt_opts.clone()));
+        let shake_hands = |transport: &mut Box<dyn Transport + Send>| {
+            let (mut cascade, _, prompt_opts) = gix::config::credential_helpers(
+                self.to_owned(),
+                &config,
+                true,
+                gix::config::section::is_trusted,
+                Environment {
+                    xdg_config_home: Permission::Allow,
+                    home: Permission::Allow,
+                    http_transport: Permission::Allow,
+                    identity: Permission::Allow,
+                    objects: Permission::Allow,
+                    git_prefix: Permission::Allow,
+                    ssh_prefix: Permission::Allow,
+                },
+                false,
+            )?;
+            let authenticate = Box::new(move |action| cascade.invoke(action, prompt_opts.clone()));
 
-        let mut handshake = gix::protocol::fetch::handshake(
-            &mut *transport,
-            authenticate,
-            Vec::new(),
-            &mut prodash::progress::Discard,
-        )
-        .map_err(|e| {
-            tracing::error!(url = %self, "couldn't establish a handshake with the remote");
-            Box::new(e)
-        })?;
+            gix::protocol::fetch::handshake(
+                &mut *transport,
+                authenticate,
+                Vec::new(),
+                &mut prodash::progress::Discard,
+            )
+            .map_err(Box::new)
+            .map_err(Error::Handshake)
+        };
+
+        let mut handshake = shake_hands(transport)
+            .or_else(|e| {
+                if !transport.connection_persists_across_multiple_requests() {
+                    let mut transport = self.get_transport()?;
+                    shake_hands(&mut transport)
+                } else {
+                    Err(e)
+                }
+            })
+            .inspect_err(|_| {
+                tracing::error!(url = %self, "couldn't establish a handshake with the remote");
+            })?;
 
         tracing::debug!(?targets, url = %self, "checking remote for refs");
         use gix::refspec::parse::Operation;
@@ -759,10 +780,20 @@ impl super::QueryStore for gix::Url {
         Spec: AsRef<BStr> + std::fmt::Debug,
     {
         let name = target.as_ref().to_string();
+        let (name, _) = name.split_once(':').unwrap_or(("", ""));
         self.get_refs(Some(target), transport).and_then(|r| {
-            r.into_iter()
-                .next()
-                .ok_or(Error::NoRef(name, self.to_string()))
+            let orig = r.clone();
+            let names = r.iter().map(|r| {
+                let (n, ..) = r.unpack();
+                n
+            });
+            let res = resolve_partial_name(name, names);
+            orig.into_iter()
+                .find(|r| {
+                    let (n, ..) = r.unpack();
+                    Some(n) == res
+                })
+                .ok_or(Error::NoRef(name.into(), self.to_string()))
         })
     }
 
@@ -771,6 +802,47 @@ impl super::QueryStore for gix::Url {
         let transport = gix::protocol::transport::connect(self.to_owned(), Options::default())?;
         Ok(Box::new(transport))
     }
+}
+
+/// Resolves a partial ref name to a full ref name using the same precedence as gix.
+/// Returns the first matching ref from available_refs, or None.
+fn resolve_partial_name<'a>(
+    partial_name: &str,
+    available_refs: impl IntoIterator<Item = &'a BStr>,
+) -> Option<&'a BStr> {
+    use bstr::{BStr, BString};
+    let available: std::collections::HashSet<_> = available_refs.into_iter().collect();
+    let partial_name = BStr::new(partial_name);
+
+    // If it already looks like a full ref name, check for exact match
+    if partial_name.starts_with(b"refs/") {
+        return available.get(partial_name).copied();
+    }
+
+    // Use the exact same expansion order as gix-refspec/src/spec.rs:236
+    let expansions = [
+        ("", false),              // 0: <name>
+        ("refs/", false),         // 1: refs/<name>
+        ("refs/tags/", false),    // 2: refs/tags/<name>
+        ("refs/heads/", false),   // 3: refs/heads/<name>
+        ("refs/remotes/", false), // 4: refs/remotes/<name>
+        ("refs/remotes/", true),  // 5: refs/remotes/<name>/HEAD
+    ];
+
+    for (base, append_head) in expansions {
+        let mut candidate = BString::from(base);
+        candidate.extend_from_slice(partial_name);
+        if append_head {
+            candidate.extend_from_slice("/HEAD".as_bytes());
+        }
+
+        if available.contains(candidate.as_bstr()) {
+            // Return the original ref name from available_refs
+            return available.into_iter().find(|&r| r == candidate.as_bstr());
+        }
+    }
+
+    None
 }
 
 impl<'repo> super::QueryStore for gix::Remote<'repo> {
@@ -820,8 +892,6 @@ impl<'repo> super::QueryStore for gix::Remote<'repo> {
         use tracing::level_filters::LevelFilter;
 
         let tree = Root::new();
-        let sync_progress = tree.add_child("sync");
-        let init_progress = tree.add_child("init");
         let _ = if LevelFilter::current() > LevelFilter::WARN {
             Some(setup_line_renderer(&tree))
         } else {
@@ -834,22 +904,39 @@ impl<'repo> super::QueryStore for gix::Remote<'repo> {
             .replace_refspecs(references, Direction::Fetch)
             .map_err(Box::new)?;
 
-        let transport = if let Some(transport) = transport {
-            transport
-        } else {
-            &mut remote.get_transport()?
+        let fetch = |transport: Option<&mut Self::Transport>| {
+            let sync_progress = tree.add_child("sync");
+            let init_progress = tree.add_child("init");
+
+            let transport = if let Some(transport) = transport {
+                transport
+            } else {
+                &mut remote.get_transport()?
+            };
+
+            remote
+                .to_connection_with_transport(transport)
+                .prepare_fetch(sync_progress, Options::default())
+                .map_err(Box::new)
+                .map_err(Error::Refs)
+                .and_then(|p| {
+                    Ok(p.with_write_packed_refs_only(true)
+                        .receive(init_progress, &AtomicBool::new(false))
+                        .map_err(Box::new)?)
+                })
         };
 
-        let client = remote.to_connection_with_transport(transport);
+        let supports_multiple = transport
+            .as_ref()
+            .is_some_and(|t| t.connection_persists_across_multiple_requests());
 
-        let query = client
-            .prepare_fetch(sync_progress, Options::default())
-            .map_err(Box::new)?;
-
-        let outcome = query
-            .with_write_packed_refs_only(true)
-            .receive(init_progress, &AtomicBool::new(false))
-            .map_err(Box::new)?;
+        let outcome = fetch(transport).or_else(|e| {
+            if !supports_multiple {
+                fetch(None)
+            } else {
+                Err(e)
+            }
+        })?;
 
         Ok(outcome.ref_map.remote_refs)
     }
@@ -865,7 +952,10 @@ impl<'repo> super::QueryStore for gix::Remote<'repo> {
         let name = target.as_ref().to_string();
         self.get_refs(Some(target), transport).and_then(|r| {
             r.into_iter()
-                .next()
+                .find(|r| {
+                    let (n, ..) = r.unpack();
+                    name.contains(n.to_string().as_str())
+                })
                 .ok_or(Error::NoRef(name, self.symbol().to_owned()))
         })
     }
@@ -968,9 +1058,13 @@ pub fn repo() -> Result<Option<&'static ThreadSafeRepository>, Box<gix::discover
 ///
 /// Note: This function is a temporary workaround for operations not yet implemented in `gix`.
 /// It should be removed once `gix` supports all necessary functionality (e.g., push).
-pub fn run_git_command(args: &[&str]) -> io::Result<Vec<u8>> {
+pub fn run_git_command(git_dir: &Path, args: &[&str]) -> io::Result<Vec<u8>> {
     use std::process::Command;
-    let output = Command::new("git").args(args).output()?;
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(git_dir)
+        .args(args)
+        .output()?;
 
     if output.status.success() {
         Ok(output.stdout)

@@ -4,6 +4,7 @@
 //! handling its own arguments and logic. The `run` function in this module
 //! dispatches to the appropriate subcommand based on the parsed arguments.
 
+use atom::storage::LocalStoragePath;
 use clap::Subcommand;
 
 use super::Args;
@@ -12,6 +13,7 @@ use crate::cli::store;
 mod add;
 mod init;
 mod new;
+mod plan;
 mod publish;
 mod resolve;
 
@@ -55,6 +57,12 @@ pub(super) enum Commands {
     /// specified remote for publishing atoms if not already setup.
     #[command(verbatim_doc_comment)]
     Init(init::Args),
+    /// Formulate an atom's build plan.
+    ///
+    /// This command will evaluate the expressions contained in an atom to produce a build recipe
+    /// (e.g. a nix derivation) for later execution.
+    #[command(verbatim_doc_comment)]
+    Plan(plan::Args),
 }
 
 //================================================================================================
@@ -84,6 +92,15 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
         },
         (Commands::Init(args), storage) => {
             init::run(storage, args)?;
+        },
+        (Commands::Plan(args), store::Detected::Git(repo)) => {
+            plan::run(Some(repo), args).await?;
+        },
+        (Commands::Plan(args), store::Detected::FileStorage(fs)) => {
+            plan::run(Some(&fs), args).await?
+        },
+        (Commands::Plan(args), store::Detected::None) => {
+            plan::run(Option::<&LocalStoragePath>::None, args).await?
         },
         _ => (),
     }

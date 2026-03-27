@@ -128,7 +128,11 @@ impl<'a, S: LocalStorage> ManifestWriter<'a, S> {
                     let (_, dep) = self.resolve_nix(dep.to_owned(), Some(name)).await?;
                     self.lock.deps.as_mut().insert(key, dep);
                 }
-            } else if let Ok((_, dep)) = self.resolve_nix(dep.to_owned(), Some(name)).await {
+            } else if let Ok((_, dep)) = self
+                .resolve_nix(dep.to_owned(), Some(name))
+                .await
+                .map_err(|e| tracing::error!("{}", e))
+            {
                 self.lock.deps.as_mut().insert(key, dep);
             } else {
                 tracing::warn!(message = Self::RESOLUTION_ERR_MSG, direct.nix = %name);
@@ -374,6 +378,7 @@ impl NixGit {
             url: self.git.to_owned(),
             rev: GitDigest::Sha1(id),
             version,
+            owner: None,
         })
     }
 

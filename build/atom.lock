@@ -15,9 +15,9 @@ mirrors = ["https://github.com/ekala-project/atom"]
 
 [locker]
 label = "nix-lock"
-version = "0.1.6"
+version = "0.3.0"
 set = "4abbd2644bc3585e9be95deb277ccf48f6ed26ac"
-rev = "e711aa1f48d877652dd2ba724d4af752be7b5371"
+rev = "ef40eecd6b0c6a5e8113937990b81d78418a0ff7"
 mirror = "https://github.com/ekala-project/eka"
 id = "r3rlam6bd31t9i04ggug7avs8vf8981q7a3b6gobemk1gfs50qm0"
 
@@ -44,4 +44,4 @@ id = "3ot6f917im3d5qhs1jdo2samkthlahg5qcr4ql5e2neomv2v6dt0"
 type = "nix+git"
 name = "eka"
 url = "https://github.com/ekala-project/eka.git"
-rev = "aa7399c89d6afae67e2eccd63e242ccd029dccd3"
+rev = "e699f085b1ce4c37d9706bd445223f5cb430c626"

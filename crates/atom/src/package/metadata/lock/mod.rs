@@ -73,7 +73,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Deref;
 use std::path::PathBuf;
-use std::sync::LazyLock;
 
 use direct::{BuildSrc, NixDep, NixGitDep, NixTarDep};
 use gix::ObjectId;
@@ -85,35 +84,11 @@ use semver::Version;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use storage::UnpackedRef;
 use storage::git::Root;
-use uri::serde_gix_url;
 
 use super::{GitDigest, manifest};
-use crate::{AtomId, BoxError, id, package, storage, uri};
+use crate::{AtomId, BoxError, id, package, storage};
 
 pub(in crate::package) mod direct;
-
-static LOCK_ATOM: LazyLock<AtomDep> = LazyLock::new(|| {
-    let label: Label = id::LOCK_LABEL.to_owned();
-    let id = AtomId::from((storage::git::LOCK_ROOT, label));
-    let hash = id.compute_hash();
-    let version = Version {
-        major: crate::LOCK_MAJOR,
-        minor: crate::LOCK_MINOR,
-        patch: crate::LOCK_PATCH,
-        pre: Default::default(),
-        build: Default::default(),
-    };
-
-    let mirror = gix::url::parse(crate::EKA_ORIGIN_URL.into()).ok();
-    AtomDep {
-        label: id.label().to_owned(),
-        version,
-        set: GitDigest::Sha1(crate::EKA_ROOT_COMMIT_HASH),
-        rev: Some(GitDigest::Sha1(crate::LOCK_REV)),
-        mirror,
-        id: hash,
-    }
-});
 
 //================================================================================================
 // Types
@@ -125,28 +100,30 @@ static LOCK_ATOM: LazyLock<AtomDep> = LazyLock::new(|| {
 /// fetch a specific version of an atom from a Git repository.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, PartialOrd, Ord)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct AtomDep {
+pub struct AtomDep {
     /// The unique identifier of the atom.
     label: Label,
     /// The semantic version of the atom.
     version: Version,
     /// The location of the atom, whether local or remote.
     set: GitDigest,
-    /// The resolved Git revision (commit hash) for verification. If it is `None`, it applies a
-    /// local only dependency which must be looked up by path. Atom's without revsions for all
-    /// other atoms in their lock cannot themsevles be published.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    rev: Option<GitDigest>,
-    /// The the primary url the atom was first resolved from. Needed for legacy tools which can't
-    /// resolve mirrors (e.g. nix).
-    #[serde(
-        default,
-        with = "serde_gix_url::maybe",
-        skip_serializing_if = "Option::is_none"
-    )]
-    mirror: Option<gix::Url>,
+    /// The resolved or calculated (if local) Git revision (commit hash) for verification.
+    rev: GitDigest,
     /// The cryptographic identity of the atom.
     id: AtomDigest,
+    /// Direct dependencies of this atom, referenced by their AtomDigest.
+    /// This enables reconstruction of the dependency graph from the lock file.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    requires: Vec<AtomDigest>,
+    /// Whether this is a direct dependency (from manifest) or transitive.
+    /// Direct dependencies are those explicitly listed in the root atom.toml.
+    #[serde(default, skip_serializing_if = "is_true")]
+    direct: bool,
+}
+
+/// Helper for serde skip_serializing_if - skips when true (direct deps are default)
+fn is_true(b: &bool) -> bool {
+    *b
 }
 
 /// Enum representing the different types of locked dependencies, serialized as tagged TOML tables.
@@ -212,17 +189,17 @@ pub(in crate::package) enum Using {
     /// an atom containing a nix expression that is just evaluated by calling `import`
     #[serde(rename = "nix")]
     NixTrivial { entry: PathBuf },
-    /// an atom containing a nix expression that is evaluated with the contained `NixComposer` atom
-    #[serde(rename = "atom")]
-    Atom {
-        #[serde(flatten)]
-        atom: AtomDep,
-        entry: PathBuf,
-    },
     /// an atom that contains only static configuration for use at evaluation time to other atoms
     #[serde(rename = "static")]
     #[default]
     Config,
+    /// an atom containing a nix expression that is evaluated with the contained `NixComposer` atom
+    #[serde(untagged)]
+    Atom {
+        at: Version,
+        entry: PathBuf,
+        r#use: AtomDigest,
+    },
 }
 
 /// The root structure for the lockfile, containing resolved dependencies and sources.
@@ -233,17 +210,16 @@ pub(in crate::package) enum Using {
 /// across different environments.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
+#[derive(Default)]
 pub struct Lockfile {
     /// The version of the lockfile schema.
     ///
     /// This field allows for future evolution of the lockfile format while
     /// maintaining backward compatibility.
-    pub version: u8,
+    pub version: u16,
 
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) sets: BTreeMap<GitDigest, SetDetails>,
-
-    locker: AtomDep,
 
     pub(in crate::package) compose: Using,
     /// The list of locked dependencies (absent or empty if none).
@@ -273,29 +249,50 @@ impl Using {
 }
 
 impl AtomDep {
+    /// Creates a new locked atom dependency with full resolution information.
     pub(in crate::package) fn new(
         label: Label,
         version: Version,
         set: GitDigest,
-        rev: Option<GitDigest>,
-        mirror: Option<gix::Url>,
+        rev: GitDigest,
         id: AtomDigest,
+        requires: Vec<AtomDigest>,
+        direct: bool,
     ) -> Self {
         Self {
             label,
             version,
             set,
             rev,
-            mirror,
             id,
+            requires,
+            direct,
         }
     }
 
-    pub(crate) fn version(&self) -> &Version {
+    /// Creates a new direct dependency (for backwards compatibility).
+    pub(in crate::package) fn new_direct(
+        label: Label,
+        version: Version,
+        set: GitDigest,
+        rev: GitDigest,
+        id: AtomDigest,
+    ) -> Self {
+        Self::new(label, version, set, rev, id, Vec::new(), true)
+    }
+
+    /// retrieve the version this atom is locked to
+    pub fn version(&self) -> &Version {
         &self.version
     }
 
-    pub(crate) fn label(&self) -> &Label {
+    /// retrieve the atom id digest
+    pub fn id(&self) -> AtomDigest {
+        self.id
+    }
+
+    /// retrieve the label for this atom
+    pub fn label(&self) -> &Label {
         &self.label
     }
 
@@ -303,8 +300,18 @@ impl AtomDep {
         self.set
     }
 
-    pub(crate) fn rev(&self) -> Option<GitDigest> {
+    pub fn rev(&self) -> GitDigest {
         self.rev
+    }
+
+    /// Returns the direct dependencies of this atom.
+    pub fn requires(&self) -> &[AtomDigest] {
+        &self.requires
+    }
+
+    /// Returns true if this is a direct dependency (explicitly in manifest).
+    pub fn is_direct(&self) -> bool {
+        self.direct
     }
 }
 
@@ -392,29 +399,19 @@ impl<R, T: Ord> AsRef<BTreeMap<DepKey<R>, T>> for DepMap<R, T> {
     }
 }
 
-impl From<ResolvedAtom<Option<ObjectId>, Root>> for AtomDep {
-    fn from(atom: ResolvedAtom<Option<ObjectId>, Root>) -> Self {
+impl From<ResolvedAtom<ObjectId, Root>> for AtomDep {
+    fn from(atom: ResolvedAtom<ObjectId, Root>) -> Self {
         let UnpackedRef { id, version, rev } = atom.unpack();
         AtomDep {
             label: id.label().to_owned(),
             version: version.to_owned(),
-            rev: rev.map(GitDigest::from),
+            rev: (*rev).into(),
             set: GitDigest::from(id.root().deref().to_owned()),
             id: id.compute_hash(),
-            mirror: atom.remotes().first().map(ToOwned::to_owned),
+            // From<ResolvedAtom> is used for direct deps; requires filled later by resolver
+            requires: Vec::new(),
+            direct: true,
         }
-    }
-}
-impl From<ResolvedAtom<ObjectId, Root>> for AtomDep {
-    fn from(value: ResolvedAtom<ObjectId, Root>) -> Self {
-        let ResolvedAtom {
-            unpacked: UnpackedRef { id, version, rev },
-            remotes,
-        } = value;
-        AtomDep::from(ResolvedAtom::new(
-            UnpackedRef::new(id, version, Some(rev)),
-            remotes,
-        ))
     }
 }
 
@@ -464,18 +461,6 @@ impl std::fmt::Display for GitDigest {
                 GitDigest::Sha1(o) => write!(f, "{}", o.encode_hex::<String>()),
                 GitDigest::Sha256(o) => write!(f, "{}", o.encode_hex::<String>()),
             }
-        }
-    }
-}
-
-impl Default for Lockfile {
-    fn default() -> Self {
-        Self {
-            version: 1,
-            locker: LOCK_ATOM.to_owned(),
-            sets: Default::default(),
-            compose: Using::default(),
-            deps: Default::default(),
         }
     }
 }
